@@ -36,6 +36,7 @@ final class GameViewController: UIViewController {
     private var journalEntries: [String] = []
     private var lineIndices: [String: Int] = [:]
     private var activeNPC: NPC?
+    private var metPersonas: Set<String> = []
     private var lastShownDay = -1
 
     // MARK: - UI
@@ -117,7 +118,7 @@ final class GameViewController: UIViewController {
     }
 
     private func setupPlayerAndCamera() {
-        player = CharacterFactory.nicholasII()
+        player = NicholasII.makeCharacter()
         player.root.position = SCNVector3(0, 0, 18)
         player.root.eulerAngles.y = playerYaw
         scene.rootNode.addChildNode(player.root)
@@ -152,16 +153,16 @@ final class GameViewController: UIViewController {
     }
 
     private func setupNPCs() {
-        alexanderNPC = addNPC(CharacterFactory.alexanderIII(), "alexander3", x: -6, z: -40, wander: 5, seed: 11)
-        let maria = CharacterFactory.mariaFeodorovna()
+        alexanderNPC = addNPC(AlexanderThird.makeCharacter(), "alexander3", x: -6, z: -40, wander: 5, seed: 11)
+        let maria = MariaFeodorovna.makeCharacter()
         mariaCharacter = maria
         _ = addNPC(maria, "maria", x: -11, z: -38, wander: 4, seed: 22)
-        _ = addNPC(CharacterFactory.witte(), "witte", x: -26, z: 8, wander: 7, seed: 33)
-        _ = addNPC(CharacterFactory.pobedonostsev(), "pobedonostsev", x: 22, z: 20, wander: 6, seed: 44)
-        _ = addNPC(CharacterFactory.guardsman(), "guard", x: -8, z: -50, wander: 0, seed: 55)
-        _ = addNPC(CharacterFactory.guardsman(), "guard", x: 8, z: -50, wander: 0, seed: 66)
+        _ = addNPC(SergeiWitte.makeCharacter(), "witte", x: -26, z: 8, wander: 7, seed: 33)
+        _ = addNPC(KonstantinPobedonostsev.makeCharacter(), "pobedonostsev", x: 22, z: 20, wander: 6, seed: 44)
+        _ = addNPC(PalaceGuard.makeCharacter(), "guard", x: -8, z: -50, wander: 0, seed: 55)
+        _ = addNPC(PalaceGuard.makeCharacter(), "guard", x: 8, z: -50, wander: 0, seed: 66)
         // Alexandra arrives in Russia on 10 October 1894 (event "alix")
-        pendingAlexandra = CharacterFactory.alexandra()
+        pendingAlexandra = AlexandraFeodorovna.makeCharacter()
     }
 
     // MARK: - UI construction
@@ -369,7 +370,7 @@ final class GameViewController: UIViewController {
 
     @objc private func handlePan(_ g: UIPanGestureRecognizer) {
         let t = g.translation(in: view)
-        camYaw -= Float(t.x) * 0.006
+        camYaw += Float(t.x) * 0.006
         camPitch = max(0.06, min(0.9, camPitch - Float(t.y) * 0.004))
         g.setTranslation(.zero, in: view)
         yawNode.eulerAngles.y = camYaw
@@ -379,6 +380,13 @@ final class GameViewController: UIViewController {
     @objc private func interact() {
         guard let npc = activeNPC, let persona = GameData.personas[npc.personaId] else { return }
         dialogueName.text = "\(persona.name) — \(persona.title)"
+        // first meeting adds the person's biography to the journal
+        if !metPersonas.contains(persona.id) {
+            metPersonas.insert(persona.id)
+            if let bio = GameData.biographies[persona.id] {
+                journalEntries.insert("\(persona.name)\n\(bio)", at: 0)
+            }
+        }
         showNextLine(for: persona)
         dialoguePanel.isHidden = false
         interactButton.isHidden = true
@@ -504,8 +512,9 @@ final class GameViewController: UIViewController {
         let mag = Float(min(1.0, sqrt(v.x * v.x + v.y * v.y)))
 
         if dialoguePanel.isHidden && mag > 0.08 {
+            // camera looks along f = (sin(camYaw), cos(camYaw)); screen-right is f × up
             let fx = sinf(camYaw), fz = cosf(camYaw)
-            let rx = cosf(camYaw), rz = -sinf(camYaw)
+            let rx = -cosf(camYaw), rz = sinf(camYaw)
             var dx = fx * Float(v.y) + rx * Float(v.x)
             var dz = fz * Float(v.y) + rz * Float(v.x)
             let len = sqrtf(dx * dx + dz * dz)
