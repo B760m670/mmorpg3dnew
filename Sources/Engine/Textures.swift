@@ -42,6 +42,33 @@ enum Textures {
         }
     }()
 
+    /// Bare summer cobblestones — the same masonry without snow dust.
+    static let cobblestoneSummer: UIImage = {
+        return image(512) { ctx, s in
+            var rnd = SeededRandom(seed: 7)
+            ctx.setFillColor(UIColor(red: 0.27, green: 0.27, blue: 0.29, alpha: 1).cgColor)
+            ctx.fill(CGRect(x: 0, y: 0, width: s, height: s))
+            let cell: CGFloat = 32
+            var row = 0
+            var y: CGFloat = 0
+            while y < s {
+                var x: CGFloat = (row % 2 == 0) ? 0 : -cell / 2
+                while x < s + cell {
+                    let g = CGFloat(rnd.range(0.30, 0.46))
+                    ctx.setFillColor(UIColor(red: g, green: g * 0.98, blue: g * 0.94, alpha: 1).cgColor)
+                    let rect = CGRect(x: x + 2.5, y: y + 2.5, width: cell - 5, height: cell - 5)
+                    let path = UIBezierPath(roundedRect: rect, cornerRadius: 6)
+                    ctx.addPath(path.cgPath)
+                    ctx.fillPath()
+                    _ = rnd.next() // keep the sequence aligned with the winter texture
+                    x += cell
+                }
+                y += cell
+                row += 1
+            }
+        }
+    }()
+
     /// Winter Palace facade. In the 1890s the palace was painted in the
     /// dark terracotta-red of the era (the familiar green came only in the
     /// Soviet period).

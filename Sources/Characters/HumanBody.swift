@@ -39,6 +39,7 @@ enum HumanBody {
         m.diffuse.contents = image
         m.lightingModel = .blinn
         m.specular.contents = UIColor(white: 0.1, alpha: 1)
+        ShaderLibrary.applyCloth(m)
         return m
     }
 

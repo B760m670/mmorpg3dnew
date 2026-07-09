@@ -28,7 +28,9 @@ final class GameViewController: UIViewController {
     private var snowNode: SCNNode?
 
     // MARK: - Game state
+    private let engine = RomanovEngine()
     private let clock = HistoryClock()
+    private var loadedSave: GameSave?
     private var accession = false
     private var displayLink: CADisplayLink?
     private var lastTimestamp: CFTimeInterval = 0
@@ -86,7 +88,15 @@ final class GameViewController: UIViewController {
         setupLights()
         setupPlayerAndCamera()
         setupNPCs()
+
+        engine.register(WeatherSystem())
+        loadedSave = SaveSystem.load()
+
         setupUI()
+
+        if let save = loadedSave {
+            applyRestoredState(save)
+        }
 
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         pan.maximumNumberOfTouches = 1
@@ -301,7 +311,7 @@ final class GameViewController: UIViewController {
 
         let start = UIButton(type: .system)
         start.tag = 804
-        styleButton(start, "НАЧАТЬ")
+        styleButton(start, loadedSave == nil ? "НАЧАТЬ" : "ПРОДОЛЖИТЬ")
         start.titleLabel?.font = serifFont(22, bold: true)
         start.addTarget(self, action: #selector(startGame), for: .touchUpInside)
         introPanel.addSubview(start)
@@ -446,30 +456,9 @@ final class GameViewController: UIViewController {
 
         switch e.tag {
         case "alix":
-            if let alix = pendingAlexandra {
-                alix.root.opacity = 0
-                let npc = addNPC(alix, "alix", x: 7, z: 6, wander: 4, seed: 77)
-                _ = npc
-                alix.root.runAction(SCNAction.fadeIn(duration: 2.0))
-                pendingAlexandra = nil
-            }
+            spawnAlexandra(animated: true)
         case "death":
-            accession = true
-            titleLabel.text = "Императоръ Всероссійскій Николай II"
-            if let alex = alexanderNPC {
-                alex.character.root.runAction(SCNAction.sequence([
-                    SCNAction.fadeOut(duration: 2.5),
-                    SCNAction.removeFromParentNode()
-                ]))
-                npcs.removeAll { $0 === alex }
-                alexanderNPC = nil
-            }
-            // the Dowager Empress goes into mourning
-            if let maria = mariaCharacter {
-                for m in maria.clothMaterials {
-                    m.diffuse.contents = UIColor(white: 0.05, alpha: 1)
-                }
-            }
+            applyAccession(animated: true)
         case "coronation":
             let burst = SCNParticleSystem()
             burst.birthRate = 600
@@ -493,6 +482,69 @@ final class GameViewController: UIViewController {
         }
     }
 
+    // MARK: - World mutations (shared by live events and save restoration)
+
+    private func spawnAlexandra(animated: Bool) {
+        guard let alix = pendingAlexandra else { return }
+        if animated { alix.root.opacity = 0 }
+        _ = addNPC(alix, "alix", x: 7, z: 6, wander: 4, seed: 77)
+        if animated { alix.root.runAction(SCNAction.fadeIn(duration: 2.0)) }
+        pendingAlexandra = nil
+    }
+
+    private func applyAccession(animated: Bool) {
+        accession = true
+        titleLabel.text = "Императоръ Всероссійскій Николай II"
+        if let alex = alexanderNPC {
+            if animated {
+                alex.character.root.runAction(SCNAction.sequence([
+                    SCNAction.fadeOut(duration: 2.5),
+                    SCNAction.removeFromParentNode()
+                ]))
+            } else {
+                alex.character.root.removeFromParentNode()
+            }
+            npcs.removeAll { $0 === alex }
+            alexanderNPC = nil
+        }
+        // the Dowager Empress goes into mourning
+        if let maria = mariaCharacter {
+            for m in maria.clothMaterials {
+                m.diffuse.contents = UIColor(white: 0.05, alpha: 1)
+            }
+        }
+    }
+
+    // MARK: - Persistence
+
+    private func currentSave() -> GameSave {
+        return GameSave(year: clock.year, month: clock.month, day: clock.day, hour: clock.hour,
+                        accession: accession,
+                        metPersonas: Array(metPersonas),
+                        journal: journalEntries,
+                        playerX: player.root.position.x,
+                        playerZ: player.root.position.z,
+                        speedMultiplier: clock.speedMultiplier)
+    }
+
+    private func applyRestoredState(_ s: GameSave) {
+        clock.restore(year: s.year, month: s.month, day: s.day, hour: s.hour)
+        clock.speedMultiplier = s.speedMultiplier
+        if s.speedMultiplier > 1 { speedButton.setTitle("⏩ ×8", for: .normal) }
+        metPersonas = Set(s.metPersonas)
+        journalEntries = s.journal
+        player.root.position = SCNVector3(s.playerX, 0, s.playerZ)
+        rigNode.position = SCNVector3(s.playerX, 1.6, s.playerZ)
+
+        let afterAlixArrival = s.year > 1894
+            || (s.year == 1894 && (s.month > 10 || (s.month == 10 && s.day >= 10)))
+        if afterAlixArrival { spawnAlexandra(animated: false) }
+        if s.accession { applyAccession(animated: false) }
+
+        let introSubtitle = introPanel.viewWithTag(802) as? UILabel
+        introSubtitle?.text = "С.-Петербургъ • Дворцовая площадь • \(clock.dateString)"
+    }
+
     // MARK: - Game loop
 
     @objc private func step(_ link: CADisplayLink) {
@@ -505,6 +557,9 @@ final class GameViewController: UIViewController {
         updateCamera(dt: dt)
         updateNPCs(dt: dt)
         updateClockAndSky(dt: dt)
+        engine.update(frameDt: dt,
+                      context: EngineContext(scene: scene, clock: clock,
+                                             playerPosition: player.root.position))
     }
 
     private func updatePlayer(dt: Float) {
@@ -593,6 +648,8 @@ final class GameViewController: UIViewController {
         if clock.day != lastShownDay {
             lastShownDay = clock.day
             dateLabel.text = "\(clock.dateString) (ст. ст.)"
+            // autosave: a long historical campaign is never lost
+            if started { SaveSystem.save(currentSave()) }
         }
 
         // day-night cycle

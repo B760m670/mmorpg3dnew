@@ -108,6 +108,7 @@ enum FaceBuilder {
         skinMat.lightingModel = .blinn
         skinMat.specular.contents = UIColor(white: 0.18, alpha: 1)
         skinMat.shininess = 0.3
+        ShaderLibrary.applySkin(skinMat)
 
         // --- skull ---
         let skullMesh = MeshBuilder.parametricShell(

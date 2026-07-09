@@ -38,6 +38,14 @@ final class HistoryClock {
         return "\(day) \(HistoryClock.monthNames[month - 1]) \(year) г."
     }
 
+    /// Restores the calendar from a saved game.
+    func restore(year: Int, month: Int, day: Int, hour: Double) {
+        self.year = year
+        self.month = month
+        self.day = day
+        self.hour = hour
+    }
+
     private func daysIn(month: Int, year: Int) -> Int {
         switch month {
         case 1, 3, 5, 7, 8, 10, 12: return 31

@@ -39,8 +39,11 @@ enum WorldBuilder {
 
         // --- ground ---
         let groundGeo = SCNPlane(width: 500, height: 500)
-        groundGeo.materials = [tiled(Textures.cobblestone, 70, 70)]
+        let groundMat = tiled(Textures.cobblestone, 70, 70)
+        ShaderLibrary.applyFrost(groundMat)
+        groundGeo.materials = [groundMat]
         let ground = SCNNode(geometry: groundGeo)
+        ground.name = "ground"
         ground.eulerAngles.x = -Float.pi / 2
         root.addChildNode(ground)
 
