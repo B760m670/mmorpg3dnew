@@ -187,7 +187,7 @@ enum HumanBody {
 
         // belt with buckle
         if body.beltAndBuckle {
-            let beltGeo = SCNCylinder(radius: 0.152 * stout, height: 0.045)
+            let beltGeo = SCNCylinder(radius: CGFloat(0.152 * stout), height: 0.045)
             beltGeo.materials = [plainMat(UIColor(red: 0.2, green: 0.13, blue: 0.08, alpha: 1))]
             let belt = SCNNode(geometry: beltGeo)
             belt.position = SCNVector3(0, 0.05, 0)
@@ -264,7 +264,7 @@ enum HumanBody {
             elbow.addChildNode(forearm)
 
             if let cuffColor = body.cuffColor, !body.isDress {
-                let cuffGeo = SCNCylinder(radius: 0.037 * stout, height: 0.05)
+                let cuffGeo = SCNCylinder(radius: CGFloat(0.037 * stout), height: 0.05)
                 cuffGeo.materials = [plainMat(cuffColor)]
                 let cuff = SCNNode(geometry: cuffGeo)
                 cuff.position = SCNVector3(0, -0.23, 0)
@@ -292,7 +292,7 @@ enum HumanBody {
 
         if body.peakedCap {
             let capMat = mat(SkinTextures.cloth(color: body.capColor))
-            let bandGeo = SCNCylinder(radius: face.headWidth * 1.14, height: 0.045)
+            let bandGeo = SCNCylinder(radius: CGFloat(face.headWidth * 1.14), height: 0.045)
             bandGeo.materials = [plainMat(body.capBandColor)]
             let band = SCNNode(geometry: bandGeo)
             band.position = SCNVector3(0, 0.078, 0)
