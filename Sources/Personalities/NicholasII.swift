@@ -51,6 +51,14 @@ enum NicholasII {
         body.capColor = UIColor(red: 0.11, green: 0.17, blue: 0.13, alpha: 1)
         body.capBandColor = UIColor(red: 0.64, green: 0.10, blue: 0.10, alpha: 1)
 
-        return HumanBody.make(face: face, body: body)
+        // Скульптурная голова из облачного Blender-конвейера
+        // (MPFB2/MakeHuman -> морфы лица -> запечённая кожа -> OBJ).
+        // При отсутствии модели в бандле игра откатывается на процедурную голову.
+        let sculptedHead = HeadLoader.load(named: "nicholas_head",
+                                           targetHeight: 0.295,
+                                           skinTexture: "nicholas_skin.png",
+                                           eyeTexture: "nicholas_eyes.png")
+
+        return HumanBody.make(face: face, body: body, headOverride: sculptedHead)
     }
 }

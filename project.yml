@@ -11,6 +11,9 @@ targets:
     platform: iOS
     sources:
       - Sources
+      - path: Resources/Models
+        type: folder
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.romanov.empire1894

@@ -140,7 +140,9 @@ final class GameViewController: UIViewController {
 
         let camera = SCNCamera()
         camera.fieldOfView = 62
-        camera.zNear = 0.1
+        // zNear 0.5 keeps the depth buffer precise at facade distances —
+        // cures shimmering/z-fighting on distant buildings
+        camera.zNear = 0.5
         camera.zFar = 600
         cameraNode.camera = camera
         cameraNode.position = SCNVector3(0, 0, -8)

@@ -57,7 +57,7 @@ enum HumanBody {
         return SCNNode(geometry: MeshBuilder.geometry(from: mesh, material: material))
     }
 
-    static func make(face: FaceSpec, body: BodySpec) -> GameCharacter {
+    static func make(face: FaceSpec, body: BodySpec, headOverride: SCNNode? = nil) -> GameCharacter {
         let c = GameCharacter()
         let stout = body.stoutness
 
@@ -288,31 +288,45 @@ enum HumanBody {
         pelvis.addChildNode(headAssembly)
         c.headNode = headAssembly
 
-        let head = FaceBuilder.build(face)
-        headAssembly.addChildNode(head)
+        // cap/hat geometry sizes itself from these
+        var capRadius = face.headWidth * 1.14
+        var capBaseY: Float = 0.078
+
+        if let sculpted = headOverride {
+            // real sculpted head from the Blender pipeline: the wrapper is
+            // normalized (skull center at origin, face toward +Z)
+            sculpted.position = SCNVector3(0, -0.015, 0)
+            headAssembly.addChildNode(sculpted)
+            let (mn, mx) = sculpted.boundingBox
+            capRadius = max(mx.x - mn.x, mx.z - mn.z) / 2 * 0.94
+            capBaseY = mx.y - 0.062
+        } else {
+            let head = FaceBuilder.build(face)
+            headAssembly.addChildNode(head)
+        }
 
         if body.peakedCap {
             let capMat = mat(SkinTextures.cloth(color: body.capColor))
-            let bandGeo = SCNCylinder(radius: CGFloat(face.headWidth * 1.14), height: 0.045)
+            let bandGeo = SCNCylinder(radius: CGFloat(capRadius), height: 0.045)
             bandGeo.materials = [plainMat(body.capBandColor)]
             let band = SCNNode(geometry: bandGeo)
-            band.position = SCNVector3(0, 0.078, 0)
+            band.position = SCNVector3(0, capBaseY, 0)
             headAssembly.addChildNode(band)
 
             let crown = latheNode([
                 (0.057, 0.0),
-                (0.055, face.headWidth * 1.30),
-                (0.050, face.headWidth * 1.28),
-                (0.015, face.headWidth * 1.10),
-                (0.0, face.headWidth * 1.12)
+                (0.055, capRadius * 1.14),
+                (0.050, capRadius * 1.12),
+                (0.015, capRadius * 0.97),
+                (0.0, capRadius * 0.98)
             ], capMat)
-            crown.position = SCNVector3(0, 0.10, 0.006)
+            crown.position = SCNVector3(0, capBaseY + 0.022, 0.005)
             headAssembly.addChildNode(crown)
 
-            let visorGeo = SCNCylinder(radius: 0.085, height: 0.007)
+            let visorGeo = SCNCylinder(radius: CGFloat(capRadius * 0.82), height: 0.007)
             visorGeo.materials = [plainMat(UIColor(white: 0.05, alpha: 1))]
             let visor = SCNNode(geometry: visorGeo)
-            visor.position = SCNVector3(0, 0.058, face.headDepth * 0.9)
+            visor.position = SCNVector3(0, capBaseY - 0.02, capRadius * 0.82)
             visor.scale = SCNVector3(1.1, 1, 0.85)
             visor.eulerAngles.x = -0.12
             headAssembly.addChildNode(visor)
@@ -321,7 +335,7 @@ enum HumanBody {
             let cockadeGeo = SCNCylinder(radius: 0.011, height: 0.004)
             cockadeGeo.materials = [plainMat(UIColor(red: 0.9, green: 0.6, blue: 0.1, alpha: 1))]
             let cockade = SCNNode(geometry: cockadeGeo)
-            cockade.position = SCNVector3(0, 0.078, face.headDepth * 1.14)
+            cockade.position = SCNVector3(0, capBaseY, capRadius * 1.0 + 0.004)
             cockade.eulerAngles.x = Float.pi / 2
             headAssembly.addChildNode(cockade)
         }

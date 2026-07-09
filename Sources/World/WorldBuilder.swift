@@ -174,23 +174,26 @@ enum WorldBuilder {
                         wallMat, 0, height / 2, 0)
         building.addChildNode(body)
 
-        // front face direction: palace faces +z (toward the square) unless facesNorth
-        let faceZ: Float = facesNorth ? -depth / 2 - 0.15 : depth / 2 + 0.15
+        // Facade layers are strictly separated in depth (>= 5 cm gaps between
+        // parallel faces) to keep the depth buffer stable at long distances.
+        let sign: Float = facesNorth ? -1 : 1
+        let wallZ: Float = sign * depth / 2
 
         var x = -width / 2 + 4
         while x <= width / 2 - 4 {
-            // pilaster
+            // pilaster: front sticks out 0.40 m, back is buried in the wall
             let pilaster = node(SCNBox(width: 1.0, height: CGFloat(height - 3), length: 0.5, chamferRadius: 0),
-                                white, x - 3, (height - 3) / 2 + 1, faceZ)
+                                white, x - 3, (height - 3) / 2 + 1, wallZ + sign * 0.15)
             building.addChildNode(pilaster)
-            // windows in each row
+            // windows: white frame plate on the wall, glass panel in front of it,
+            // every parallel-face pair separated by >= 2 cm
             for rowY in windowRows {
-                let win = node(SCNBox(width: 2.4, height: 3.8, length: 0.25, chamferRadius: 0),
-                               windowMat, x, rowY, faceZ)
-                building.addChildNode(win)
-                let frame = node(SCNBox(width: 3.0, height: 4.4, length: 0.18, chamferRadius: 0),
-                                 white, x, rowY, faceZ - (facesNorth ? -0.05 : 0.05))
+                let frame = node(SCNBox(width: 3.0, height: 4.4, length: 0.10, chamferRadius: 0),
+                                 white, x, rowY, wallZ + sign * 0.09)
                 building.addChildNode(frame)
+                let win = node(SCNBox(width: 2.4, height: 3.8, length: 0.12, chamferRadius: 0),
+                               windowMat, x, rowY, wallZ + sign * 0.22)
+                building.addChildNode(win)
             }
             x += 6
         }
