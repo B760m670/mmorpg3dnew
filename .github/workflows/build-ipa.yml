@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -44,6 +44,59 @@ jobs:
           cp -R build/RomanovEmpire.app Payload/
           zip -qry RomanovEmpire-unsigned.ipa Payload
           ls -la RomanovEmpire-unsigned.ipa
+
+      - name: Generate LiveContainer source.json
+        run: |
+          SIZE=$(stat -f%z RomanovEmpire-unsigned.ipa)
+          DATE=$(date -u +%Y-%m-%d)
+          VERSION="0.3.${{ github.run_number }}"
+          cat > source.json <<EOF
+          {
+            "name": "Империя 1894",
+            "identifier": "com.romanov.source",
+            "subtitle": "Романовы. Открытый мир",
+            "iconURL": "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/Resources/icon.png",
+            "apps": [
+              {
+                "name": "Империя 1894",
+                "bundleIdentifier": "com.romanov.empire1894",
+                "developerName": "Romanov Project",
+                "subtitle": "Лаборатория персонажей",
+                "version": "$VERSION",
+                "versionDate": "$DATE",
+                "versionDescription": "Автоматическая сборка из GitHub Actions.",
+                "downloadURL": "https://github.com/${{ github.repository }}/releases/download/latest/RomanovEmpire-unsigned.ipa",
+                "localizedDescription": "Игра о России конца XIX века. Лаборатория персонажей: анатомическая модель Николая II из Blender/MakeHuman, тело и мундир, студийный осмотр.",
+                "iconURL": "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/Resources/icon.png",
+                "tintColor": "1D4E3B",
+                "size": $SIZE,
+                "versions": [
+                  {
+                    "version": "$VERSION",
+                    "date": "$DATE",
+                    "size": $SIZE,
+                    "downloadURL": "https://github.com/${{ github.repository }}/releases/download/latest/RomanovEmpire-unsigned.ipa",
+                    "localizedDescription": "Автоматическая сборка из GitHub Actions."
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
+          cat source.json
+
+      - name: Publish release "latest"
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Империя 1894 — последняя сборка"
+          body: |
+            Автоматическая сборка. Установка через LiveContainer:
+            источник `https://github.com/${{ github.repository }}/releases/download/latest/source.json`
+            или скачайте IPA ниже.
+          files: |
+            RomanovEmpire-unsigned.ipa
+            source.json
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4

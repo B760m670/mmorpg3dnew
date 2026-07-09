@@ -382,7 +382,7 @@ final class GameViewController: UIViewController {
 
     @objc private func handlePan(_ g: UIPanGestureRecognizer) {
         let t = g.translation(in: view)
-        camYaw += Float(t.x) * 0.006
+        camYaw -= Float(t.x) * 0.006
         camPitch = max(0.06, min(0.9, camPitch - Float(t.y) * 0.004))
         g.setTranslation(.zero, in: view)
         yawNode.eulerAngles.y = camYaw
