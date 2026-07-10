@@ -21,47 +21,85 @@ struct RigJoints: Decodable {
 }
 
 /// Loads a full-body character produced by the cloud Blender pipeline:
-/// a real MakeHuman-based anatomical mesh segmented into 13 named pieces
-/// (head, torso, limbs) that get re-assembled onto an animatable joint rig.
+/// a real MakeHuman-based anatomical mesh. When the mesh is segmented into
+/// named pieces (head, torso, limbs) it is re-assembled onto an animatable
+/// joint rig; otherwise it loads as a single static model so the character
+/// is always visible.
 enum SegmentedCharacter {
 
+    /// Resource files may sit either at the bundle root or under a "Models"
+    /// subdirectory, depending on how the build phase flattened them. Look in
+    /// both so loading never depends on that detail.
+    static func findURL(_ name: String, _ ext: String) -> URL? {
+        if let u = Bundle.main.url(forResource: name, withExtension: ext) { return u }
+        if let u = Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Models") { return u }
+        return nil
+    }
+
+    /// Diagnostic string listing which model files the running app can see.
+    static func diagnostics() -> String {
+        let names = ["nicholas_uniform.obj", "nicholas_body.obj", "joints.json",
+                     "nicholas_skin.png", "nicholas_eyes.png"]
+        var found: [String] = []
+        var missing: [String] = []
+        for n in names {
+            let parts = n.split(separator: ".")
+            let base = String(parts[0]); let ext = String(parts[1])
+            if findURL(base, ext) != nil { found.append(n) } else { missing.append(n) }
+        }
+        return "найдено: \(found.count)/\(names.count)" + (missing.isEmpty ? "" : " • нет: \(missing.joined(separator: ", "))")
+    }
+
     static func loadJoints() -> RigJoints? {
-        guard let url = Bundle.main.url(forResource: "joints", withExtension: "json", subdirectory: "Models"),
+        guard let url = findURL("joints", "json"),
               let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(RigJoints.self, from: data)
     }
 
     private static func bundleImage(_ fileName: String) -> UIImage? {
-        guard let url = Bundle.main.url(forResource: fileName, withExtension: nil, subdirectory: "Models") else {
-            return nil
-        }
+        let parts = fileName.split(separator: ".")
+        guard parts.count == 2, let url = findURL(String(parts[0]), String(parts[1])) else { return nil }
         return UIImage(contentsOfFile: url.path)
     }
 
-    /// Assembles a rigged character from an OBJ with named pieces.
-    static func make(objName: String) -> GameCharacter? {
-        guard let joints = loadJoints(),
-              let url = Bundle.main.url(forResource: objName, withExtension: "obj", subdirectory: "Models") else {
-            return nil
-        }
+    /// Loads the OBJ, returning the scene and the named geometry pieces.
+    private static func loadScene(_ objName: String) -> (SCNScene, [String: SCNNode])? {
+        guard let url = findURL(objName, "obj") else { return nil }
         let asset = MDLAsset(url: url)
         asset.loadTextures()
         let scene = SCNScene(mdlAsset: asset)
-
         var pieces: [String: SCNNode] = [:]
         scene.rootNode.enumerateChildNodes { node, _ in
             if let name = node.name, node.geometry != nil {
                 pieces[name] = node
             }
         }
-        guard pieces["torso"] != nil else { return nil }
+        return (scene, pieces)
+    }
 
-        func v(_ a: [Float]) -> SCNVector3 { return SCNVector3(a[0], a[1], a[2]) }
+    static func make(objName: String) -> GameCharacter? {
+        guard let (scene, pieces) = loadScene(objName) else { return nil }
 
         let c = GameCharacter()
 
-        /// Wraps a piece in a pivot node located at jointWorld. The piece's
-        /// geometry keeps absolute coordinates, so it is offset by -jointWorld.
+        // Rig only if the expected named pieces are present; otherwise fall
+        // back to a single static model so the figure is always shown.
+        if let joints = loadJoints(), pieces["torso"] != nil {
+            assembleRig(c, pieces: pieces, joints: joints)
+        } else {
+            for child in scene.rootNode.childNodes {
+                child.removeFromParentNode()
+                c.root.addChildNode(child)
+            }
+        }
+
+        applyMaterials(to: c.root)
+        return c
+    }
+
+    private static func assembleRig(_ c: GameCharacter, pieces: [String: SCNNode], joints: RigJoints) {
+        func v(_ a: [Float]) -> SCNVector3 { return SCNVector3(a[0], a[1], a[2]) }
+
         func wrap(_ pieceName: String, parent: SCNNode, parentWorld: SCNVector3,
                   jointWorld: SCNVector3) -> SCNNode {
             let w = SCNNode()
@@ -75,7 +113,6 @@ enum SegmentedCharacter {
             return w
         }
 
-        // pelvis carries torso, head and arms; legs hang off the root
         let pelvisWorld = SCNVector3(0, joints.pelvis[1], 0)
         let pelvis = SCNNode()
         pelvis.position = pelvisWorld
@@ -114,11 +151,12 @@ enum SegmentedCharacter {
         // rest pose: bring the A-pose arms down to the sides
         shoulderL.eulerAngles.z = -0.52
         shoulderR.eulerAngles.z = 0.52
+    }
 
-        // material pass: bundle textures + engine shaders
+    private static func applyMaterials(to root: SCNNode) {
         let skinImage = bundleImage("nicholas_skin.png")
         let eyeImage = bundleImage("nicholas_eyes.png")
-        c.root.enumerateChildNodes { node, _ in
+        root.enumerateChildNodes { node, _ in
             guard let geo = node.geometry else { return }
             for m in geo.materials {
                 let name = (m.name ?? "").lowercased()
@@ -138,13 +176,10 @@ enum SegmentedCharacter {
                             || name.contains("mustache") || name.contains("brows") {
                     m.specular.contents = UIColor(white: 0.04, alpha: 1)
                 } else {
-                    // uniform cloth, boots, leather
                     m.specular.contents = UIColor(white: 0.08, alpha: 1)
                     ShaderLibrary.applyCloth(m)
                 }
             }
         }
-
-        return c
     }
 }

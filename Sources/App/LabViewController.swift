@@ -224,8 +224,9 @@ final class LabViewController: UIViewController {
         view.addSubview(joystick)
 
         if uniformChar == nil && bodyChar == nil {
-            subtitleLabel.text = "Ошибка: модель не найдена в бандле"
+            subtitleLabel.text = "Модель не загрузилась — \(SegmentedCharacter.diagnostics())"
             subtitleLabel.textColor = UIColor(red: 1, green: 0.5, blue: 0.4, alpha: 1)
+            subtitleLabel.numberOfLines = 2
         }
     }
 
