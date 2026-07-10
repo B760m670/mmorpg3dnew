@@ -43,6 +43,15 @@ jobs:
           echo "--- содержимое build ---"
           find game/build -maxdepth 2 | head -40
 
+      - name: Set Cyrillic display name in Info.plist
+        run: |
+          PLIST=$(find game/build -name "*Info.plist" -not -path "*xcframework*" | head -1)
+          echo "Info.plist: $PLIST"
+          if [ -n "$PLIST" ]; then
+            /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Империя 1894" "$PLIST" \
+              || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Империя 1894" "$PLIST"
+          fi
+
       - name: Build unsigned .app with xcodebuild
         run: |
           XCPROJ=$(find game/build -name "*.xcodeproj" -maxdepth 2 | head -1)
