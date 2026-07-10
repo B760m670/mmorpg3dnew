@@ -148,10 +148,34 @@ enum SegmentedCharacter {
         c.rightKnee = wrap("shin_r", parent: hipR, parentWorld: v(joints.hip_r), jointWorld: v(joints.knee_r))
         c.rightLeg = hipR
 
-        // rest pose: bring the A-pose arms down to the sides
-        shoulderL.eulerAngles.z = -0.52
-        shoulderR.eulerAngles.z = 0.52
+        // The exported mesh is already in a natural resting A-pose, so no
+        // extra shoulder rotation is applied (it swung the arms forward).
     }
+
+    /// Explicit colours keyed by the material names baked into the OBJ.
+    /// Colours are set in code (not read from the .mtl) so the character is
+    /// always properly coloured even if Model I/O drops the texture bindings.
+    private static let palette: [String: UIColor] = [
+        "skinbake":   UIColor(red: 0.86, green: 0.67, blue: 0.57, alpha: 1),
+        "eyeblue":    UIColor(red: 0.40, green: 0.52, blue: 0.60, alpha: 1),
+        "hairmat":    UIColor(red: 0.13, green: 0.08, blue: 0.04, alpha: 1),
+        "beardmat":   UIColor(red: 0.16, green: 0.09, blue: 0.04, alpha: 1),
+        "mustachemat":UIColor(red: 0.16, green: 0.09, blue: 0.04, alpha: 1),
+        "browsmat":   UIColor(red: 0.13, green: 0.08, blue: 0.04, alpha: 1),
+        "briefsmat":  UIColor(red: 0.80, green: 0.80, blue: 0.82, alpha: 1),
+        // uniform
+        "tunicmat":   UIColor(red: 0.11, green: 0.20, blue: 0.13, alpha: 1),
+        "capmat":     UIColor(red: 0.11, green: 0.20, blue: 0.13, alpha: 1),
+        "collarmat":  UIColor(red: 0.55, green: 0.09, blue: 0.09, alpha: 1),
+        "bandmat":    UIColor(red: 0.55, green: 0.09, blue: 0.09, alpha: 1),
+        "cuffmat":    UIColor(red: 0.55, green: 0.09, blue: 0.09, alpha: 1),
+        "cuffmat2":   UIColor(red: 0.55, green: 0.09, blue: 0.09, alpha: 1),
+        "beltmat":    UIColor(red: 0.14, green: 0.09, blue: 0.05, alpha: 1),
+        "breechesmat":UIColor(red: 0.13, green: 0.16, blue: 0.22, alpha: 1),
+        "bootsmat":   UIColor(red: 0.06, green: 0.06, blue: 0.07, alpha: 1),
+        "visormat":   UIColor(red: 0.05, green: 0.05, blue: 0.06, alpha: 1),
+        "goldmat":    UIColor(red: 0.83, green: 0.66, blue: 0.22, alpha: 1)
+    ]
 
     private static func applyMaterials(to root: SCNNode) {
         let skinImage = bundleImage("nicholas_skin.png")
@@ -161,22 +185,27 @@ enum SegmentedCharacter {
             for m in geo.materials {
                 let name = (m.name ?? "").lowercased()
                 m.lightingModel = .blinn
+                // Base colour is always set explicitly.
+                let colour = palette[name] ?? UIColor(red: 0.70, green: 0.60, blue: 0.52, alpha: 1)
+                m.diffuse.contents = colour
+
                 if name.contains("skin") {
                     if let img = skinImage { m.diffuse.contents = img }
                     m.specular.contents = UIColor(white: 0.16, alpha: 1)
+                    m.shininess = 0.2
                     ShaderLibrary.applySkin(m)
                 } else if name.contains("eye") {
                     if let img = eyeImage { m.diffuse.contents = img }
                     m.specular.contents = UIColor(white: 0.7, alpha: 1)
                     m.shininess = 0.9
                 } else if name.contains("gold") {
-                    m.specular.contents = UIColor(white: 0.9, alpha: 1)
-                    m.shininess = 0.7
+                    m.specular.contents = UIColor(white: 0.95, alpha: 1)
+                    m.shininess = 0.85
                 } else if name.contains("hair") || name.contains("beard")
                             || name.contains("mustache") || name.contains("brows") {
                     m.specular.contents = UIColor(white: 0.04, alpha: 1)
                 } else {
-                    m.specular.contents = UIColor(white: 0.08, alpha: 1)
+                    m.specular.contents = UIColor(white: 0.10, alpha: 1)
                     ShaderLibrary.applyCloth(m)
                 }
             }
