@@ -4,3 +4,4 @@ Payload/
 *.ipa
 DerivedData/
 .DS_Store
+game/.godot/
