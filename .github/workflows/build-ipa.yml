@@ -52,6 +52,19 @@ jobs:
               || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Империя 1894" "$PLIST"
           fi
 
+      - name: Diagnose and repair project.pbxproj
+        run: |
+          PBX=$(find game/build -name "project.pbxproj" | head -1)
+          echo "pbxproj: $PBX"
+          echo "--- первые строки (с невидимыми символами) ---"
+          head -5 "$PBX" | cat -v
+          echo "--- незаполненные плейсхолдеры \$... ---"
+          grep -n '\$[a-z_]' "$PBX" | head -20 || echo "нет"
+          echo "--- plutil -lint ---"
+          plutil -lint "$PBX" || true
+          echo "--- попытка конвертации в xml1 ---"
+          plutil -convert xml1 "$PBX" && echo "OK: сконвертирован в XML" || echo "конвертация не удалась"
+
       - name: Build unsigned .app with xcodebuild
         run: |
           XCPROJ=$(find game/build -name "*.xcodeproj" -maxdepth 2 | head -1)
