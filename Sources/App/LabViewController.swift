@@ -26,7 +26,7 @@ final class LabViewController: UIViewController {
     private let cameraNode = SCNNode()
     private var camYaw: Float = Float.pi
     private var camPitch: Float = 0.12
-    private var boom: Float = 3.2
+    private var boom: Float = 2.6
 
     private var displayLink: CADisplayLink?
     private var lastTimestamp: CFTimeInterval = 0
@@ -106,7 +106,7 @@ final class LabViewController: UIViewController {
         // трёхточечный студийный свет
         let key = SCNLight()
         key.type = .directional
-        key.intensity = 950
+        key.intensity = 780
         key.color = UIColor(red: 1.0, green: 0.97, blue: 0.92, alpha: 1)
         key.castsShadow = true
         key.shadowMapSize = CGSize(width: 2048, height: 2048)
@@ -137,7 +137,7 @@ final class LabViewController: UIViewController {
 
         let ambient = SCNLight()
         ambient.type = .ambient
-        ambient.intensity = 380
+        ambient.intensity = 280
         ambient.color = UIColor(red: 0.6, green: 0.62, blue: 0.68, alpha: 1)
         let ambientNode = SCNNode()
         ambientNode.light = ambient
@@ -266,7 +266,8 @@ final class LabViewController: UIViewController {
     }
 
     @objc private func handlePinch(_ g: UIPinchGestureRecognizer) {
-        boom = max(0.9, min(9.0, boom / Float(g.scale)))
+        // min 0.45 m lets the camera come right up to the face for inspection
+        boom = max(0.45, min(9.0, boom / Float(g.scale)))
         g.scale = 1.0
         cameraNode.position = SCNVector3(0, 0, -boom)
     }

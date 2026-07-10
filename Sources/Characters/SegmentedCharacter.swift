@@ -62,39 +62,47 @@ enum SegmentedCharacter {
         return UIImage(contentsOfFile: url.path)
     }
 
-    /// Loads the OBJ, returning the scene and the named geometry pieces.
-    private static func loadScene(_ objName: String) -> (SCNScene, [String: SCNNode])? {
-        guard let url = findURL(objName, "obj") else { return nil }
-        let asset = MDLAsset(url: url)
-        asset.loadTextures()
-        let scene = SCNScene(mdlAsset: asset)
-        var pieces: [String: SCNNode] = [:]
-        scene.rootNode.enumerateChildNodes { node, _ in
-            if let name = node.name, node.geometry != nil {
-                pieces[name] = node
-            }
-        }
-        return (scene, pieces)
-    }
-
     static func make(objName: String) -> GameCharacter? {
-        guard let (scene, pieces) = loadScene(objName) else { return nil }
+        guard let url = findURL(objName, "obj") else { return nil }
+        // Our own parser — keeps object and material names intact.
+        let pieces = ObjLoader.load(url: url)
+        guard !pieces.isEmpty else { return nil }
 
         let c = GameCharacter()
 
-        // Rig only if the expected named pieces are present; otherwise fall
-        // back to a single static model so the figure is always shown.
+        // Rig if the expected named pieces are present; otherwise show the
+        // pieces statically so the figure is always visible.
         if let joints = loadJoints(), pieces["torso"] != nil {
             assembleRig(c, pieces: pieces, joints: joints)
         } else {
-            for child in scene.rootNode.childNodes {
-                child.removeFromParentNode()
-                c.root.addChildNode(child)
+            for (_, node) in pieces {
+                c.root.addChildNode(node)
             }
         }
 
         applyMaterials(to: c.root)
+        dropToGround(c.root)
         return c
+    }
+
+    /// Offsets the assembled character so its lowest vertex rests on y = 0.
+    private static func dropToGround(_ root: SCNNode) {
+        let (minV, _) = root.boundingBox
+        // boundingBox on the root only covers direct geometry; compute from
+        // the whole subtree instead.
+        var lowest: Float = .greatestFiniteMagnitude
+        root.enumerateChildNodes { node, _ in
+            guard node.geometry != nil else { return }
+            let (mn, mx) = node.boundingBox
+            for corner in [SCNVector3(mn.x, mn.y, mn.z), SCNVector3(mx.x, mx.y, mx.z)] {
+                let world = node.convertPosition(corner, to: root)
+                lowest = min(lowest, world.y)
+            }
+        }
+        if lowest < .greatestFiniteMagnitude {
+            root.position.y -= lowest
+        }
+        _ = minV
     }
 
     private static func assembleRig(_ c: GameCharacter, pieces: [String: SCNNode], joints: RigJoints) {
