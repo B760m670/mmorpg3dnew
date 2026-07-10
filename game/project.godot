@@ -4,7 +4,7 @@ config_version=5
 [application]
 
 config/name="Империя 1894"
-run/main_scene="res://lab.tscn"
+run/main_scene="res://scenes/lab.tscn"
 config/features=PackedStringArray("4.3", "Mobile")
 
 [display]

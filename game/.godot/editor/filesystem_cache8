@@ -1,0 +1,16 @@
+fc8a56933c4b1c8d796fdb8f7a9f9475
+::res://::1783720641
+export_presets.cfg::TextFile::-1::1783694260::0::1::::<><>::
+::res://characters/::1783720541
+::res://characters/nicholas/::1783720541
+body.glb::PackedScene::6630240291212539740::1783720541::1783720651::1::::<><>::uid://d1u1npgki2jhy::::res://characters/nicholas/body_nicholas_eyes.png<>uid://bv6kdw0k788rj::::res://characters/nicholas/body_nicholas_skin.png
+body_nicholas_eyes.png::CompressedTexture2D::9027062195467227842::1783720649::1783720650::1::::<><>::
+body_nicholas_skin.png::CompressedTexture2D::3924995832409279831::1783720650::1783720651::1::::<><>::
+uniform_nicholas_skin.png::CompressedTexture2D::984220734392350032::1783720652::1783720652::1::::<><>::
+uniform_nicholas_eyes.png::CompressedTexture2D::4507453715164087031::1783720651::1783720652::1::::<><>::
+uniform.glb::PackedScene::5308561330642108695::1783720541::1783720653::1::::<><>::uid://b5hpdsngcivnj::::res://characters/nicholas/uniform_nicholas_eyes.png<>uid://oa08bjwl0tam::::res://characters/nicholas/uniform_nicholas_skin.png
+::res://scenes/::1783720551
+lab.tscn::PackedScene::-1::1783720551::0::1::::<><>::res://scripts/lab.gd
+::res://scripts/::1783720610
+joystick.gd::GDScript::-1::1783720557::0::1::::<>Control<>::
+lab.gd::GDScript::-1::1783720610::0::1::::<>Node3D<>::

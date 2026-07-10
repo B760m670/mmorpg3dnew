@@ -1,16 +1,16 @@
 extends Control
 ## Виртуальный джойстик: рисуется кодом, отдаёт нормализованный вектор.
+## Вектор: x вправо, y вперёд (вверх по экрану = +y).
 
 var vector := Vector2.ZERO
 var _touch_id := -1
 var _thumb := Vector2.ZERO
 
 func _ready() -> void:
-	custom_minimum_size = Vector2(220, 220)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 
 func _radius() -> float:
-	return min(size.x, size.y) * 0.5 - 10.0
+	return min(size.x, size.y) * 0.5 - 12.0
 
 func _center() -> Vector2:
 	return size * 0.5
@@ -42,6 +42,6 @@ func _update_thumb(pos: Vector2) -> void:
 func _draw() -> void:
 	var c := _center()
 	var r := _radius()
-	draw_circle(c, r, Color(1, 1, 1, 0.10))
-	draw_arc(c, r, 0.0, TAU, 48, Color(1, 1, 1, 0.35), 2.0)
-	draw_circle(c + _thumb, r * 0.38, Color(1, 1, 1, 0.35))
+	draw_circle(c, r, Color(1, 1, 1, 0.08))
+	draw_arc(c, r, 0.0, TAU, 48, Color(1, 1, 1, 0.38), 2.5)
+	draw_circle(c + _thumb, r * 0.40, Color(1, 1, 1, 0.38))
