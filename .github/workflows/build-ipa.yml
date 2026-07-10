@@ -52,18 +52,19 @@ jobs:
               || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Империя 1894" "$PLIST"
           fi
 
-      - name: Diagnose and repair project.pbxproj
+      - name: Export game pack (.pck)
+        run: |
+          "$GODOT" --headless --path game --export-pack "iOS" "$PWD/game/build/empire.pck" 2>&1 | tail -10 || true
+          ls -la game/build/empire.pck
+
+      - name: Repair project.pbxproj (strip unsubstituted placeholders)
         run: |
           PBX=$(find game/build -name "project.pbxproj" | head -1)
           echo "pbxproj: $PBX"
-          echo "--- первые строки (с невидимыми символами) ---"
-          head -5 "$PBX" | cat -v
-          echo "--- незаполненные плейсхолдеры \$... ---"
-          grep -n '\$[a-z_]' "$PBX" | head -20 || echo "нет"
-          echo "--- plutil -lint ---"
-          plutil -lint "$PBX" || true
-          echo "--- попытка конвертации в xml1 ---"
-          plutil -convert xml1 "$PBX" && echo "OK: сконвертирован в XML" || echo "конвертация не удалась"
+          # export_project_only в Godot 4.3 оставляет шаблонные $-плейсхолдеры,
+          # которые ломают OpenStep-парсер Xcode — удаляем эти строки
+          sed -i '' -e '/\$additional_pbx/d' -e '/\$pbx_embeded_frameworks/d' -e '/\$pbx_launch/d' "$PBX"
+          grep -n '\$[a-z_]' "$PBX" | head -5 || echo "плейсхолдеров не осталось"
 
       - name: Build unsigned .app with xcodebuild
         run: |
@@ -86,10 +87,12 @@ jobs:
             build
           ls appbuild
 
-      - name: Package IPA
+      - name: Package IPA (embed game .pck)
         run: |
           APP=$(find appbuild -maxdepth 1 -name "*.app" | head -1)
           test -n "$APP"
+          cp game/build/empire.pck "$APP/"
+          ls -la "$APP" | head -15
           mkdir -p Payload
           cp -R "$APP" Payload/
           zip -qry RomanovEmpire-unsigned.ipa Payload
