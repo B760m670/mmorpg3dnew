@@ -1,0 +1,21 @@
+; Империя 1894 — проект Godot 4.3
+config_version=5
+
+[application]
+
+config/name="Империя 1894"
+run/main_scene="res://lab.tscn"
+config/features=PackedStringArray("4.3", "Mobile")
+
+[display]
+
+window/handheld/orientation=0
+
+[input_devices]
+
+pointing/emulate_touch_from_mouse=true
+
+[rendering]
+
+renderer/rendering_method="mobile"
+textures/vram_compression/import_etc2_astc=true

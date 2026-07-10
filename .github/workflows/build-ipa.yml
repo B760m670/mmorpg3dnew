@@ -10,38 +10,66 @@ on:
 permissions:
   contents: write
 
+env:
+  GODOT_VERSION: "4.3-stable"
+  GODOT_TPL_DIR: "4.3.stable"
+
 jobs:
   build:
-    name: Build unsigned IPA (for LiveContainer)
+    name: Godot 4 -> unsigned IPA (for LiveContainer)
     runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
-
-      - name: Generate Xcode project
-        run: xcodegen generate
-
-      - name: Build (unsigned, arm64)
+      - name: Download Godot + export templates
         run: |
+          curl -sSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_macos.universal.zip"
+          unzip -q godot.zip
+          echo "GODOT=$PWD/Godot.app/Contents/MacOS/Godot" >> "$GITHUB_ENV"
+          curl -sSL -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_export_templates.tpz"
+          mkdir -p "$HOME/Library/Application Support/Godot/export_templates/${GODOT_TPL_DIR}"
+          unzip -q templates.tpz -d tpl
+          mv tpl/templates/* "$HOME/Library/Application Support/Godot/export_templates/${GODOT_TPL_DIR}/"
+
+      - name: Import project (headless)
+        run: |
+          "$GODOT" --headless --path game --import 2>&1 | tail -40 || true
+
+      - name: Export Xcode project
+        run: |
+          mkdir -p game/build
+          "$GODOT" --headless --path game --export-release "iOS" "$PWD/game/build/empire.ipa" 2>&1 | tail -40 || true
+          echo "--- содержимое build ---"
+          find game/build -maxdepth 2 | head -40
+
+      - name: Build unsigned .app with xcodebuild
+        run: |
+          XCPROJ=$(find game/build -name "*.xcodeproj" -maxdepth 2 | head -1)
+          echo "Xcode project: $XCPROJ"
+          test -n "$XCPROJ"
+          SCHEME=$(xcodebuild -project "$XCPROJ" -list | awk '/Schemes:/{getline; gsub(/^ +/,""); print; exit}')
+          echo "Scheme: $SCHEME"
           xcodebuild \
-            -project RomanovEmpire.xcodeproj \
-            -target RomanovEmpire \
+            -project "$XCPROJ" \
+            -scheme "$SCHEME" \
             -configuration Release \
             -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
             ARCHS=arm64 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            CONFIGURATION_BUILD_DIR="$PWD/build" \
+            CONFIGURATION_BUILD_DIR="$PWD/appbuild" \
             build
+          ls appbuild
 
       - name: Package IPA
         run: |
+          APP=$(find appbuild -maxdepth 1 -name "*.app" | head -1)
+          test -n "$APP"
           mkdir -p Payload
-          cp -R build/RomanovEmpire.app Payload/
+          cp -R "$APP" Payload/
           zip -qry RomanovEmpire-unsigned.ipa Payload
           ls -la RomanovEmpire-unsigned.ipa
 
@@ -49,7 +77,7 @@ jobs:
         run: |
           SIZE=$(stat -f%z RomanovEmpire-unsigned.ipa)
           DATE=$(date -u +%Y-%m-%d)
-          VERSION="0.3.${{ github.run_number }}"
+          VERSION="0.4.${{ github.run_number }}"
           cat > source.json <<EOF
           {
             "name": "Империя 1894",
@@ -61,12 +89,12 @@ jobs:
                 "name": "Империя 1894",
                 "bundleIdentifier": "com.romanov.empire1894",
                 "developerName": "Romanov Project",
-                "subtitle": "Лаборатория персонажей",
+                "subtitle": "Движок Godot 4 — лаборатория персонажей",
                 "version": "$VERSION",
                 "versionDate": "$DATE",
-                "versionDescription": "Автоматическая сборка из GitHub Actions.",
+                "versionDescription": "Godot 4: скелетный Николай II, PBR-студия.",
                 "downloadURL": "https://github.com/${{ github.repository }}/releases/download/latest/RomanovEmpire-unsigned.ipa",
-                "localizedDescription": "Игра о России конца XIX века. Лаборатория персонажей: анатомическая модель Николая II из Blender/MakeHuman, тело и мундир, студийный осмотр.",
+                "localizedDescription": "Игра о России конца XIX века на движке Godot 4. Лаборатория персонажей: скелетная модель Николая II из Blender/MakeHuman.",
                 "iconURL": "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/Resources/icon.png",
                 "tintColor": "1D4E3B",
                 "size": $SIZE,
@@ -76,7 +104,7 @@ jobs:
                     "date": "$DATE",
                     "size": $SIZE,
                     "downloadURL": "https://github.com/${{ github.repository }}/releases/download/latest/RomanovEmpire-unsigned.ipa",
-                    "localizedDescription": "Автоматическая сборка из GitHub Actions."
+                    "localizedDescription": "Сборка на движке Godot 4."
                   }
                 ]
               }
@@ -89,9 +117,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: "Империя 1894 — последняя сборка"
+          name: "Империя 1894 — последняя сборка (Godot 4)"
           body: |
-            Автоматическая сборка. Установка через LiveContainer:
+            Сборка на движке Godot 4. Установка через LiveContainer:
             источник `https://github.com/${{ github.repository }}/releases/download/latest/source.json`
             или скачайте IPA ниже.
           files: |
