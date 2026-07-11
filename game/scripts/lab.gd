@@ -34,6 +34,7 @@ var status_label: Label
 
 var _touches := {}
 var _pinch_dist := -1.0
+var _skin_shader: Shader = load("res://shaders/skin.gdshader")
 
 func _ready() -> void:
 	_build_studio()
@@ -144,6 +145,51 @@ func _build_player() -> void:
 		visual.add_child(body_inst)
 		body_anim = _find_anim(body_inst)
 		_setup_anim(body_anim)
+
+	_enhance_materials(visual)
+
+# PBR-доводка материалов: подповерхностное рассеивание кожи (живая кожа
+# вместо пластика), металл на золоте, матовость сукна.
+func _enhance_materials(root: Node) -> void:
+	for mi in root.find_children("*", "MeshInstance3D", true, false):
+		var mesh_inst := mi as MeshInstance3D
+		var mesh := mesh_inst.mesh
+		if mesh == null:
+			continue
+		for s in range(mesh.get_surface_count()):
+			var mat := mesh_inst.get_active_material(s)
+			if mat == null or not (mat is StandardMaterial3D):
+				continue
+			var std := mat as StandardMaterial3D
+			var nm := std.resource_name.to_lower()
+			if nm.contains("skin"):
+				# кожа: собственный шейдер с имитацией SSS (работает на мобильном)
+				var sm := ShaderMaterial.new()
+				sm.shader = _skin_shader
+				sm.set_shader_parameter("albedo_tex", std.albedo_texture)
+				sm.set_shader_parameter("sss_strength", 0.45)
+				sm.set_shader_parameter("skin_roughness", 0.52)
+				mesh_inst.set_surface_override_material(s, sm)
+				continue
+			var m := std.duplicate() as StandardMaterial3D
+			if nm.contains("eye"):
+				m.roughness = 0.10
+				m.metallic_specular = 0.9
+			elif nm.contains("gold"):
+				m.metallic = 1.0
+				m.roughness = 0.32
+			elif nm.contains("boot") or nm.contains("belt"):
+				m.roughness = 0.45   # кожа сапог/ремня — полуматовая
+				m.metallic_specular = 0.4
+			elif nm.contains("tunic") or nm.contains("breeches") or nm.contains("cap") \
+					or nm.contains("collar") or nm.contains("cuff") or nm.contains("band"):
+				m.roughness = 0.9    # сукно — матовое
+				m.metallic = 0.0
+			elif nm.contains("hair") or nm.contains("mustache") or nm.contains("brows") \
+					or nm.contains("beard"):
+				m.roughness = 0.7
+				m.metallic_specular = 0.3
+			mesh_inst.set_surface_override_material(s, m)
 
 # ---------- камера ----------
 func _build_camera() -> void:
