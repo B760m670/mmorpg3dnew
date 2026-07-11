@@ -4,9 +4,10 @@ extends Node3D
 ## Управление: джойстик — ходьба; один палец — орбита камеры;
 ## два пальца — панорама и зум; кнопка — прыжок.
 
-const GRAVITY := 9.8
-const WALK_SPEED := 1.7
-const JUMP_VELOCITY := 4.6
+# Физические константы вынесены в отдельный файл physics/physics_config.gd
+const GRAVITY := PhysicsConfig.GRAVITY
+const WALK_SPEED := PhysicsConfig.WALK_SPEED
+const JUMP_VELOCITY := PhysicsConfig.JUMP_VELOCITY
 
 var player: CharacterBody3D
 var visual: Node3D
@@ -178,7 +179,7 @@ func _build_ui() -> void:
 	layer.add_child(title)
 
 	status_label = Label.new()
-	status_label.text = "Николай II • Godot 4 • физика включена"
+	status_label.text = "Николай II • Godot 4 • мужское телосложеніе, физика, скелетъ"
 	status_label.add_theme_font_size_override("font_size", 15)
 	status_label.position = Vector2(28, 50)
 	layer.add_child(status_label)
@@ -270,13 +271,15 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventScreenDrag:
 		_touches[event.index] = event.position
 		if _touches.size() >= 2:
-			# панорама: средний сдвиг пальцев двигает точку обзора
-			var cam_right := Vector3(cos(cam_yaw), 0, -sin(cam_yaw))
-			var k := 0.0011 * boom * 0.5
-			pan_offset += (-cam_right * event.relative.x + Vector3.UP * event.relative.y) * k
-			pan_offset.x = clampf(pan_offset.x, -5.0, 5.0)
-			pan_offset.y = clampf(pan_offset.y, -0.9, 1.6)
-			pan_offset.z = clampf(pan_offset.z, -5.0, 5.0)
+			# панорама: два пальца двигают камеру в плоскости экрана (в любую сторону)
+			var cbasis := camera.global_transform.basis
+			var cam_right := cbasis.x
+			var cam_up := cbasis.y
+			var k := 0.0016 * boom
+			pan_offset += (-cam_right * event.relative.x + cam_up * event.relative.y) * k
+			pan_offset.x = clampf(pan_offset.x, -6.0, 6.0)
+			pan_offset.y = clampf(pan_offset.y, -1.0, 2.2)
+			pan_offset.z = clampf(pan_offset.z, -6.0, 6.0)
 			# зум: изменение расстояния между пальцами
 			var keys := _touches.keys()
 			var d: float = (_touches[keys[0]] as Vector2).distance_to(_touches[keys[1]] as Vector2)
@@ -297,9 +300,17 @@ func _physics_process(delta: float) -> void:
 	var v: Vector2 = joystick.vector if joystick != null else Vector2.ZERO
 	var mag := minf(v.length(), 1.0)
 
-	# базис движения от камеры: вперёд = взгляд камеры (без вертикали)
-	var fwd := Vector3(-sin(cam_yaw), 0, -cos(cam_yaw))
-	var right := Vector3(cos(cam_yaw), 0, -sin(cam_yaw))
+	# базис движения берём напрямую из матрицы камеры — исключает реверс:
+	# forward = куда смотрит камера (проекция на пол), right = вправо от камеры
+	var cb := camera.global_transform.basis
+	var fwd := -cb.z
+	fwd.y = 0.0
+	if fwd.length() > 0.001:
+		fwd = fwd.normalized()
+	var right := cb.x
+	right.y = 0.0
+	if right.length() > 0.001:
+		right = right.normalized()
 
 	var dir := fwd * v.y + right * v.x
 	var hspeed := 0.0
