@@ -22,9 +22,10 @@ void light() {
 	// wrap-освещение: смягчает терминатор, свет проникает «под кожу»
 	float wrap = clamp((ndl + sss_strength) / (1.0 + sss_strength), 0.0, 1.0);
 	vec3 diff = ALBEDO * LIGHT_COLOR * ATTENUATION * wrap;
-	// тёплое просвечивание у края света (имитация рассеяния в тканях)
-	float rim = clamp(1.0 - abs(ndl), 0.0, 1.0);
-	vec3 sss = sss_tint * rim * sss_strength * ALBEDO * LIGHT_COLOR * ATTENUATION;
+	// тёплое просвечивание строго у терминатора освещённой стороны —
+	// мягкая узкая полоса, без заливки тонких мест (пальцы, уши) красным
+	float term = smoothstep(0.35, 0.0, abs(ndl)) * step(0.0, ndl + 0.15);
+	vec3 sss = sss_tint * term * (sss_strength * 0.35) * ALBEDO * LIGHT_COLOR * ATTENUATION;
 	DIFFUSE_LIGHT += diff + sss;
 	// мягкий кожный блик (Blinn-Phong), иначе при своём light() specular пропадает
 	vec3 half_v = normalize(VIEW + LIGHT);
