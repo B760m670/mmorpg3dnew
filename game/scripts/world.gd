@@ -89,22 +89,70 @@ func _build_environment() -> void:
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.3
-	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	env.tonemap_exposure = 0.82
+	env.ambient_light_energy = 0.35
+	env.tonemap_mode = Environment.TONE_MAPPER_ACES
+	env.tonemap_exposure = 0.95
+	env.tonemap_white = 6.0
+
+	# --- Forward+ : «уровень движка» реализм ---
+	# Динамическое глобальное освещение (без запекания): свет переотражается
+	# от земли и стен, как в реальности — главный визуальный скачок.
+	env.sdfgi_enabled = true
+	env.sdfgi_cascades = 4
+	env.sdfgi_min_cell_size = 0.2
+	env.sdfgi_use_occlusion = true
+	env.sdfgi_bounce_feedback = 0.5
+	env.sdfgi_energy = 1.0
+	# Затенение в складках/углах и экранное непрямое освещение
+	env.ssao_enabled = true
+	env.ssao_radius = 2.0
+	env.ssao_intensity = 2.0
+	env.ssao_power = 1.5
+	env.ssil_enabled = true
+	env.ssil_radius = 4.0
+	env.ssil_intensity = 1.0
+	# Экранные отражения (вода, полированные поверхности)
+	env.ssr_enabled = true
+	env.ssr_max_steps = 48
+	env.ssr_fade_in = 0.15
+	env.ssr_fade_out = 3.0
+	# Объёмный туман — атмосфера, «воздух» между зданиями и над озёрами
+	env.volumetric_fog_enabled = true
+	env.volumetric_fog_density = 0.0016
+	env.volumetric_fog_albedo = Color(0.86, 0.89, 0.94)
+	env.volumetric_fog_length = 180.0
+	env.volumetric_fog_gi_inject = 0.6
+	# Дальний туман для глубины
 	env.fog_enabled = true
 	env.fog_light_color = Color(0.72, 0.78, 0.84)
-	env.fog_density = 0.0011
-	env.fog_sky_affect = 0.3
+	env.fog_density = 0.0009
+	env.fog_sky_affect = 0.25
+	env.fog_aerial_perspective = 0.5
+	# Свечение ярких мест (солнце на золоте/воде)
+	env.glow_enabled = true
+	env.glow_intensity = 0.5
+	env.glow_bloom = 0.1
+	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
+	# Цветокоррекция — тёплый исторический тон
+	env.adjustment_enabled = true
+	env.adjustment_brightness = 1.0
+	env.adjustment_contrast = 1.06
+	env.adjustment_saturation = 1.08
+
 	var we := WorldEnvironment.new(); we.environment = env
 	add_child(we)
 
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-42, -50, 0)
-	sun.light_energy = 1.1
+	sun.light_energy = 1.15
 	sun.light_color = Color(1.0, 0.95, 0.86)
 	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 220.0
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+	sun.directional_shadow_max_distance = 260.0
+	sun.directional_shadow_split_1 = 0.08
+	sun.directional_shadow_split_2 = 0.2
+	sun.directional_shadow_split_3 = 0.5
+	sun.directional_shadow_blend_splits = true
 	add_child(sun)
 
 # ---------- рельеф ----------
