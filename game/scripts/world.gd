@@ -1,0 +1,542 @@
+extends Node3D
+## Мир Гатчины 1894 (движок Godot 4).
+## Рельеф, озёра, парки, дворец, город — из game/world (источник истины layout.json).
+## Управление как в лаборатории: джойстик — ходьба, 1 палец — орбита камеры,
+## 2 пальца — панорама/зум, кнопки — прыжок и карта.
+
+const GRAVITY := PhysicsConfig.GRAVITY
+const WALK_SPEED := PhysicsConfig.WALK_SPEED
+const RUN_SPEED := PhysicsConfig.RUN_SPEED
+const JUMP_VELOCITY := PhysicsConfig.JUMP_VELOCITY
+
+var player: CharacterBody3D
+var visual: Node3D
+var uniform_inst: Node3D
+var uniform_anim: AnimationPlayer
+var char_yaw := PI
+
+var cam_yaw_node: Node3D
+var cam_pitch_node: Node3D
+var camera: Camera3D
+var cam_yaw := PI
+var cam_pitch := -0.18
+var boom := 4.5
+var pan_offset := Vector3.ZERO
+var want_jump := false
+
+var joystick: Control
+var status_label: Label
+var map_layer: CanvasLayer
+var map_marker: Control
+var map_rect: TextureRect
+
+var _touches := {}
+var _pinch_dist := -1.0
+
+# данные мира
+var LY := {}                    # layout.json
+var _h := PackedFloat32Array()  # высотная карта
+var _hres := 0
+var _hsize := 1800.0
+
+func _ready() -> void:
+	_load_data()
+	_build_environment()
+	_build_terrain()
+	_build_water()
+	_build_buildings()
+	_build_town()
+	_build_forests()
+	_build_player()
+	_build_camera()
+	_build_ui()
+
+func _load_data() -> void:
+	var f := FileAccess.open("res://world/gatchina/layout.json", FileAccess.READ)
+	if f != null:
+		LY = JSON.parse_string(f.get_as_text())
+	var hf := FileAccess.open("res://world/gatchina/heights.json", FileAccess.READ)
+	if hf != null:
+		var d: Dictionary = JSON.parse_string(hf.get_as_text())
+		_hres = int(d["res"]); _hsize = float(d["size"])
+		for v in d["h"]:
+			_h.append(float(v))
+
+# билинейная выборка высоты рельефа в мировой точке (X — восток, Z — юг)
+func height_at(x: float, z: float) -> float:
+	if _hres == 0:
+		return 0.0
+	var half := _hsize * 0.5
+	var fx: float = clampf((x + half) / _hsize, 0.0, 1.0) * (_hres - 1)
+	var fz: float = clampf((z + half) / _hsize, 0.0, 1.0) * (_hres - 1)
+	var i0 := int(fx); var j0 := int(fz)
+	var i1: int = mini(i0 + 1, _hres - 1); var j1: int = mini(j0 + 1, _hres - 1)
+	var tx := fx - i0; var tz := fz - j0
+	var h00 := _h[j0 * _hres + i0]; var h10 := _h[j0 * _hres + i1]
+	var h01 := _h[j1 * _hres + i0]; var h11 := _h[j1 * _hres + i1]
+	return lerpf(lerpf(h00, h10, tx), lerpf(h01, h11, tx), tz)
+
+# ---------- окружение: небо, солнце, туман ----------
+func _build_environment() -> void:
+	var sky_mat := ProceduralSkyMaterial.new()
+	sky_mat.sky_top_color = Color(0.30, 0.46, 0.72)
+	sky_mat.sky_horizon_color = Color(0.56, 0.64, 0.70)
+	sky_mat.ground_bottom_color = Color(0.26, 0.30, 0.26)
+	sky_mat.ground_horizon_color = Color(0.56, 0.62, 0.60)
+	sky_mat.sun_angle_max = 8.0
+	var sky := Sky.new(); sky.sky_material = sky_mat
+	var env := Environment.new()
+	env.background_mode = Environment.BG_SKY
+	env.sky = sky
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	env.ambient_light_energy = 0.3
+	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	env.tonemap_exposure = 0.82
+	env.fog_enabled = true
+	env.fog_light_color = Color(0.72, 0.78, 0.84)
+	env.fog_density = 0.0011
+	env.fog_sky_affect = 0.3
+	var we := WorldEnvironment.new(); we.environment = env
+	add_child(we)
+
+	var sun := DirectionalLight3D.new()
+	sun.rotation_degrees = Vector3(-42, -50, 0)
+	sun.light_energy = 1.1
+	sun.light_color = Color(1.0, 0.95, 0.86)
+	sun.shadow_enabled = true
+	sun.directional_shadow_max_distance = 220.0
+	add_child(sun)
+
+# ---------- рельеф ----------
+func _build_terrain() -> void:
+	var packed: PackedScene = load("res://world/gatchina/terrain.glb")
+	if packed == null:
+		return
+	var inst := packed.instantiate()
+	add_child(inst)
+	var mi := inst.find_child("*", true, false)
+	var mesh_inst := _first_mesh(inst)
+	if mesh_inst == null:
+		return
+	# материал грунта: смешивание трёх тайлов по вершинному цвету
+	var sm := ShaderMaterial.new()
+	sm.shader = load("res://shaders/terrain.gdshader")
+	sm.set_shader_parameter("grass_alb", load("res://world/textures/grass_albedo.png"))
+	sm.set_shader_parameter("grass_nrm", load("res://world/textures/grass_normal.png"))
+	sm.set_shader_parameter("dirt_alb", load("res://world/textures/dirt_albedo.png"))
+	sm.set_shader_parameter("dirt_nrm", load("res://world/textures/dirt_normal.png"))
+	sm.set_shader_parameter("cobble_alb", load("res://world/textures/cobble_albedo.png"))
+	sm.set_shader_parameter("cobble_nrm", load("res://world/textures/cobble_normal.png"))
+	mesh_inst.material_override = sm
+	# коллизия рельефа (trimesh)
+	var body := StaticBody3D.new()
+	var col := CollisionShape3D.new()
+	col.shape = mesh_inst.mesh.create_trimesh_shape()
+	body.add_child(col)
+	body.global_transform = mesh_inst.global_transform
+	add_child(body)
+
+func _first_mesh(root: Node) -> MeshInstance3D:
+	for m in root.find_children("*", "MeshInstance3D", true, false):
+		return m as MeshInstance3D
+	return null
+
+# ---------- вода озёр ----------
+func _build_water() -> void:
+	var wat := load("res://shaders/water.gdshader")
+	for lk in LY.get("lakes", []):
+		var c: Array = lk["center"]; var r: Array = lk["radius"]
+		var mesh := PlaneMesh.new()
+		mesh.size = Vector2(float(r[0]) * 2.2, float(r[1]) * 2.2)
+		mesh.subdivide_width = 24; mesh.subdivide_depth = 24
+		var mi := MeshInstance3D.new()
+		mi.mesh = mesh
+		var sm := ShaderMaterial.new(); sm.shader = wat
+		mi.material_override = sm
+		mi.position = Vector3(float(c[0]), float(lk["water_level"]), float(c[1]))
+		add_child(mi)
+
+# ---------- здания ----------
+func _place_on_ground(node: Node3D, x: float, z: float, rot_deg: float) -> void:
+	node.position = Vector3(x, height_at(x, z), z)
+	node.rotation.y = deg_to_rad(rot_deg)
+	add_child(node)
+
+func _add_box_collision(node: Node3D, fw: float, fd: float, h: float) -> void:
+	var body := StaticBody3D.new()
+	var col := CollisionShape3D.new()
+	var shp := BoxShape3D.new()
+	shp.size = Vector3(fw, h, fd)
+	col.shape = shp
+	col.position = Vector3(0, h * 0.5, 0)
+	body.add_child(col)
+	node.add_child(body)
+
+func _build_buildings() -> void:
+	for b in LY.get("buildings", []):
+		var path := "res://world/buildings/" + str(b["file"])
+		var packed: PackedScene = load(path)
+		if packed == null:
+			continue
+		var inst := packed.instantiate() as Node3D
+		var pos: Array = b["position"]
+		_place_on_ground(inst, float(pos[0]), float(pos[1]), float(b.get("rotation", 0)))
+		var fp: Array = b.get("footprint", [20, 20])
+		_add_box_collision(inst, float(fp[0]), float(fp[1]), float(b.get("height", 12)))
+
+# ---------- городская застройка ----------
+func _build_town() -> void:
+	var houses := ["house_a.glb", "house_b.glb", "house_c.glb"]
+	var rng := RandomNumberGenerator.new(); rng.seed = 1894
+	var idx := 0
+	for blk in LY.get("town", {}).get("blocks", []):
+		var c: Array = blk["center"]; var s: Array = blk["size"]
+		var rows := int(blk.get("rows", 2))
+		var n := int(blk.get("houses", 6))
+		var per := int(ceil(float(n) / rows))
+		var placed := 0
+		for row in range(rows):
+			var zc: float = float(c[1]) - float(s[1]) * 0.5 + (row + 0.5) / rows * float(s[1])
+			for k in range(per):
+				if placed >= n:
+					break
+				var xc: float = float(c[0]) - float(s[0]) * 0.5 + (k + 0.5) / per * float(s[0])
+				var packed: PackedScene = load("res://world/buildings/" + houses[idx % houses.size()])
+				idx += 1; placed += 1
+				if packed == null:
+					continue
+				var inst := packed.instantiate() as Node3D
+				var face := 0.0 if row == 0 else 180.0
+				_place_on_ground(inst, xc, zc, face + rng.randf_range(-6, 6))
+				_add_box_collision(inst, 15, 11, 8)
+
+# ---------- парки: деревья через MultiMesh ----------
+func _build_forests() -> void:
+	var tree_mesh := _make_tree_mesh()
+	for fr in LY.get("forests", []):
+		var c: Array = fr["center"]; var r: Array = fr["radius"]
+		var rx := float(r[0]); var rz := float(r[1])
+		var density := float(fr.get("density", 0.5))
+		var count := int(clampf(rx * rz * 0.0016 * density, 60, 420))
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = tree_mesh
+		mm.instance_count = count
+		var rng := RandomNumberGenerator.new(); rng.seed = int(c[0]) * 100 + int(c[1])
+		var placed := 0
+		var tries := 0
+		while placed < count and tries < count * 6:
+			tries += 1
+			var a := rng.randf() * TAU
+			var rr := sqrt(rng.randf())
+			var x := float(c[0]) + cos(a) * rx * rr
+			var z := float(c[1]) + sin(a) * rz * rr
+			if _in_lake(x, z) or _near_building(x, z, 18.0):
+				continue
+			var y := height_at(x, z)
+			if y < -2.5:
+				continue
+			var t := Transform3D()
+			var sc := rng.randf_range(0.8, 1.4)
+			t = t.scaled(Vector3(sc, rng.randf_range(0.9, 1.3) * sc, sc))
+			t = t.rotated(Vector3.UP, rng.randf() * TAU)
+			t.origin = Vector3(x, y, z)
+			mm.set_instance_transform(placed, t)
+			placed += 1
+		mm.instance_count = placed
+		var mmi := MultiMeshInstance3D.new()
+		mmi.multimesh = mm
+		add_child(mmi)
+
+func _in_lake(x: float, z: float) -> bool:
+	for lk in LY.get("lakes", []):
+		var c: Array = lk["center"]; var r: Array = lk["radius"]
+		var d := pow((x - float(c[0])) / float(r[0]), 2.0) + pow((z - float(c[1])) / float(r[1]), 2.0)
+		if d < 1.15:
+			return true
+	return false
+
+func _near_building(x: float, z: float, margin: float) -> bool:
+	for b in LY.get("buildings", []):
+		var p: Array = b["position"]; var fp: Array = b.get("footprint", [20, 20])
+		if absf(x - float(p[0])) < float(fp[0]) * 0.5 + margin and absf(z - float(p[1])) < float(fp[1]) * 0.5 + margin:
+			return true
+	return false
+
+func _make_tree_mesh() -> Mesh:
+	# ствол (цилиндр) + крона (два конуса), объединены в один Mesh
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var bark := Color(0.30, 0.22, 0.14)
+	var leaf := Color(0.20, 0.36, 0.18)
+	_add_cyl(st, Vector3(0, 1.4, 0), 0.22, 2.8, bark, 6)
+	_add_cone(st, Vector3(0, 4.6, 0), 2.2, 3.2, leaf, 8)
+	_add_cone(st, Vector3(0, 6.4, 0), 1.5, 2.6, leaf, 8)
+	st.generate_normals()
+	var m := st.commit()
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.9
+	m.surface_set_material(0, mat)
+	return m
+
+func _add_cyl(st: SurfaceTool, base: Vector3, r: float, h: float, col: Color, seg: int) -> void:
+	for i in range(seg):
+		var a0 := float(i) / seg * TAU; var a1 := float(i + 1) / seg * TAU
+		var p0 := base + Vector3(cos(a0) * r, -h * 0.5, sin(a0) * r)
+		var p1 := base + Vector3(cos(a1) * r, -h * 0.5, sin(a1) * r)
+		var p2 := p1 + Vector3(0, h, 0); var p3 := p0 + Vector3(0, h, 0)
+		for p in [p0, p1, p2, p0, p2, p3]:
+			st.set_color(col); st.add_vertex(p)
+
+func _add_cone(st: SurfaceTool, base: Vector3, r: float, h: float, col: Color, seg: int) -> void:
+	var apex := base + Vector3(0, h, 0)
+	for i in range(seg):
+		var a0 := float(i) / seg * TAU; var a1 := float(i + 1) / seg * TAU
+		var p0 := base + Vector3(cos(a0) * r, 0, sin(a0) * r)
+		var p1 := base + Vector3(cos(a1) * r, 0, sin(a1) * r)
+		for p in [p0, p1, apex]:
+			st.set_color(col); st.add_vertex(p)
+
+# ---------- персонаж ----------
+func _build_player() -> void:
+	player = CharacterBody3D.new()
+	var sp: Array = LY.get("spawn", {}).get("position", [40, 90])
+	player.position = Vector3(float(sp[0]), height_at(float(sp[0]), float(sp[1])) + 2.0, float(sp[1]))
+	add_child(player)
+
+	var col := CollisionShape3D.new()
+	var capsule := CapsuleShape3D.new()
+	capsule.radius = 0.3; capsule.height = 1.75
+	col.shape = capsule
+	col.position = Vector3(0, 0.9, 0)
+	player.add_child(col)
+
+	visual = Node3D.new()
+	char_yaw = deg_to_rad(float(LY.get("spawn", {}).get("heading", 200)))
+	visual.rotation.y = char_yaw
+	player.add_child(visual)
+
+	uniform_inst = _instance_glb("res://characters/nicholas/uniform.glb")
+	if uniform_inst != null:
+		visual.add_child(uniform_inst)
+		uniform_anim = uniform_inst.find_child("AnimationPlayer", true, false) as AnimationPlayer
+		_setup_anim(uniform_anim)
+
+func _instance_glb(path: String) -> Node3D:
+	var packed: PackedScene = load(path)
+	return packed.instantiate() as Node3D if packed != null else null
+
+func _setup_anim(ap: AnimationPlayer) -> void:
+	if ap == null:
+		return
+	for a in ["idle", "walk"]:
+		if ap.has_animation(a):
+			ap.get_animation(a).loop_mode = Animation.LOOP_LINEAR
+	if ap.has_animation("idle"):
+		ap.play("idle")
+
+# ---------- камера ----------
+func _build_camera() -> void:
+	cam_yaw_node = Node3D.new()
+	cam_yaw_node.position = Vector3(0, 1.2, 0)
+	add_child(cam_yaw_node)
+	cam_pitch_node = Node3D.new()
+	cam_yaw_node.add_child(cam_pitch_node)
+	camera = Camera3D.new()
+	camera.position = Vector3(0, 0, boom)
+	camera.fov = 60
+	camera.far = 1200.0
+	cam_pitch_node.add_child(camera)
+	cam_yaw_node.rotation.y = cam_yaw
+	cam_pitch_node.rotation.x = cam_pitch
+	camera.current = true
+
+# ---------- интерфейс ----------
+func _mk_button(text: String, font_size: int = 24) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.add_theme_font_size_override("font_size", font_size)
+	b.custom_minimum_size = Vector2(190, 56)
+	return b
+
+func _build_ui() -> void:
+	var layer := CanvasLayer.new()
+	add_child(layer)
+
+	var title := Label.new()
+	title.text = "ГАТЧИНА • 1894"
+	title.add_theme_font_size_override("font_size", 26)
+	title.position = Vector2(28, 16)
+	layer.add_child(title)
+
+	status_label = Label.new()
+	status_label.text = "Открытый міръ • Godot 4"
+	status_label.add_theme_font_size_override("font_size", 15)
+	status_label.position = Vector2(28, 50)
+	layer.add_child(status_label)
+
+	var vbox := VBoxContainer.new()
+	vbox.anchor_left = 1.0; vbox.anchor_right = 1.0
+	vbox.offset_left = -220; vbox.offset_right = -24; vbox.offset_top = 16
+	vbox.add_theme_constant_override("separation", 12)
+	layer.add_child(vbox)
+
+	var map_btn := _mk_button("🗺 Карта")
+	map_btn.pressed.connect(_toggle_map)
+	vbox.add_child(map_btn)
+
+	var run_btn := _mk_button("Бѣгъ")
+	run_btn.toggle_mode = true
+	run_btn.toggled.connect(func(on: bool) -> void: _running = on)
+	vbox.add_child(run_btn)
+
+	joystick = load("res://scripts/joystick.gd").new()
+	joystick.anchor_top = 1.0; joystick.anchor_bottom = 1.0
+	joystick.offset_left = 48; joystick.offset_top = -320
+	joystick.offset_right = 48 + 250; joystick.offset_bottom = -70
+	layer.add_child(joystick)
+
+	var jump_btn := _mk_button("Прыжокъ", 26)
+	jump_btn.anchor_left = 1.0; jump_btn.anchor_right = 1.0
+	jump_btn.anchor_top = 1.0; jump_btn.anchor_bottom = 1.0
+	jump_btn.offset_left = -230; jump_btn.offset_right = -48
+	jump_btn.offset_top = -180; jump_btn.offset_bottom = -84
+	jump_btn.pressed.connect(func() -> void: want_jump = true)
+	layer.add_child(jump_btn)
+
+	_build_map_overlay()
+
+var _running := false
+
+func _build_map_overlay() -> void:
+	map_layer = CanvasLayer.new()
+	map_layer.layer = 5
+	map_layer.visible = false
+	add_child(map_layer)
+	var bg := ColorRect.new()
+	bg.color = Color(0, 0, 0, 0.6)
+	bg.anchor_right = 1.0; bg.anchor_bottom = 1.0
+	map_layer.add_child(bg)
+	map_rect = TextureRect.new()
+	var tex: Texture2D = load("res://world/gatchina/map.png")
+	map_rect.texture = tex
+	map_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	map_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	map_rect.anchor_right = 1.0; map_rect.anchor_bottom = 1.0
+	map_rect.offset_left = 40; map_rect.offset_top = 40
+	map_rect.offset_right = -40; map_rect.offset_bottom = -120
+	map_layer.add_child(map_rect)
+	# маркер игрока
+	map_marker = Control.new()
+	var dot := ColorRect.new()
+	dot.color = Color(0.95, 0.15, 0.10)
+	dot.size = Vector2(14, 14)
+	dot.position = Vector2(-7, -7)
+	map_marker.add_child(dot)
+	map_rect.add_child(map_marker)
+	var close := _mk_button("Закрыть", 24)
+	close.anchor_left = 0.5; close.anchor_right = 0.5
+	close.anchor_top = 1.0; close.anchor_bottom = 1.0
+	close.offset_left = -95; close.offset_right = 95
+	close.offset_top = -84; close.offset_bottom = -28
+	close.pressed.connect(_toggle_map)
+	map_layer.add_child(close)
+
+func _toggle_map() -> void:
+	map_layer.visible = not map_layer.visible
+
+func _update_marker() -> void:
+	if map_rect == null or map_rect.texture == null:
+		return
+	var half := _hsize * 0.5
+	var u: float = clampf((player.global_position.x + half) / _hsize, 0.0, 1.0)
+	var v: float = clampf((player.global_position.z + half) / _hsize, 0.0, 1.0)
+	# область, реально занятая текстурой при KEEP_ASPECT_CENTERED
+	var rs := map_rect.size
+	var ts := map_rect.texture.get_size()
+	var scale: float = minf(rs.x / ts.x, rs.y / ts.y)
+	var draw := ts * scale
+	var origin := (rs - draw) * 0.5
+	map_marker.position = origin + Vector2(u * draw.x, v * draw.y)
+
+# ---------- ввод ----------
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventScreenTouch:
+		if event.pressed:
+			_touches[event.index] = event.position
+		else:
+			_touches.erase(event.index)
+		_pinch_dist = -1.0
+	elif event is InputEventScreenDrag:
+		_touches[event.index] = event.position
+		if _touches.size() >= 2:
+			var cbasis := camera.global_transform.basis
+			var k := 0.004 * boom
+			pan_offset += (-cbasis.x * event.relative.x + cbasis.y * event.relative.y) * k
+			pan_offset.x = clampf(pan_offset.x, -12.0, 12.0)
+			pan_offset.y = clampf(pan_offset.y, -2.0, 6.0)
+			pan_offset.z = clampf(pan_offset.z, -12.0, 12.0)
+			var keys := _touches.keys()
+			var d: float = (_touches[keys[0]] as Vector2).distance_to(_touches[keys[1]] as Vector2)
+			if _pinch_dist > 0.0 and absf(d - _pinch_dist) > 1.0:
+				boom = clampf(boom * (_pinch_dist / d), 1.2, 22.0)
+				camera.position = Vector3(0, 0, boom)
+			_pinch_dist = d
+		else:
+			cam_yaw -= event.relative.x * 0.006
+			cam_pitch = clampf(cam_pitch - event.relative.y * 0.004, -1.2, 0.4)
+			cam_yaw_node.rotation.y = cam_yaw
+			cam_pitch_node.rotation.x = cam_pitch
+
+# ---------- физика ----------
+func _physics_process(delta: float) -> void:
+	if player == null:
+		return
+	var v: Vector2 = joystick.vector if joystick != null else Vector2.ZERO
+	var mag := minf(v.length(), 1.0)
+	var cb := camera.global_transform.basis
+	var fwd := -cb.z; fwd.y = 0.0
+	if fwd.length() > 0.001: fwd = fwd.normalized()
+	var right := cb.x; right.y = 0.0
+	if right.length() > 0.001: right = right.normalized()
+	var dir := fwd * v.y + right * v.x
+	var hspeed := 0.0
+	var top := RUN_SPEED if _running else WALK_SPEED
+	if mag > 0.1 and dir.length() > 0.01:
+		dir = dir.normalized()
+		hspeed = top * mag
+		char_yaw = lerp_angle(char_yaw, atan2(dir.x, dir.z), delta * 9.0)
+		visual.rotation.y = char_yaw
+		player.velocity.x = dir.x * hspeed
+		player.velocity.z = dir.z * hspeed
+	else:
+		player.velocity.x = move_toward(player.velocity.x, 0.0, delta * 10.0)
+		player.velocity.z = move_toward(player.velocity.z, 0.0, delta * 10.0)
+
+	if player.is_on_floor():
+		if want_jump:
+			player.velocity.y = JUMP_VELOCITY
+	else:
+		player.velocity.y -= GRAVITY * delta
+	want_jump = false
+	player.move_and_slide()
+
+	if uniform_anim != null:
+		if hspeed > 0.3:
+			var target := "walk"
+			if uniform_anim.current_animation != target:
+				uniform_anim.play(target, 0.2)
+			uniform_anim.speed_scale = clampf(hspeed / WALK_SPEED, 0.8, 2.1)
+		else:
+			if uniform_anim.current_animation != "idle":
+				uniform_anim.play("idle", 0.25)
+			uniform_anim.speed_scale = 1.0
+
+func _process(delta: float) -> void:
+	if player == null:
+		return
+	var target := player.global_position + Vector3(0, 1.2, 0) + pan_offset
+	cam_yaw_node.position = cam_yaw_node.position.lerp(target, minf(1.0, delta * 9.0))
+	if map_layer != null and map_layer.visible:
+		_update_marker()

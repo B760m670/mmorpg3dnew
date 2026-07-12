@@ -1,15 +1,18 @@
-; Империя 1894 — проект Godot 4.3
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
 config_version=5
 
 [application]
 
 config/name="Империя 1894"
-run/main_scene="res://scenes/lab.tscn"
+run/main_scene="res://scenes/world.tscn"
 config/features=PackedStringArray("4.3", "Mobile")
-
-[display]
-
-window/handheld/orientation=0
 
 [input_devices]
 
