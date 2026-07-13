@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://b2kssqxj3l48f"
-path="res://.godot/imported/cobble_normal.png-2548cd8504a53efc10d47c3b29655606.ctex"
+uid="uid://xrmsfmeictgv"
+path="res://.godot/imported/forest_floor_rough.png-5c7b31b73c3cdd8ee822ebede089a3df.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://world/textures/cobble_normal.png"
-dest_files=["res://.godot/imported/cobble_normal.png-2548cd8504a53efc10d47c3b29655606.ctex"]
+source_file="res://world/textures/ground/forest_floor_rough.png"
+dest_files=["res://.godot/imported/forest_floor_rough.png-5c7b31b73c3cdd8ee822ebede089a3df.ctex"]
 
 [params]
 

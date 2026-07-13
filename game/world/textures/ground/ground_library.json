@@ -1,0 +1,45 @@
+{
+  "note": "Библиотека грунтов: тайловые PBR-материалы, применяются к любой области через terrain-шейдер. albedo/normal/rough в этой же папке.",
+  "types": {
+    "meadow": {
+      "name": "Луговая трава",
+      "tile": 8.0,
+      "rough": 0.9
+    },
+    "dry_grass": {
+      "name": "Сухая трава",
+      "tile": 8.0,
+      "rough": 0.92
+    },
+    "forest_floor": {
+      "name": "Лесная подстилка",
+      "tile": 6.0,
+      "rough": 0.95
+    },
+    "field": {
+      "name": "Пашня",
+      "tile": 5.0,
+      "rough": 0.95
+    },
+    "garden_soil": {
+      "name": "Садовая земля",
+      "tile": 4.0,
+      "rough": 0.9
+    },
+    "dirt_path": {
+      "name": "Грунтовая тропа",
+      "tile": 6.0,
+      "rough": 0.9
+    },
+    "sand": {
+      "name": "Песок",
+      "tile": 5.0,
+      "rough": 0.85
+    },
+    "clay": {
+      "name": "Суглинок",
+      "tile": 5.0,
+      "rough": 0.88
+    }
+  }
+}

@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dqkom6erm15hr"
-path="res://.godot/imported/cobble_albedo.png-5806fb665571366049a44615efc7ac1e.ctex"
+uid="uid://crolwhjhhpg37"
+path="res://.godot/imported/dry_grass_albedo.png-bdf6cb623894450c4713795d6267d39d.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://world/textures/cobble_albedo.png"
-dest_files=["res://.godot/imported/cobble_albedo.png-5806fb665571366049a44615efc7ac1e.ctex"]
+source_file="res://world/textures/ground/dry_grass_albedo.png"
+dest_files=["res://.godot/imported/dry_grass_albedo.png-bdf6cb623894450c4713795d6267d39d.ctex"]
 
 [params]
 

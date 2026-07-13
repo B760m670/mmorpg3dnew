@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://c8q1nejeb371y"
-path="res://.godot/imported/dirt_normal.png-f3f867d2cfb8281a524fce70ec1fa8fe.ctex"
+uid="uid://ch31rsy26mqxk"
+path="res://.godot/imported/forest_floor_albedo.png-9b3aed7106ea5787076d223d6199cc07.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://world/textures/dirt_normal.png"
-dest_files=["res://.godot/imported/dirt_normal.png-f3f867d2cfb8281a524fce70ec1fa8fe.ctex"]
+source_file="res://world/textures/ground/forest_floor_albedo.png"
+dest_files=["res://.godot/imported/forest_floor_albedo.png-9b3aed7106ea5787076d223d6199cc07.ctex"]
 
 [params]
 

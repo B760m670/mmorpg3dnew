@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://da4234uvysyul"
-path="res://.godot/imported/dirt_albedo.png-9774feb3ef0759acafa04bbb69638c11.ctex"
+uid="uid://djvgoo8xamjip"
+path="res://.godot/imported/dry_grass_rough.png-bb0671bcf642c23f8edea42a31e99eb5.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://world/textures/dirt_albedo.png"
-dest_files=["res://.godot/imported/dirt_albedo.png-9774feb3ef0759acafa04bbb69638c11.ctex"]
+source_file="res://world/textures/ground/dry_grass_rough.png"
+dest_files=["res://.godot/imported/dry_grass_rough.png-bb0671bcf642c23f8edea42a31e99eb5.ctex"]
 
 [params]
 

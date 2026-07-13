@@ -190,23 +190,30 @@ func _build_terrain() -> void:
 			var p11: Vector3 = vpos.call(i + 1, j + 1); var p01: Vector3 = vpos.call(i, j + 1)
 			var n00: Vector3 = norm.call(i, j); var n10: Vector3 = norm.call(i + 1, j)
 			var n11: Vector3 = norm.call(i + 1, j + 1); var n01: Vector3 = norm.call(i, j + 1)
+			var c00: Color = _ground_color(p00.x, p00.z); var c10: Color = _ground_color(p10.x, p10.z)
+			var c11: Color = _ground_color(p11.x, p11.z); var c01: Color = _ground_color(p01.x, p01.z)
 			# порядок вершин даёт лицевую сторону ВВЕРХ (видна сверху, не отсекается)
-			for t in [[p00, n00], [p10, n10], [p11, n11], [p00, n00], [p11, n11], [p01, n01]]:
+			for t in [[p00, n00, c00], [p10, n10, c10], [p11, n11, c11],
+					[p00, n00, c00], [p11, n11, c11], [p01, n01, c01]]:
 				st.set_normal(t[1])
+				st.set_color(t[2])
 				st.set_uv(Vector2(t[0].x, t[0].z) * 0.1)
 				st.add_vertex(t[0])
 	var mesh := st.commit()
 	var mesh_inst := MeshInstance3D.new()
 	mesh_inst.mesh = mesh
-	var mat := StandardMaterial3D.new()
-	mat.albedo_texture = load("res://world/textures/grass_albedo.png")
-	mat.normal_enabled = true
-	mat.normal_texture = load("res://world/textures/grass_normal.png")
-	mat.normal_scale = 0.5
-	mat.uv1_triplanar = true
-	mat.uv1_scale = Vector3(0.14, 0.14, 0.14)
-	mat.roughness = 0.95
-	mat.metallic_specular = 0.2
+	# грунт из библиотеки: 4 слоя (луг / лесная подстилка / тропа / пашня-огород)
+	var mat := ShaderMaterial.new()
+	mat.shader = load("res://shaders/terrain.gdshader")
+	var g := "res://world/textures/ground/"
+	mat.set_shader_parameter("l0_alb", load(g + "meadow_albedo.png"))
+	mat.set_shader_parameter("l0_nrm", load(g + "meadow_normal.png"))
+	mat.set_shader_parameter("l1_alb", load(g + "forest_floor_albedo.png"))
+	mat.set_shader_parameter("l1_nrm", load(g + "forest_floor_normal.png"))
+	mat.set_shader_parameter("l2_alb", load(g + "dirt_path_albedo.png"))
+	mat.set_shader_parameter("l2_nrm", load(g + "dirt_path_normal.png"))
+	mat.set_shader_parameter("l3_alb", load(g + "field_albedo.png"))
+	mat.set_shader_parameter("l3_nrm", load(g + "field_normal.png"))
 	mesh_inst.material_override = mat
 	add_child(mesh_inst)
 	# коллизия рельефа
@@ -220,6 +227,39 @@ func _first_mesh(root: Node) -> MeshInstance3D:
 	for m in root.find_children("*", "MeshInstance3D", true, false):
 		return m as MeshInstance3D
 	return null
+
+# расстояние от точки до отрезка (для покраски дорог)
+func _seg_dist(px: float, pz: float, ax: float, az: float, bx: float, bz: float) -> float:
+	var vx := bx - ax; var vz := bz - az
+	var wx := px - ax; var wz := pz - az
+	var t: float = clampf((wx * vx + wz * vz) / (vx * vx + vz * vz + 1e-6), 0.0, 1.0)
+	var dx := px - (ax + t * vx); var dz := pz - (az + t * vz)
+	return sqrt(dx * dx + dz * dz)
+
+# вес типов грунта в точке: R=луг, G=лесная подстилка, B=тропа, A=пашня/огород
+func _ground_color(x: float, z: float) -> Color:
+	var g := 0.0
+	for fr in LY.get("forests", []):
+		var c: Array = fr["center"]; var r: Array = fr["radius"]
+		var d := sqrt(pow((x - float(c[0])) / float(r[0]), 2.0) + pow((z - float(c[1])) / float(r[1]), 2.0))
+		if d < 1.05:
+			g = maxf(g, clampf((1.05 - d) / 0.3, 0.0, 1.0))
+	var b := 0.0
+	for rd in LY.get("roads", []):
+		var pts: Array = rd["points"]; var hw := float(rd["width"]) * 0.5 + 1.0
+		var dm := 1e9
+		for i in range(pts.size() - 1):
+			dm = minf(dm, _seg_dist(x, z, float(pts[i][0]), float(pts[i][1]), float(pts[i + 1][0]), float(pts[i + 1][1])))
+		if dm < hw + 3.0:
+			b = maxf(b, clampf((hw + 3.0 - dm) / 4.0, 0.0, 1.0))
+	var a := 0.0
+	for zone in (LY.get("fields", []) + LY.get("gardens", [])):
+		var c2: Array = zone["center"]; var s2: Array = zone["size"]
+		var fx: float = 1.0 - clampf((absf(x - float(c2[0])) - float(s2[0]) * 0.35) / (float(s2[0]) * 0.15), 0.0, 1.0)
+		var fz: float = 1.0 - clampf((absf(z - float(c2[1])) - float(s2[1]) * 0.35) / (float(s2[1]) * 0.15), 0.0, 1.0)
+		a = maxf(a, fx * fz)
+	var r: float = maxf(0.0, 1.0 - g - b - a)
+	return Color(r, g, b, a)
 
 # ---------- вода озёр ----------
 func _build_water() -> void:
