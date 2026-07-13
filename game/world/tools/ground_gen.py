@@ -99,10 +99,16 @@ alb = alb*(1-stones[...,None]) + np.array([0.4,0.38,0.35])[None,None]*stones[...
 emit("garden_soil", alb, s1*0.7+stones*0.3, 0.9, 3.0)
 LIB["garden_soil"] = {"name":"Садовая земля","tile":4.0,"rough":0.9}
 
-# 6. ГРУНТОВАЯ ТРОПА — светлый утоптанный грунт
+# 6. ГРУНТОВАЯ ДОРОГА — настоящая тёмная утоптанная земля (не песок!)
 p1 = fbm(S, 10, 5, 61); ruts = fbm(S, 26, 3, 62)
-alb = np.array([0.42,0.33,0.22])[None,None]*(0.8+0.35*p1[...,None])*(0.9+0.15*ruts[...,None])
-emit("dirt_path", alb, p1*0.5+ruts*0.5, 0.9, 3.0)
+moist = patches(fbm(S, 14, 4, 63), 0.45, 0.8)      # влажные тёмные участки
+stones = patches(fbm(S, 80, 2, 64), 0.86, 0.95)    # мелкие камешки
+base = np.array([0.15, 0.10, 0.06]); dry = np.array([0.27, 0.19, 0.12])
+alb = base[None,None]*(1-p1[...,None]) + dry[None,None]*p1[...,None]
+alb = alb*(1-0.4*moist[...,None])                  # мокрая земля темнее
+alb = alb*(1-stones[...,None]) + np.array([0.33,0.31,0.29])[None,None]*stones[...,None]
+alb = alb*(0.9+0.2*ruts[...,None])
+emit("dirt_path", alb, p1*0.5+ruts*0.4+stones*0.4, 0.9, 3.5)
 LIB["dirt_path"] = {"name":"Грунтовая тропа","tile":6.0,"rough":0.9}
 
 # 7. ПЕСОК — светлый мелкий, лёгкая рябь
