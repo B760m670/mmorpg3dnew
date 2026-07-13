@@ -277,14 +277,15 @@ func _make_grass_tuft() -> Mesh:
 		var ang := rng.randf() * TAU
 		var off := rng.randf() * 0.05
 		var bx := cos(ang) * off; var bz := sin(ang) * off
-		var h := rng.randf_range(0.22, 0.36)
-		var w := 0.012
+		var h := rng.randf_range(0.16, 0.30)
+		var w := 0.009
 		var ba := rng.randf() * TAU
-		var bend := rng.randf_range(0.03, 0.10)
+		var bend := rng.randf_range(0.03, 0.12)
 		var dx := cos(ba); var dz := sin(ba)
 		var tint := rng.randf()
-		var lo := Color(0.10, 0.26, 0.05).lerp(Color(0.15, 0.31, 0.06), tint)
-		var hi := Color(0.34, 0.52, 0.14).lerp(Color(0.42, 0.56, 0.18), tint)
+		# натуральная зелень с жёлто-зелёными и тёмными вариациями (не «неон»)
+		var lo := Color(0.07, 0.16, 0.04).lerp(Color(0.11, 0.20, 0.05), tint)
+		var hi := Color(0.22, 0.36, 0.10).lerp(Color(0.34, 0.40, 0.14), tint)
 		var md := lo.lerp(hi, 0.5)
 		var p0 := Vector3(bx - dz * w, 0, bz + dx * w)
 		var p1 := Vector3(bx + dz * w, 0, bz - dx * w)
@@ -306,8 +307,9 @@ func _build_grass() -> void:
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.mesh = _make_grass_tuft()
 	var rng := RandomNumberGenerator.new(); rng.seed = 2025
-	var count := 140000
-	var radius := 400.0
+	# плотный ковёр рядом с игроком (как в эталоне) — под A18 Pro
+	var count := 320000
+	var radius := 110.0
 	var sp: Array = LY.get("spawn", {}).get("position", [40, 90])
 	var cx := float(sp[0]); var cz := float(sp[1])
 	mm.instance_count = count
@@ -315,7 +317,8 @@ func _build_grass() -> void:
 	while placed < count and tries < count * 5:
 		tries += 1
 		var a := rng.randf() * TAU
-		var rr := sqrt(rng.randf()) * radius
+		# больше плотности к центру (у игрока)
+		var rr := pow(rng.randf(), 0.7) * radius
 		var x := cx + cos(a) * rr; var z := cz + sin(a) * rr
 		if _ground_color(x, z).r < 0.55:   # только луг
 			continue
