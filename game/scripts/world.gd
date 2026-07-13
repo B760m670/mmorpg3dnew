@@ -176,17 +176,27 @@ func _build_terrain() -> void:
 		return
 	var half := _hsize * 0.5
 	var cell := _hsize / float(_hres - 1)
+	# мелкое шумовое смещение поверхности — бугры и неровности сверх крупного рельефа
+	var dn := FastNoiseLite.new()
+	dn.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	dn.frequency = 0.09
+	dn.fractal_octaves = 4
+	var damp := 0.7
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# высота с учётом мелкого шума
+	var hy := func(i: int, j: int) -> float:
+		var x := -half + i * cell; var z := -half + j * cell
+		return _h[j * _hres + i] + dn.get_noise_2d(x, z) * damp
 	# нормаль поля высот в узле (i,j) — всегда с доминантой +Y
 	var norm := func(i: int, j: int) -> Vector3:
 		var il := maxi(i - 1, 0); var ir := mini(i + 1, _hres - 1)
 		var jd := maxi(j - 1, 0); var ju := mini(j + 1, _hres - 1)
-		var hl := _h[j * _hres + il]; var hr := _h[j * _hres + ir]
-		var hd := _h[jd * _hres + i]; var hu := _h[ju * _hres + i]
+		var hl: float = hy.call(il, j); var hr: float = hy.call(ir, j)
+		var hd: float = hy.call(i, jd); var hu: float = hy.call(i, ju)
 		return Vector3(hl - hr, 2.0 * cell, hd - hu).normalized()
 	var vpos := func(i: int, j: int) -> Vector3:
-		return Vector3(-half + i * cell, _h[j * _hres + i], -half + j * cell)
+		return Vector3(-half + i * cell, hy.call(i, j), -half + j * cell)
 	for j in range(_hres - 1):
 		for i in range(_hres - 1):
 			var p00: Vector3 = vpos.call(i, j); var p10: Vector3 = vpos.call(i + 1, j)
@@ -309,7 +319,7 @@ func _build_grass() -> void:
 	mm.mesh = _make_grass_tuft()
 	var rng := RandomNumberGenerator.new(); rng.seed = 2025
 	# плотный ковёр рядом с игроком (как в эталоне) — под A18 Pro
-	var count := 320000
+	var count := 240000
 	var radius := 110.0
 	var sp: Array = LY.get("spawn", {}).get("position", [40, 90])
 	var cx := float(sp[0]); var cz := float(sp[1])
