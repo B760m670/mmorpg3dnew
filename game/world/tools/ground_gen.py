@@ -10,7 +10,7 @@ A = sys.argv[sys.argv.index("--")+1:] if "--" in sys.argv else []
 ROOT = A[0] if A else "/home/user/mmorpg3dnew"
 GD = os.path.join(ROOT, "game/world/textures/ground")
 os.makedirs(GD, exist_ok=True)
-S = 512
+S = 1024
 
 def fbm(size, base, octaves, seed):
     rng = np.random.default_rng(seed)
@@ -43,7 +43,14 @@ def nrm(height, strength):
 def patches(field, lo, hi):
     return np.clip((field-lo)/(hi-lo), 0, 1)
 
+FINE=None
 def emit(name, alb, height, rough, nstr, rgh_range=None):
+    global FINE
+    if FINE is None:
+        FINE=fbm(S,120,4,999)
+    alb=alb*(0.82+0.36*FINE[...,None])           # мелкое зерно (резкость)
+    height=height*0.7+FINE*0.3                    # мелкий рельеф в нормали
+    nstr=nstr*1.7
     save(np.clip(alb, 0, 1), os.path.join(GD, name+"_albedo.png"))
     save(nrm(height, nstr), os.path.join(GD, name+"_normal.png"))
     if np.isscalar(rough):

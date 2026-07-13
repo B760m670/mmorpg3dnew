@@ -101,9 +101,10 @@ func _build_environment() -> void:
 	# нужен (тяжёл для мобильных и конфликтует с ярким HDR-небом).
 	# Затенение в складках/углах и экранное непрямое освещение
 	env.ssao_enabled = true
-	env.ssao_radius = 2.0
-	env.ssao_intensity = 2.0
-	env.ssao_power = 1.5
+	env.ssao_radius = 3.0
+	env.ssao_intensity = 3.2
+	env.ssao_power = 2.0
+	env.ssao_detail = 1.0
 	env.ssil_enabled = true
 	env.ssil_radius = 4.0
 	env.ssil_intensity = 1.0
@@ -131,9 +132,9 @@ func _build_environment() -> void:
 	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
 	# Цветокоррекция — тёплый исторический тон
 	env.adjustment_enabled = true
-	env.adjustment_brightness = 1.0
-	env.adjustment_contrast = 1.06
-	env.adjustment_saturation = 1.08
+	env.adjustment_brightness = 1.02
+	env.adjustment_contrast = 1.16
+	env.adjustment_saturation = 1.18
 
 	_apply_quality(env)
 	var we := WorldEnvironment.new(); we.environment = env
