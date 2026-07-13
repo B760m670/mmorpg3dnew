@@ -43,6 +43,8 @@ func _ready() -> void:
 	_load_data()
 	_build_environment()
 	_build_terrain()
+	_build_grass()
+	_build_rocks()
 	_build_water()
 	_build_buildings()
 	_build_town()
@@ -260,6 +262,144 @@ func _ground_color(x: float, z: float) -> Color:
 		a = maxf(a, fx * fz)
 	var r: float = maxf(0.0, 1.0 - g - b - a)
 	return Color(r, g, b, a)
+
+# ---------- трава: настоящие травинки (геометрия) через MultiMesh ----------
+func _gv(st: SurfaceTool, p: Vector3, c: Color) -> void:
+	st.set_normal(Vector3.UP)   # трава освещается «вверх» — ровная, без тёмных листьев
+	st.set_color(c)
+	st.add_vertex(p)
+
+func _make_grass_tuft() -> Mesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var rng := RandomNumberGenerator.new(); rng.seed = 99
+	for _b in range(7):
+		var ang := rng.randf() * TAU
+		var off := rng.randf() * 0.05
+		var bx := cos(ang) * off; var bz := sin(ang) * off
+		var h := rng.randf_range(0.22, 0.36)
+		var w := 0.012
+		var ba := rng.randf() * TAU
+		var bend := rng.randf_range(0.03, 0.10)
+		var dx := cos(ba); var dz := sin(ba)
+		var tint := rng.randf()
+		var lo := Color(0.10, 0.26, 0.05).lerp(Color(0.15, 0.31, 0.06), tint)
+		var hi := Color(0.34, 0.52, 0.14).lerp(Color(0.42, 0.56, 0.18), tint)
+		var md := lo.lerp(hi, 0.5)
+		var p0 := Vector3(bx - dz * w, 0, bz + dx * w)
+		var p1 := Vector3(bx + dz * w, 0, bz - dx * w)
+		var mc := Vector3(bx + dx * bend, h * 0.55, bz + dz * bend)
+		var m0 := mc + Vector3(-dz * w * 0.6, 0, dx * w * 0.6)
+		var m1 := mc + Vector3(dz * w * 0.6, 0, -dx * w * 0.6)
+		var tip := Vector3(bx + dx * bend * 1.7, h, bz + dz * bend * 1.7)
+		_gv(st, p0, lo); _gv(st, p1, lo); _gv(st, m1, md)
+		_gv(st, p0, lo); _gv(st, m1, md); _gv(st, m0, md)
+		_gv(st, m0, md); _gv(st, m1, md); _gv(st, tip, hi)
+	var m := st.commit()
+	var mat := ShaderMaterial.new()
+	mat.shader = load("res://shaders/grass.gdshader")
+	m.surface_set_material(0, mat)
+	return m
+
+func _build_grass() -> void:
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = _make_grass_tuft()
+	var rng := RandomNumberGenerator.new(); rng.seed = 2025
+	var count := 140000
+	var radius := 400.0
+	var sp: Array = LY.get("spawn", {}).get("position", [40, 90])
+	var cx := float(sp[0]); var cz := float(sp[1])
+	mm.instance_count = count
+	var placed := 0; var tries := 0
+	while placed < count and tries < count * 5:
+		tries += 1
+		var a := rng.randf() * TAU
+		var rr := sqrt(rng.randf()) * radius
+		var x := cx + cos(a) * rr; var z := cz + sin(a) * rr
+		if _ground_color(x, z).r < 0.55:   # только луг
+			continue
+		if _in_lake(x, z) or _near_building(x, z, 5.0):
+			continue
+		var y := height_at(x, z)
+		if y < -1.0:
+			continue
+		var t := Transform3D()
+		var s := rng.randf_range(0.75, 1.5)
+		t = t.scaled(Vector3(s, rng.randf_range(0.9, 1.4) * s, s))
+		t = t.rotated(Vector3.UP, rng.randf() * TAU)
+		t.origin = Vector3(x, y, z)
+		mm.set_instance_transform(placed, t)
+		placed += 1
+	mm.instance_count = placed
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mmi)
+
+# ---------- камни: детальные валуны (смещённая сфера) + каменный материал ----------
+func _make_rock_mesh(seed: int) -> Mesh:
+	var noise := FastNoiseLite.new()
+	noise.frequency = 0.9; noise.seed = seed
+	noise.fractal_octaves = 4
+	var rings := 12; var sectors := 16
+	var pts := []
+	for i in range(rings + 1):
+		var row := []
+		var phi := PI * float(i) / rings
+		for j in range(sectors + 1):
+			var theta := TAU * float(j) / sectors
+			var n := Vector3(sin(phi) * cos(theta), cos(phi), sin(phi) * sin(theta))
+			var d: float = 1.0 + noise.get_noise_3d(n.x * 2.2, n.y * 2.2, n.z * 2.2) * 0.4
+			var p := n * d
+			p.y = p.y * 0.75 - 0.1   # приплюснуть, «сесть» в землю
+			row.append(p)
+		pts.append(row)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in range(rings):
+		for j in range(sectors):
+			var a: Vector3 = pts[i][j]; var b: Vector3 = pts[i][j + 1]
+			var c: Vector3 = pts[i + 1][j + 1]; var d2: Vector3 = pts[i + 1][j]
+			for v in [a, b, c, a, c, d2]:
+				st.add_vertex(v)
+	st.generate_normals()
+	return st.commit()
+
+func _build_rocks() -> void:
+	var rmat := StandardMaterial3D.new()
+	rmat.albedo_color = Color(0.30, 0.29, 0.27)
+	rmat.normal_enabled = true
+	rmat.normal_texture = load("res://world/textures/ground/clay_normal.png")
+	rmat.normal_scale = 1.0
+	rmat.uv1_triplanar = true
+	rmat.uv1_scale = Vector3(1.2, 1.2, 1.2)
+	rmat.roughness = 0.92
+	var meshes := []
+	for k in range(4):
+		var mm := _make_rock_mesh(k * 13 + 1)
+		mm.surface_set_material(0, rmat)
+		meshes.append(mm)
+	var rng := RandomNumberGenerator.new(); rng.seed = 771
+	var sp: Array = LY.get("spawn", {}).get("position", [40, 90])
+	var cx := float(sp[0]); var cz := float(sp[1])
+	for _i in range(500):
+		var a := rng.randf() * TAU
+		var rr := sqrt(rng.randf()) * 420.0
+		var x := cx + cos(a) * rr; var z := cz + sin(a) * rr
+		var gc := _ground_color(x, z)
+		if gc.b > 0.4 or _in_lake(x, z) or _near_building(x, z, 8.0):
+			continue
+		var y := height_at(x, z)
+		if y < -1.0:
+			continue
+		var inst := MeshInstance3D.new()
+		inst.mesh = meshes[rng.randi() % meshes.size()]
+		var s := rng.randf_range(0.3, 1.1)
+		inst.scale = Vector3(s, s * rng.randf_range(0.7, 1.0), s)
+		inst.rotation.y = rng.randf() * TAU
+		inst.position = Vector3(x, y + 0.05, z)
+		add_child(inst)
 
 # ---------- вода озёр ----------
 func _build_water() -> void:

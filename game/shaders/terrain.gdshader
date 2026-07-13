@@ -33,8 +33,10 @@ void fragment() {
 	       + texture(l2_alb, u2).rgb * w.b + texture(l3_alb, u3).rgb * w.a;
 	vec3 n = texture(l0_nrm, u0).rgb * w.r + texture(l1_nrm, u1).rgb * w.g
 	       + texture(l2_nrm, u2).rgb * w.b + texture(l3_nrm, u3).rgb * w.a;
-	NORMAL_MAP = n;
-	NORMAL_MAP_DEPTH = 0.5;
+	// мелкая детализация вблизи: та же нормаль на высокой частоте (шероховатость грунта)
+	vec3 nd = texture(l0_nrm, wpos.xz * 1.3).rgb;
+	NORMAL_MAP = normalize(n + (nd - vec3(0.5)) * 0.7);
+	NORMAL_MAP_DEPTH = 1.0;
 	ROUGHNESS = dot(w, rough);
 	SPECULAR = 0.2;
 	METALLIC = 0.0;
