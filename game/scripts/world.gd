@@ -78,31 +78,25 @@ func height_at(x: float, z: float) -> float:
 
 # ---------- окружение: небо, солнце, туман ----------
 func _build_environment() -> void:
-	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.30, 0.46, 0.72)
-	sky_mat.sky_horizon_color = Color(0.56, 0.64, 0.70)
-	sky_mat.ground_bottom_color = Color(0.26, 0.30, 0.26)
-	sky_mat.ground_horizon_color = Color(0.56, 0.62, 0.60)
-	sky_mat.sun_angle_max = 8.0
-	var sky := Sky.new(); sky.sky_material = sky_mat
+	# физическое небо: рассеяние Рэлея/Ми + солнце + облака (shaders/sky.gdshader)
+	var sky_mat := ShaderMaterial.new()
+	sky_mat.shader = load("res://shaders/sky.gdshader")
+	var sky := Sky.new()
+	sky.sky_material = sky_mat
+	sky.radiance_size = Sky.RADIANCE_SIZE_64
+	sky.process_mode = Sky.PROCESS_MODE_REALTIME      # небо анимировано — ambient каждый кадр
 	var env := Environment.new()
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.35
+	env.ambient_light_energy = 0.6
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.tonemap_exposure = 0.95
-	env.tonemap_white = 6.0
+	env.tonemap_exposure = 1.0
 
 	# --- Forward+ : «уровень движка» реализм ---
-	# Динамическое глобальное освещение (без запекания): свет переотражается
-	# от земли и стен, как в реальности — главный визуальный скачок.
-	env.sdfgi_enabled = true
-	env.sdfgi_cascades = 4
-	env.sdfgi_min_cell_size = 0.2
-	env.sdfgi_use_occlusion = true
-	env.sdfgi_bounce_feedback = 0.5
-	env.sdfgi_energy = 1.0
+	# Для открытого мира глобальное освещение даёт само небо (AMBIENT_SOURCE_SKY):
+	# физическая атмосфера освещает всё мягким небесным светом. SDFGI здесь не
+	# нужен (тяжёл для мобильных и конфликтует с ярким HDR-небом).
 	# Затенение в складках/углах и экранное непрямое освещение
 	env.ssao_enabled = true
 	env.ssao_radius = 2.0
@@ -139,12 +133,14 @@ func _build_environment() -> void:
 	env.adjustment_contrast = 1.06
 	env.adjustment_saturation = 1.08
 
+	_apply_quality(env)
 	var we := WorldEnvironment.new(); we.environment = env
 	add_child(we)
 
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-42, -50, 0)
-	sun.light_energy = 1.15
+	sun.rotation_degrees = Settings.sun_rotation_deg()
+	# физическое небо яркое (HDR) — солнце должно светить сильно, иначе земля чёрная
+	sun.light_energy = 0.5 if Settings.is_night() else 3.8
 	sun.light_color = Color(1.0, 0.95, 0.86)
 	sun.shadow_enabled = true
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
@@ -155,33 +151,69 @@ func _build_environment() -> void:
 	sun.directional_shadow_blend_splits = true
 	add_child(sun)
 
+# качество графики из настроек: отключаем тяжёлые эффекты на слабых устройствах
+func _apply_quality(env: Environment) -> void:
+	match Settings.quality:
+		"balanced":
+			env.ssil_enabled = false
+			env.ssr_enabled = false
+			env.volumetric_fog_density = 0.001
+		"performance":
+			env.ssao_enabled = false
+			env.ssil_enabled = false
+			env.ssr_enabled = false
+			env.volumetric_fog_enabled = false
+			get_viewport().msaa_3d = Viewport.MSAA_DISABLED
+
 # ---------- рельеф ----------
 func _build_terrain() -> void:
-	var packed: PackedScene = load("res://world/gatchina/terrain.glb")
-	if packed == null:
+	# Рельеф строим прямо в Godot из heights.json — с явными нормалями «вверх».
+	# Так исключаем неоднозначность экспорта из Blender (из-за неё грунт был чёрным).
+	if _hres == 0:
 		return
-	var inst := packed.instantiate()
-	add_child(inst)
-	var mi := inst.find_child("*", true, false)
-	var mesh_inst := _first_mesh(inst)
-	if mesh_inst == null:
-		return
-	# материал грунта: смешивание трёх тайлов по вершинному цвету
-	var sm := ShaderMaterial.new()
-	sm.shader = load("res://shaders/terrain.gdshader")
-	sm.set_shader_parameter("grass_alb", load("res://world/textures/grass_albedo.png"))
-	sm.set_shader_parameter("grass_nrm", load("res://world/textures/grass_normal.png"))
-	sm.set_shader_parameter("dirt_alb", load("res://world/textures/dirt_albedo.png"))
-	sm.set_shader_parameter("dirt_nrm", load("res://world/textures/dirt_normal.png"))
-	sm.set_shader_parameter("cobble_alb", load("res://world/textures/cobble_albedo.png"))
-	sm.set_shader_parameter("cobble_nrm", load("res://world/textures/cobble_normal.png"))
-	mesh_inst.material_override = sm
-	# коллизия рельефа (trimesh)
+	var half := _hsize * 0.5
+	var cell := _hsize / float(_hres - 1)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# нормаль поля высот в узле (i,j) — всегда с доминантой +Y
+	var norm := func(i: int, j: int) -> Vector3:
+		var il := maxi(i - 1, 0); var ir := mini(i + 1, _hres - 1)
+		var jd := maxi(j - 1, 0); var ju := mini(j + 1, _hres - 1)
+		var hl := _h[j * _hres + il]; var hr := _h[j * _hres + ir]
+		var hd := _h[jd * _hres + i]; var hu := _h[ju * _hres + i]
+		return Vector3(hl - hr, 2.0 * cell, hd - hu).normalized()
+	var vpos := func(i: int, j: int) -> Vector3:
+		return Vector3(-half + i * cell, _h[j * _hres + i], -half + j * cell)
+	for j in range(_hres - 1):
+		for i in range(_hres - 1):
+			var p00: Vector3 = vpos.call(i, j); var p10: Vector3 = vpos.call(i + 1, j)
+			var p11: Vector3 = vpos.call(i + 1, j + 1); var p01: Vector3 = vpos.call(i, j + 1)
+			var n00: Vector3 = norm.call(i, j); var n10: Vector3 = norm.call(i + 1, j)
+			var n11: Vector3 = norm.call(i + 1, j + 1); var n01: Vector3 = norm.call(i, j + 1)
+			# порядок вершин даёт лицевую сторону ВВЕРХ (видна сверху, не отсекается)
+			for t in [[p00, n00], [p10, n10], [p11, n11], [p00, n00], [p11, n11], [p01, n01]]:
+				st.set_normal(t[1])
+				st.set_uv(Vector2(t[0].x, t[0].z) * 0.1)
+				st.add_vertex(t[0])
+	var mesh := st.commit()
+	var mesh_inst := MeshInstance3D.new()
+	mesh_inst.mesh = mesh
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = load("res://world/textures/grass_albedo.png")
+	mat.normal_enabled = true
+	mat.normal_texture = load("res://world/textures/grass_normal.png")
+	mat.normal_scale = 0.5
+	mat.uv1_triplanar = true
+	mat.uv1_scale = Vector3(0.14, 0.14, 0.14)
+	mat.roughness = 0.95
+	mat.metallic_specular = 0.2
+	mesh_inst.material_override = mat
+	add_child(mesh_inst)
+	# коллизия рельефа
 	var body := StaticBody3D.new()
 	var col := CollisionShape3D.new()
-	col.shape = mesh_inst.mesh.create_trimesh_shape()
+	col.shape = mesh.create_trimesh_shape()
 	body.add_child(col)
-	body.global_transform = mesh_inst.global_transform
 	add_child(body)
 
 func _first_mesh(root: Node) -> MeshInstance3D:
@@ -430,6 +462,10 @@ func _build_ui() -> void:
 	vbox.add_theme_constant_override("separation", 12)
 	layer.add_child(vbox)
 
+	var menu_btn := _mk_button("☰ Меню")
+	menu_btn.pressed.connect(func() -> void: get_tree().change_scene_to_file("res://scenes/menu.tscn"))
+	vbox.add_child(menu_btn)
+
 	var map_btn := _mk_button("🗺 Карта")
 	map_btn.pressed.connect(_toggle_map)
 	vbox.add_child(map_btn)
@@ -532,8 +568,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				camera.position = Vector3(0, 0, boom)
 			_pinch_dist = d
 		else:
-			cam_yaw -= event.relative.x * 0.006
-			cam_pitch = clampf(cam_pitch - event.relative.y * 0.004, -1.2, 0.4)
+			var sens: float = Settings.sensitivity
+			cam_yaw -= event.relative.x * 0.006 * sens
+			cam_pitch = clampf(cam_pitch - event.relative.y * 0.004 * sens, -1.2, 0.4)
 			cam_yaw_node.rotation.y = cam_yaw
 			cam_pitch_node.rotation.x = cam_pitch
 

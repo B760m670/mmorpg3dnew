@@ -178,7 +178,8 @@ uv_layer = bm.loops.layers.uv.new("UVMap")
 for j in range(RES-1):
     for i in range(RES-1):
         v00, v10, v11, v01 = verts[j][i], verts[j][i+1], verts[j+1][i+1], verts[j+1][i]
-        for tri in ((v00, v10, v11), (v00, v11, v01)):
+        # порядок обхода даёт нормали ВВЕРХ (+Y) — иначе поверхность неосвещена
+        for tri in ((v00, v11, v10), (v00, v01, v11)):
             face = bm.faces.new(tri)
             for loop in face.loops:
                 vx, vz = loop.vert.co.x, loop.vert.co.z
@@ -208,9 +209,11 @@ bpy.ops.export_scene.gltf(filepath=out, use_selection=True,
     export_yup=True, export_apply=True)
 print("[terrain] ->", out, "verts", RES*RES)
 
-# сохраним высотную карту для генератора карты/размещения зданий
-np.save(os.path.join(OUTDIR, "heightmap.npy"), H)
-meta = {"size": SIZE, "res": RES, "half": half}
-with open(os.path.join(OUTDIR, "terrain_meta.json"), "w") as f:
-    json.dump(meta, f)
-print("[terrain] meta+heightmap saved")
+# heights.json — облегчённая высотная карта (129×129), из неё Godot строит
+# меш рельефа прямо в движке (scripts/world.gd), плюс размещает объекты и карту.
+K = 129
+idx = np.linspace(0, RES - 1, K).astype(int)
+Hd = H[np.ix_(idx, idx)]
+with open(os.path.join(OUTDIR, "heights.json"), "w") as f:
+    json.dump({"res": K, "size": SIZE, "h": [round(float(x), 3) for x in Hd.reshape(-1)]}, f)
+print("[terrain] heights.json saved (%dx%d)" % (K, K))

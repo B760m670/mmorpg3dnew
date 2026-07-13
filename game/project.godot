@@ -11,8 +11,12 @@ config_version=5
 [application]
 
 config/name="Империя 1894"
-run/main_scene="res://scenes/world.tscn"
+run/main_scene="res://scenes/menu.tscn"
 config/features=PackedStringArray("4.3", "Forward Plus")
+
+[autoload]
+
+Settings="*res://scripts/game_settings.gd"
 
 [input_devices]
 
@@ -20,7 +24,6 @@ pointing/emulate_touch_from_mouse=true
 
 [rendering]
 
-renderer/rendering_method="forward_plus"
 renderer/rendering_method.mobile="forward_plus"
 textures/vram_compression/import_etc2_astc=true
 anti_aliasing/quality/msaa_3d=1
