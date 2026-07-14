@@ -54,7 +54,7 @@ func _detail(g: String) -> void:
 			grass_count = 80000; grass_radius = 70.0
 			patch_radius = 34.0; patch_step = 0.55; rock_count = 200
 			shadow_enabled = true; shadow_distance = 120.0
-			msaa = Viewport.MSAA_DISABLED; render_scale = 0.85; sky_realtime = false
+			msaa = Viewport.MSAA_DISABLED; render_scale = 0.85; sky_realtime = true
 		"hd":       # красивее: мягкое затенение + дальний туман, выше плотность
 			ssao = true; ssil = false; ssr = false; volumetric_fog = false; distant_fog = true
 			grass_count = 190000; grass_radius = 105.0

@@ -9,8 +9,9 @@ static func build(world: Node3D, gp: GraphicsProfile) -> void:
 	var sky := Sky.new()
 	sky.sky_material = sky_mat
 	sky.radiance_size = Sky.RADIANCE_SIZE_64
-	# realtime только на верхних уровнях: пересчёт ambient каждый кадр дорог
-	sky.process_mode = Sky.PROCESS_MODE_REALTIME if gp.sky_realtime else Sky.PROCESS_MODE_INCREMENTAL
+	# ВСЕГДA realtime: режим INCREMENTAL не сходится с нашим анимированным небом и
+	# даёт чёрный фон/ambient (это и был баг «всё чёрное» при смене настроек).
+	sky.process_mode = Sky.PROCESS_MODE_REALTIME
 	var env := Environment.new()
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
