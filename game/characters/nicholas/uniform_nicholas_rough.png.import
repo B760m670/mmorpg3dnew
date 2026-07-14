@@ -2,19 +2,19 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://oa08bjwl0tam"
-path="res://.godot/imported/uniform_nicholas_skin.png-88a02ae2d35588e8b120e23a7bb0c3b1.ctex"
+uid="uid://betmr5nh0wbhc"
+path="res://.godot/imported/uniform_nicholas_rough.png-99a3eabd2d2f6a92cb98e77eed7969e1.ctex"
 metadata={
 "vram_texture": false
 }
 generator_parameters={
-"md5": "28017b03451112e2e884d6c971d6965e"
+"md5": "1b44925716e3a0ebad19e19ef67ab26c"
 }
 
 [deps]
 
-source_file="res://characters/nicholas/uniform_nicholas_skin.png"
-dest_files=["res://.godot/imported/uniform_nicholas_skin.png-88a02ae2d35588e8b120e23a7bb0c3b1.ctex"]
+source_file="res://characters/nicholas/uniform_nicholas_rough.png"
+dest_files=["res://.godot/imported/uniform_nicholas_rough.png-99a3eabd2d2f6a92cb98e77eed7969e1.ctex"]
 
 [params]
 
