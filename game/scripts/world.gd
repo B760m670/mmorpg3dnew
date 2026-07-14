@@ -37,8 +37,8 @@ func _ready() -> void:
 	data.load_all()
 	EnvironmentBuilder.build(self)
 	TerrainBuilder.build(self, data)
+	GroundPatchBuilder.build(self, data)   # детальная земля с рельефом под игроком
 	GrassBuilder.build(self, data)
-	GroundDetailBuilder.build(self, data)
 	RockBuilder.build(self, data)
 	WaterBuilder.build(self, data)
 	BuildingPlacer.new(self, data).build_all()
