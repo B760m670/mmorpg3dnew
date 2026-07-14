@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# Библиотека НАСТОЯЩИХ грунтов — тайловые PBR-текстуры (albedo+normal+rough).
-# Земля везде разная: луг, сухая трава, лесная подстилка, пашня, садовая земля,
-# грунтовая тропа, песок, суглинок. Сохраняются один раз и применяются к любой
-# области (world/textures/ground/), плюс манифест ground_library.json.
+# Библиотека НАСТОЯЩИХ грунтов и мощения — тайловые PBR-текстуры (albedo+normal+rough).
+# Земля везде разная: луг, лесная подстилка, пашня, садовая земля, суглинок — и
+# мощёная дорога (брусчатка). Реалистичность даёт клеточная (worley) структура:
+# камни/комья/галька как настоящие, а не «шумовое пятно».
 import bpy, os, sys, json
 import numpy as np
 
@@ -25,6 +25,29 @@ def fbm(size, base, octaves, seed):
         out += amp*gx; norm += amp; amp *= 0.5; freq *= 2
     out /= norm; return (out-out.min())/(out.max()-out.min()+1e-6)
 
+# Бесшовная клеточная (worley) текстура: F1/F2 расстояния и id ячейки.
+def worley(size, cells, seed):
+    rng = np.random.default_rng(seed)
+    fx = rng.random((cells, cells)).astype(np.float32)
+    fy = rng.random((cells, cells)).astype(np.float32)
+    cid = rng.random((cells, cells)).astype(np.float32)
+    lin = ((np.arange(size)+0.5)/size*cells).astype(np.float32)
+    GX, GY = np.meshgrid(lin, lin)
+    ix = np.floor(GX).astype(int); iy = np.floor(GY).astype(int)
+    F1 = np.full((size, size), 9.9, np.float32)
+    F2 = np.full((size, size), 9.9, np.float32)
+    ID = np.zeros((size, size), np.float32)
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            cxg = (ix+dx) % cells; cyg = (iy+dy) % cells
+            fpx = (ix+dx) + fx[cyg, cxg]; fpy = (iy+dy) + fy[cyg, cxg]
+            d = (GX-fpx)**2 + (GY-fpy)**2
+            closer = d < F1
+            F2 = np.where(closer, F1, np.minimum(F2, d))
+            ID = np.where(closer, cid[cyg, cxg], ID)
+            F1 = np.where(closer, d, F1)
+    return np.sqrt(F1), np.sqrt(F2), ID
+
 def save(arr, path):
     h, w = arr.shape[:2]
     if arr.ndim == 2: arr = np.repeat(arr[...,None], 3, axis=2)
@@ -43,93 +66,110 @@ def nrm(height, strength):
 def patches(field, lo, hi):
     return np.clip((field-lo)/(hi-lo), 0, 1)
 
+def ss(x):  # smoothstep 0..1
+    x = np.clip(x, 0, 1); return x*x*(3-2*x)
+
 FINE=None
-def emit(name, alb, height, rough, nstr, rgh_range=None):
+def emit(name, alb, height, rough, nstr):
     global FINE
     if FINE is None:
-        FINE=fbm(S,120,4,999)
-    alb=alb*(0.82+0.36*FINE[...,None])           # мелкое зерно (резкость)
-    height=height*0.7+FINE*0.3                    # мелкий рельеф в нормали
-    nstr=nstr*1.7
+        FINE=fbm(S,150,4,999)
+    alb=alb*(0.85+0.3*FINE[...,None])            # мелкое зерно (резкость)
+    height=height*0.72+FINE*0.28                 # мелкий рельеф в нормали
     save(np.clip(alb, 0, 1), os.path.join(GD, name+"_albedo.png"))
-    save(nrm(height, nstr), os.path.join(GD, name+"_normal.png"))
+    save(nrm(height, nstr*1.9), os.path.join(GD, name+"_normal.png"))
     if np.isscalar(rough):
         rough = np.full((S, S), rough, np.float32)
     save(np.clip(rough, 0, 1), os.path.join(GD, name+"_rough.png"))
 
-xx, yy = np.mgrid[0:S, 0:S] / S
 LIB = {}
 
-# 1. ЛУГ — настоящая травяная ЗЕМЛЯ (тёмная почва + мох + редкая трава), не «неон».
-# Пышную зелень даёт геометрия травы сверху; сама земля — приглушённая и земляная.
-g1 = fbm(S, 8, 5, 11); g2 = fbm(S, 40, 4, 12)
-soil = np.array([0.13, 0.11, 0.07])                       # тёмная почва
-gras = np.array([0.16, 0.24, 0.09])                       # приглушённая трава
-alb = soil[None,None]*(1-g1[...,None]) + gras[None,None]*g1[...,None]
-alb = alb*(0.8+0.4*g2[...,None])
-moss = patches(fbm(S,16,4,14), 0.6, 0.85)
-alb = alb*(1-moss[...,None]) + np.array([0.14,0.22,0.08])[None,None]*moss[...,None]
-dirtp = patches(fbm(S,6,4,15), 0.7, 0.9)                  # проплешины земли
-alb = alb*(1-dirtp[...,None]) + np.array([0.18,0.13,0.08])[None,None]*dirtp[...,None]
-emit("meadow", alb, g1*0.4+g2*0.6, 0.9, 2.5)
-LIB["meadow"] = {"name":"Луговая трава","tile":8.0,"rough":0.9}
+# ---- НАСТОЯЩАЯ ЗЕМЛЯ: тёмный суглинок + галька + комья + органика ----
+# Реализм даёт worley-структура комьев и рассыпанные камешки, а не плоский шум.
+def soil(name, base, dry, seed, pebble_amt=0.10, moist=0.30, tile=6.0, rough=0.9):
+    clods_d, clods_e, clods_id = worley(S, 26, seed)      # комья (агрегаты почвы)
+    peb_d, _pf2, peb_id = worley(S, 90, seed+5)           # мелкая галька
+    grain = fbm(S, 60, 5, seed+1)
+    macro = fbm(S, 7, 4, seed+2)
+    t = np.clip(macro*0.7 + grain*0.3, 0, 1)[...,None]
+    alb = base[None,None]*(1-t) + dry[None,None]*t
+    clod_face = ss(1.0 - clods_d/0.7)
+    crack = ss(1.0 - (clods_e-clods_d)/0.06)              # тёмные швы между комьями
+    alb = alb*(0.9+0.22*clod_face[...,None])
+    alb = alb*(1-0.35*crack[...,None])
+    wet = patches(fbm(S,12,4,seed+3), 0.5, 0.85)          # влажные тёмные участки
+    alb = alb*(1-moist*wet[...,None])
+    org = patches(fbm(S,110,2,seed+4), 0.72, 0.9)         # органика — тёмные крапины
+    alb = alb*(1-0.5*org[...,None])
+    stones = ss(1.0 - peb_d/0.32)                          # рассыпанная галька
+    smask = ((stones > 0.5) & (peb_id < pebble_amt)).astype(np.float32)
+    scol = np.array([0.34,0.32,0.30])[None,None] + (peb_id[...,None]-0.5)*0.12
+    alb = alb*(1-smask[...,None]) + scol*smask[...,None]
+    height = clod_face*0.5 + stones*smask*0.9 - crack*0.4 + grain*0.25
+    r = np.full((S,S), rough, np.float32) - 0.12*wet + 0.04*stones*smask
+    emit(name, alb, height, np.clip(r,0,1), 3.2)
+    LIB[name] = {"name":name, "tile":tile, "rough":rough}
 
-# 2. СУХАЯ ТРАВА — степная, желтовато-бурая
+# 1. ЛУГ — тёмная травяная ПОЧВА (пышность даёт геометрия травы сверху)
+soil("meadow", np.array([0.10,0.09,0.06]), np.array([0.20,0.17,0.11]),
+     11, pebble_amt=0.06, moist=0.35, tile=6.0)
+# 3. ЛЕСНАЯ ПОДСТИЛКА — очень тёмная земля, больше органики/камней
+soil("forest_floor", np.array([0.09,0.07,0.05]), np.array([0.17,0.13,0.08]),
+     31, pebble_amt=0.12, moist=0.4, tile=6.0)
+# 5. САДОВАЯ / ОГОРОДНАЯ — рыхлая тёмная, влажная
+soil("garden_soil", np.array([0.11,0.08,0.055]), np.array([0.19,0.14,0.09]),
+     51, pebble_amt=0.14, moist=0.42, tile=4.0)
+# 6. ГРУНТОВАЯ ТРОПА — утоптанная светловатая земля, больше камешков
+soil("dirt_path", np.array([0.13,0.10,0.07]), np.array([0.26,0.20,0.13]),
+     61, pebble_amt=0.2, moist=0.2, tile=6.0)
+
+# 2. СУХАЯ ТРАВА — степная, желтовато-бурая (травяной тон)
 d1 = fbm(S, 10, 5, 21); d2 = fbm(S, 32, 3, 22)
-alb = np.array([0.45,0.40,0.18])[None,None]*(0.8+0.4*d1[...,None])
-alb = alb*(1-0.2*d2[...,None]) + np.array([0.30,0.34,0.14])[None,None]*(0.15*d2[...,None])
+alb = np.array([0.34,0.30,0.15])[None,None]*(0.8+0.4*d1[...,None])
+alb = alb*(1-0.2*d2[...,None]) + np.array([0.22,0.26,0.11])[None,None]*(0.15*d2[...,None])
 emit("dry_grass", alb, d1*0.5+d2*0.5, 0.92, 2.0)
 LIB["dry_grass"] = {"name":"Сухая трава","tile":8.0,"rough":0.92}
 
-# 3. ЛЕСНАЯ ПОДСТИЛКА — тёмная земля, палая листва, мох, веточки
-e = fbm(S, 12, 5, 31); leaves = patches(fbm(S,40,3,32), 0.55, 0.85)
-moss = patches(fbm(S,18,4,33), 0.6, 0.85)
-alb = np.array([0.17,0.12,0.07])[None,None]*(0.8+0.5*e[...,None])
-alb = alb*(1-leaves[...,None]) + np.array([0.42,0.26,0.12])[None,None]*leaves[...,None]
-alb = alb*(1-moss[...,None]) + np.array([0.18,0.28,0.12])[None,None]*moss[...,None]
-emit("forest_floor", alb, e*0.5+leaves*0.3+moss*0.2, 0.95, 3.0)
-LIB["forest_floor"] = {"name":"Лесная подстилка","tile":6.0,"rough":0.95}
-
-# 4. ПАШНЯ — вспаханная земля с бороздами (направленные гряды)
-furrow = (np.sin(yy*np.pi*2*22 + fbm(S,8,2,41)*3.0)*0.5+0.5)
+# 4. ПАШНЯ — вспаханная тёмная земля с бороздами
+xx, yy = np.mgrid[0:S, 0:S] / S
+furrow = (np.sin(yy*np.pi*2*20 + fbm(S,8,2,41)*3.0)*0.5+0.5)
 clods = fbm(S, 48, 3, 42)
-alb = np.array([0.30,0.20,0.12])[None,None]*(0.7+0.5*(furrow[...,None]*0.6+clods[...,None]*0.4))
+alb = np.array([0.16,0.11,0.07])[None,None]*(0.7+0.6*(furrow[...,None]*0.55+clods[...,None]*0.45))
+alb = alb*(1-0.25*patches(fbm(S,12,3,43),0.5,0.85)[...,None])
 emit("field", alb, furrow*0.7+clods*0.3, 0.95, 4.5)
 LIB["field"] = {"name":"Пашня","tile":5.0,"rough":0.95}
 
-# 5. САДОВАЯ / ОГОРОДНАЯ ЗЕМЛЯ — тёмная рыхлая, влажная, мелкие камешки
-s1 = fbm(S, 24, 5, 51); stones = patches(fbm(S,70,2,52), 0.85, 0.94)
-alb = np.array([0.16,0.11,0.07])[None,None]*(0.85+0.4*s1[...,None])
-alb = alb*(1-stones[...,None]) + np.array([0.4,0.38,0.35])[None,None]*stones[...,None]
-emit("garden_soil", alb, s1*0.7+stones*0.3, 0.9, 3.0)
-LIB["garden_soil"] = {"name":"Садовая земля","tile":4.0,"rough":0.9}
+# 7. МОЩЕНИЕ / БРУСЧАТКА — настоящие камни-сетты со швами (дороги у дворца)
+cells = 15
+F1, F2, CID = worley(S, cells, 700)
+edge = F2 - F1
+mortar = 1.0 - ss(edge/0.05)                       # тёмные швы между камнями
+dome = ss(1.0 - F1/0.62)                            # выпуклость камня
+wear = fbm(S, 80, 4, 701)                           # износ/зерно на камнях
+stone = np.array([0.40,0.38,0.35])[None,None] + (CID[...,None]-0.5)*np.array([0.14,0.12,0.10])[None,None]
+stone = stone*(0.82+0.3*wear[...,None])
+mortar_col = np.array([0.16,0.15,0.14])[None,None]
+cob = stone*(1-mortar[...,None]) + mortar_col*mortar[...,None]
+cob = cob*(0.9+0.16*fbm(S,10,3,702)[...,None])
+cob_h = dome*(1-mortar) - mortar*0.6 + wear*0.15
+save(np.clip(cob,0,1), os.path.join(GD,"cobblestone_albedo.png"))
+save(nrm(cob_h*0.85 + fbm(S,150,4,999)*0.15, 5.5), os.path.join(GD,"cobblestone_normal.png"))
+save(np.clip(np.full((S,S),0.6,np.float32) + 0.2*mortar - 0.1*dome,0,1),
+     os.path.join(GD,"cobblestone_rough.png"))
+LIB["cobblestone"] = {"name":"Брусчатка","tile":2.8,"rough":0.6}
 
-# 6. ГРУНТОВАЯ ДОРОГА — настоящая тёмная утоптанная земля (не песок!)
-p1 = fbm(S, 10, 5, 61); ruts = fbm(S, 26, 3, 62)
-moist = patches(fbm(S, 14, 4, 63), 0.45, 0.8)      # влажные тёмные участки
-stones = patches(fbm(S, 80, 2, 64), 0.86, 0.95)    # мелкие камешки
-base = np.array([0.15, 0.10, 0.06]); dry = np.array([0.27, 0.19, 0.12])
-alb = base[None,None]*(1-p1[...,None]) + dry[None,None]*p1[...,None]
-alb = alb*(1-0.4*moist[...,None])                  # мокрая земля темнее
-alb = alb*(1-stones[...,None]) + np.array([0.33,0.31,0.29])[None,None]*stones[...,None]
-alb = alb*(0.9+0.2*ruts[...,None])
-emit("dirt_path", alb, p1*0.5+ruts*0.4+stones*0.4, 0.9, 3.5)
-LIB["dirt_path"] = {"name":"Грунтовая тропа","tile":6.0,"rough":0.9}
-
-# 7. ПЕСОК — светлый мелкий, лёгкая рябь
+# 8. ПЕСОК и СУГЛИНОК — запас библиотеки
 sand_r = (np.sin(xx*np.pi*2*40 + fbm(S,10,2,71)*4)*0.5+0.5)*0.4 + fbm(S,50,3,72)*0.6
-alb = np.array([0.72,0.63,0.44])[None,None]*(0.9+0.15*sand_r[...,None])
+alb = np.array([0.66,0.58,0.42])[None,None]*(0.9+0.15*sand_r[...,None])
 emit("sand", alb, sand_r, 0.85, 1.5)
 LIB["sand"] = {"name":"Песок","tile":5.0,"rough":0.85}
-
-# 8. СУГЛИНОК — красновато-бурая плотная глина с трещинами
 c1 = fbm(S, 14, 5, 81); cracks = patches(fbm(S,30,3,82), 0.0, 0.12)
-alb = np.array([0.40,0.24,0.16])[None,None]*(0.85+0.3*c1[...,None])
+alb = np.array([0.34,0.22,0.15])[None,None]*(0.85+0.3*c1[...,None])
 alb = alb*(1-cracks[...,None]*0.6)
 emit("clay", alb, c1*0.7+(1-cracks)*0.3, 0.88, 2.5)
 LIB["clay"] = {"name":"Суглинок","tile":5.0,"rough":0.88}
 
 with open(os.path.join(GD, "ground_library.json"), "w") as f:
-    json.dump({"note":"Библиотека грунтов: тайловые PBR-материалы, применяются к любой области через terrain-шейдер. albedo/normal/rough в этой же папке.",
+    json.dump({"note":"Библиотека грунтов и мощения: тайловые PBR-материалы. albedo/normal/rough рядом.",
                "types": LIB}, f, ensure_ascii=False, indent=2)
 print("[ground] library ->", GD, "types:", len(LIB))

@@ -1,10 +1,8 @@
 class_name GroundPatchBuilder
 extends RefCounted
-## Детальный участок ЗЕМЛИ под игроком — НАСТОЯЩАЯ геометрия с буграми и
-## углублениями (не плоскость). Плотная сетка (~сантиметры) вокруг спавна,
-## многооктавное смещение: комья, зерно, микрорельеф + редкие ямки. Сшивается с
-## крупным рельефом по краю (плавное затухание смещения). Материал — тот же
-## грунтовый шейдер, но с мелким тайлингом для резкой детализации вблизи.
+## Детальный участок земли под игроком. Бугры/впадины — ТОЛЬКО на настоящем грунте
+## (луг/пашня). Дороги остаются ПЛОСКИМИ (мощение, а не грязь). У участка своя
+## коллизия, чтобы персонаж стоял на ВИДИМОЙ поверхности, а не проваливался в неё.
 
 static func build(world: Node3D, data: WorldData, gp: GraphicsProfile) -> void:
 	var R: float = gp.patch_radius
@@ -23,32 +21,34 @@ static func build(world: Node3D, data: WorldData, gp: GraphicsProfile) -> void:
 
 	var n := int(2.0 * R / STEP)
 	var w1 := n + 1
-	# координаты узлов
 	var X := PackedFloat32Array(); X.resize(w1)
 	var Z := PackedFloat32Array(); Z.resize(w1)
 	for i in range(w1):
 		X[i] = cx - R + i * STEP
 		Z[i] = cz - R + i * STEP
-	# высоты и цвета грунта по узлам (один раз на узел)
 	var H := PackedFloat32Array(); H.resize(w1 * w1)
 	var C := PackedColorArray(); C.resize(w1 * w1)
 	for j in range(w1):
 		var z := Z[j]
 		for i in range(w1):
 			var x := X[i]
+			var col := data.ground_color(x, z)
+			# дорога/мощение (канал B) — плоско; настоящий грунт — с рельефом
+			var road: float = clampf((col.b - 0.3) / 0.25, 0.0, 1.0)
+			var soil := 1.0 - road
 			var c := clod.get_noise_2d(x, z)
 			var g := grain.get_noise_2d(x, z)
 			var m := micro.get_noise_2d(x, z)
 			var hv: float = clampf(hollow.get_noise_2d(x, z) * 0.5 + 0.5, 0.0, 1.0)
-			var pit := pow(hv, 3.0) * 0.22
-			var d := c * 0.11 + g * 0.03 + m * 0.012 - pit + 0.16
+			var pit := pow(hv, 3.0) * 0.14
+			# бугры и мелкие ямки; всё приподнято на +0.13, чтобы быть НЕ НИЖЕ коллизии
+			var lift: float = maxf(c * 0.10 + g * 0.028 + m * 0.012 - pit + 0.13, 0.0)
 			var dist := sqrt((x - cx) * (x - cx) + (z - cz) * (z - cz))
 			var fade: float = clampf((R - dist) / (R * 0.35), 0.0, 1.0)
 			var idx := j * w1 + i
-			H[idx] = data.height_at(x, z) + d * fade
-			C[idx] = data.ground_color(x, z)
+			H[idx] = data.height_at(x, z) + lift * soil * fade
+			C[idx] = col
 
-	# нормали по сетке высот
 	var N := PackedVector3Array(); N.resize(w1 * w1)
 	for j in range(w1):
 		for i in range(w1):
@@ -73,6 +73,13 @@ static func build(world: Node3D, data: WorldData, gp: GraphicsProfile) -> void:
 	mi.material_override = _material()
 	world.add_child(mi)
 
+	# КОЛЛИЗИЯ участка — персонаж стоит на видимой поверхности (не проваливается)
+	var body := StaticBody3D.new()
+	var col_sh := CollisionShape3D.new()
+	col_sh.shape = mesh.create_trimesh_shape()
+	body.add_child(col_sh)
+	world.add_child(body)
+
 static func _v(st: SurfaceTool, p: Vector3, nrm: Vector3, col: Color) -> void:
 	st.set_normal(nrm); st.set_color(col); st.add_vertex(p)
 
@@ -85,9 +92,10 @@ static func _material() -> ShaderMaterial:
 	mat.set_shader_parameter("l0_nrm", load(g + "meadow_normal.png"))
 	mat.set_shader_parameter("l1_alb", load(g + "forest_floor_albedo.png"))
 	mat.set_shader_parameter("l1_nrm", load(g + "forest_floor_normal.png"))
-	mat.set_shader_parameter("l2_alb", load(g + "dirt_path_albedo.png"))
-	mat.set_shader_parameter("l2_nrm", load(g + "dirt_path_normal.png"))
+	mat.set_shader_parameter("l2_alb", load(g + "cobblestone_albedo.png"))
+	mat.set_shader_parameter("l2_nrm", load(g + "cobblestone_normal.png"))
 	mat.set_shader_parameter("l3_alb", load(g + "field_albedo.png"))
 	mat.set_shader_parameter("l3_nrm", load(g + "field_normal.png"))
-	mat.set_shader_parameter("tiles", Vector4(0.7, 0.8, 0.75, 0.9))
+	# дорога (мощение) тайлится реже — крупные камни; грунт — мельче/резче
+	mat.set_shader_parameter("tiles", Vector4(0.7, 0.8, 0.35, 0.9))
 	return mat

@@ -57,8 +57,8 @@ static func build(world: Node3D, data: WorldData) -> void:
 	mat.set_shader_parameter("l0_nrm", load(g + "meadow_normal.png"))
 	mat.set_shader_parameter("l1_alb", load(g + "forest_floor_albedo.png"))
 	mat.set_shader_parameter("l1_nrm", load(g + "forest_floor_normal.png"))
-	mat.set_shader_parameter("l2_alb", load(g + "dirt_path_albedo.png"))
-	mat.set_shader_parameter("l2_nrm", load(g + "dirt_path_normal.png"))
+	mat.set_shader_parameter("l2_alb", load(g + "cobblestone_albedo.png"))
+	mat.set_shader_parameter("l2_nrm", load(g + "cobblestone_normal.png"))
 	mat.set_shader_parameter("l3_alb", load(g + "field_albedo.png"))
 	mat.set_shader_parameter("l3_nrm", load(g + "field_normal.png"))
 	mesh_inst.material_override = mat
