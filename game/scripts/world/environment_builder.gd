@@ -16,7 +16,8 @@ static func build(world: Node3D, gp: GraphicsProfile) -> void:
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.ambient_light_energy = 0.6
-	env.tonemap_mode = Environment.TONE_MAPPER_ACES
+	# тонемаппинг — из оси «Стиль»
+	env.tonemap_mode = gp.tonemap
 	env.tonemap_exposure = 1.0
 
 	# Затенение в складках/углах и экранное непрямое освещение (по профилю)
@@ -50,11 +51,11 @@ static func build(world: Node3D, gp: GraphicsProfile) -> void:
 	env.glow_intensity = 0.5
 	env.glow_bloom = 0.1
 	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
-	# Цветокоррекция — тёплый исторический тон
+	# Цветокоррекция — из оси «Стиль» (насыщенность/контраст/яркость)
 	env.adjustment_enabled = true
-	env.adjustment_brightness = 1.02
-	env.adjustment_contrast = 1.16
-	env.adjustment_saturation = 1.18
+	env.adjustment_brightness = gp.brightness
+	env.adjustment_contrast = gp.contrast
+	env.adjustment_saturation = gp.saturation
 
 	var we := WorldEnvironment.new(); we.environment = env
 	world.add_child(we)
@@ -63,7 +64,7 @@ static func build(world: Node3D, gp: GraphicsProfile) -> void:
 	sun.rotation_degrees = Settings.sun_rotation_deg()
 	sun.light_energy = 0.5 if Settings.is_night() else 3.8
 	sun.light_color = Color(1.0, 0.95, 0.86)
-	sun.shadow_enabled = true
+	sun.shadow_enabled = gp.shadow_enabled
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	sun.directional_shadow_max_distance = gp.shadow_distance
 	sun.directional_shadow_split_1 = 0.08

@@ -36,7 +36,11 @@ func _ready() -> void:
 	data = WorldData.new()
 	data.load_all()
 	var gp := GraphicsProfile.from_settings()
-	gp.apply_to(self)                      # Engine.max_fps=120, MSAA, масштаб рендера
+	gp.apply_to(self)                      # Engine.max_fps, MSAA, масштаб рендера
+	if gp.adaptive_res:
+		var ar := AdaptiveResolution.new()
+		add_child(ar)
+		ar.setup(gp.max_fps, gp.render_scale)   # держим FPS без потери качества
 	EnvironmentBuilder.build(self, gp)
 	TerrainBuilder.build(self, data)
 	GroundPatchBuilder.build(self, data, gp)   # детальная земля с рельефом под игроком

@@ -236,21 +236,15 @@ func _build_settings_panel() -> void:
 	vb.custom_minimum_size = Vector2(660, 0)
 	scroll.add_child(vb)
 
-	# --- Графика ---
-	vb.add_child(_label("Качество графики", 20))
-	var qrow := HBoxContainer.new(); qrow.add_theme_constant_override("separation", 10)
-	vb.add_child(qrow)
-	var quals := {"high": "Высокое", "balanced": "Сбаланс.", "performance": "Производит."}
-	var qbtns := {}
-	for key in quals.keys():
-		var qb := _button(quals[key]); qb.custom_minimum_size = Vector2(190, 48)
-		qb.toggle_mode = true
-		qb.button_pressed = (Settings.quality == key)
-		qbtns[key] = qb
-		qb.pressed.connect(func() -> void:
-			Settings.quality = key
-			for k in qbtns: qbtns[k].button_pressed = (k == key))
-		qrow.add_child(qb)
+	# --- три оси как в PUBG: Графика (детализация) / Частота кадров / Стиль ---
+	vb.add_child(_option_row("Графика", Settings.GRAPHICS_OPTS, Settings.graphics,
+		func(k) -> void: Settings.graphics = k))
+	vb.add_child(_option_row("Частота кадров", Settings.FRAME_OPTS, Settings.frame_rate,
+		func(k) -> void: Settings.frame_rate = int(k)))
+	vb.add_child(_option_row("Стиль", Settings.STYLE_OPTS, Settings.style,
+		func(k) -> void: Settings.style = k))
+	vb.add_child(_toggle_row("Адаптивное разрешение (держит FPS)", Settings.adaptive_res,
+		func(on: bool) -> void: Settings.adaptive_res = on))
 
 	# --- Звук ---
 	vb.add_child(_slider_row("Громкость", 0.0, 1.0, Settings.master_volume, 0.01,
@@ -285,6 +279,26 @@ func _build_settings_panel() -> void:
 	var back := _button("Назад")
 	back.pressed.connect(func() -> void: Settings.load_settings(); _back())
 	row.add_child(back)
+
+# ряд взаимоисключающих вариантов (одна ось настроек) с переносом строк
+func _option_row(title: String, opts: Dictionary, current: Variant, cb: Callable) -> Control:
+	var vb := VBoxContainer.new(); vb.add_theme_constant_override("separation", 6)
+	vb.add_child(_label(title, 20, ACCENT))
+	var flow := HFlowContainer.new()
+	flow.add_theme_constant_override("h_separation", 8)
+	flow.add_theme_constant_override("v_separation", 8)
+	var btns := {}
+	for key in opts.keys():
+		var b := _button(str(opts[key])); b.custom_minimum_size = Vector2(150, 44)
+		b.add_theme_font_size_override("font_size", 18)
+		b.toggle_mode = true; b.button_pressed = (key == current)
+		btns[key] = b
+		b.pressed.connect(func() -> void:
+			for k in btns: btns[k].button_pressed = (k == key)
+			cb.call(key))
+		flow.add_child(b)
+	vb.add_child(flow)
+	return vb
 
 # строка-переключатель вкл/выкл
 func _toggle_row(name: String, val: bool, cb: Callable) -> Control:
