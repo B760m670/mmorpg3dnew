@@ -27,8 +27,11 @@ var want_jump := false
 var joystick: Control
 var status_label: Label
 var map_layer: CanvasLayer
+var map_root: Control
 var map_marker: Control
 var map_rect: TextureRect
+var _map_tween: Tween
+var _map_open := false
 
 var _touches := {}
 var _pinch_dist := -1.0
@@ -44,6 +47,7 @@ func _ready() -> void:
 	_build_environment()
 	_build_terrain()
 	_build_grass()
+	_build_ground_detail()
 	_build_rocks()
 	_build_water()
 	_build_buildings()
@@ -415,6 +419,75 @@ func _build_rocks() -> void:
 		inst.position = Vector3(x, y + 0.05, z)
 		add_child(inst)
 
+# ---------- детализация грунта: мелкие камешки/комья у игрока (MultiMesh) ----------
+func _make_pebble_cluster() -> Mesh:
+	var noise := FastNoiseLite.new(); noise.frequency = 3.0; noise.seed = 5
+	var rng := RandomNumberGenerator.new(); rng.seed = 5
+	var st := SurfaceTool.new(); st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for _p in range(4):
+		var ox := rng.randf_range(-0.14, 0.14); var oz := rng.randf_range(-0.14, 0.14)
+		var rad := rng.randf_range(0.02, 0.06)
+		var rings := 5; var sect := 6
+		var pts := []
+		for i in range(rings + 1):
+			var row := []
+			var phi := PI * float(i) / rings
+			for j in range(sect + 1):
+				var th := TAU * float(j) / sect
+				var n := Vector3(sin(phi) * cos(th), cos(phi), sin(phi) * sin(th))
+				var d: float = rad * (1.0 + noise.get_noise_3d(n.x * 5.0 + ox, n.y * 5.0, n.z * 5.0 + oz) * 0.5)
+				var pp := n * d; pp.y = pp.y * 0.6
+				row.append(Vector3(ox, 0, oz) + pp)
+			pts.append(row)
+		for i in range(rings):
+			for j in range(sect):
+				for v in [pts[i][j], pts[i][j + 1], pts[i + 1][j + 1], pts[i][j], pts[i + 1][j + 1], pts[i + 1][j]]:
+					st.add_vertex(v)
+	st.generate_normals()
+	var m := st.commit()
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.22, 0.19, 0.15)
+	mat.normal_enabled = true
+	mat.normal_texture = load("res://world/textures/ground/dirt_path_normal.png")
+	mat.uv1_triplanar = true; mat.uv1_scale = Vector3(3.0, 3.0, 3.0)
+	mat.roughness = 0.95
+	m.surface_set_material(0, mat)
+	return m
+
+func _build_ground_detail() -> void:
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = _make_pebble_cluster()
+	var rng := RandomNumberGenerator.new(); rng.seed = 4242
+	var count := 90000
+	var radius := 130.0
+	var sp: Array = LY.get("spawn", {}).get("position", [40, 90])
+	var cx := float(sp[0]); var cz := float(sp[1])
+	mm.instance_count = count
+	var placed := 0; var tries := 0
+	while placed < count and tries < count * 4:
+		tries += 1
+		var a := rng.randf() * TAU
+		var rr := pow(rng.randf(), 0.7) * radius
+		var x := cx + cos(a) * rr; var z := cz + sin(a) * rr
+		if _in_lake(x, z) or _near_building(x, z, 4.0):
+			continue
+		var y := height_at(x, z)
+		if y < -1.0:
+			continue
+		var t := Transform3D()
+		var s := rng.randf_range(0.6, 1.6)
+		t = t.scaled(Vector3(s, s * rng.randf_range(0.6, 1.0), s))
+		t = t.rotated(Vector3.UP, rng.randf() * TAU)
+		t.origin = Vector3(x, y, z)
+		mm.set_instance_transform(placed, t)
+		placed += 1
+	mm.instance_count = placed
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mmi)
+
 # ---------- вода озёр ----------
 func _build_water() -> void:
 	var wat := load("res://shaders/water.gdshader")
@@ -431,10 +504,38 @@ func _build_water() -> void:
 		add_child(mi)
 
 # ---------- здания ----------
-func _place_on_ground(node: Node3D, x: float, z: float, rot_deg: float) -> void:
-	node.position = Vector3(x, height_at(x, z), z)
-	node.rotation.y = deg_to_rad(rot_deg)
+func _place_on_ground(node: Node3D, x: float, z: float, rot_deg: float, fw := 20.0, fd := 20.0) -> void:
+	# сажаем здание по СРЕДНЕЙ высоте пятна и добавляем каменный фундамент,
+	# который закрывает просветы на неровном рельефе (иначе углы «висят»).
+	var rot := deg_to_rad(rot_deg)
+	var hw := fw * 0.5; var hd := fd * 0.5
+	var samples: Array[float] = []
+	var pts: Array[Vector2] = [Vector2(0, 0), Vector2(hw, hd), Vector2(-hw, hd), Vector2(hw, -hd), Vector2(-hw, -hd),
+			Vector2(hw, 0), Vector2(-hw, 0), Vector2(0, hd), Vector2(0, -hd)]
+	for c in pts:
+		var wx := x + c.x * cos(rot) - c.y * sin(rot)
+		var wz := z + c.x * sin(rot) + c.y * cos(rot)
+		samples.append(height_at(wx, wz))
+	var avg := 0.0; var mn := 1e9
+	for h in samples: avg += h; mn = minf(mn, h)
+	avg /= samples.size()
+	node.position = Vector3(x, avg, z)
+	node.rotation.y = rot
 	add_child(node)
+	_add_foundation(node, fw, fd, avg - mn)
+
+func _add_foundation(node: Node3D, fw: float, fd: float, drop: float) -> void:
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	var h := drop + 4.5   # от +0.3 над базой и вниз ниже самого низкого угла
+	bm.size = Vector3(fw * 1.02, h, fd * 1.02)
+	mi.mesh = bm
+	mi.position = Vector3(0, 0.3 - h * 0.5, 0)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.33, 0.30, 0.26)
+	mat.roughness = 0.9
+	mi.material_override = mat
+	node.add_child(mi)
 
 func _add_box_collision(node: Node3D, fw: float, fd: float, h: float) -> void:
 	var body := StaticBody3D.new()
@@ -454,8 +555,8 @@ func _build_buildings() -> void:
 			continue
 		var inst := packed.instantiate() as Node3D
 		var pos: Array = b["position"]
-		_place_on_ground(inst, float(pos[0]), float(pos[1]), float(b.get("rotation", 0)))
 		var fp: Array = b.get("footprint", [20, 20])
+		_place_on_ground(inst, float(pos[0]), float(pos[1]), float(b.get("rotation", 0)), float(fp[0]), float(fp[1]))
 		_add_box_collision(inst, float(fp[0]), float(fp[1]), float(b.get("height", 12)))
 
 # ---------- городская застройка ----------
@@ -481,7 +582,7 @@ func _build_town() -> void:
 					continue
 				var inst := packed.instantiate() as Node3D
 				var face := 0.0 if row == 0 else 180.0
-				_place_on_ground(inst, xc, zc, face + rng.randf_range(-6, 6))
+				_place_on_ground(inst, xc, zc, face + rng.randf_range(-6, 6), 15.0, 11.0)
 				_add_box_collision(inst, 15, 11, 8)
 
 # ---------- парки: деревья через MultiMesh ----------
@@ -645,7 +746,7 @@ func _build_ui() -> void:
 	layer.add_child(title)
 
 	status_label = Label.new()
-	status_label.text = "Открытый міръ • Godot 4"
+	status_label.text = "Открытый мир"
 	status_label.add_theme_font_size_override("font_size", 15)
 	status_label.position = Vector2(28, 50)
 	layer.add_child(status_label)
@@ -664,7 +765,7 @@ func _build_ui() -> void:
 	map_btn.pressed.connect(_toggle_map)
 	vbox.add_child(map_btn)
 
-	var run_btn := _mk_button("Бѣгъ")
+	var run_btn := _mk_button("Бег")
 	run_btn.toggle_mode = true
 	run_btn.toggled.connect(func(on: bool) -> void: _running = on)
 	vbox.add_child(run_btn)
@@ -675,7 +776,7 @@ func _build_ui() -> void:
 	joystick.offset_right = 48 + 250; joystick.offset_bottom = -70
 	layer.add_child(joystick)
 
-	var jump_btn := _mk_button("Прыжокъ", 26)
+	var jump_btn := _mk_button("Прыжок", 26)
 	jump_btn.anchor_left = 1.0; jump_btn.anchor_right = 1.0
 	jump_btn.anchor_top = 1.0; jump_btn.anchor_bottom = 1.0
 	jump_btn.offset_left = -230; jump_btn.offset_right = -48
@@ -692,10 +793,14 @@ func _build_map_overlay() -> void:
 	map_layer.layer = 5
 	map_layer.visible = false
 	add_child(map_layer)
+	# корневой Control анимируется (прозрачность) при открытии/закрытии карты
+	map_root = Control.new()
+	map_root.anchor_right = 1.0; map_root.anchor_bottom = 1.0
+	map_layer.add_child(map_root)
 	var bg := ColorRect.new()
 	bg.color = Color(0, 0, 0, 0.6)
 	bg.anchor_right = 1.0; bg.anchor_bottom = 1.0
-	map_layer.add_child(bg)
+	map_root.add_child(bg)
 	map_rect = TextureRect.new()
 	var tex: Texture2D = load("res://world/gatchina/map.png")
 	map_rect.texture = tex
@@ -704,7 +809,8 @@ func _build_map_overlay() -> void:
 	map_rect.anchor_right = 1.0; map_rect.anchor_bottom = 1.0
 	map_rect.offset_left = 40; map_rect.offset_top = 40
 	map_rect.offset_right = -40; map_rect.offset_bottom = -120
-	map_layer.add_child(map_rect)
+	map_rect.pivot_offset = Vector2(556, 300)
+	map_root.add_child(map_rect)
 	# маркер игрока
 	map_marker = Control.new()
 	var dot := ColorRect.new()
@@ -719,10 +825,34 @@ func _build_map_overlay() -> void:
 	close.offset_left = -95; close.offset_right = 95
 	close.offset_top = -84; close.offset_bottom = -28
 	close.pressed.connect(_toggle_map)
-	map_layer.add_child(close)
+	map_root.add_child(close)
 
 func _toggle_map() -> void:
-	map_layer.visible = not map_layer.visible
+	if _map_open:
+		_close_map()
+	else:
+		_open_map()
+
+func _open_map() -> void:
+	_map_open = true
+	map_layer.visible = true
+	if _map_tween != null and _map_tween.is_valid():
+		_map_tween.kill()
+	map_root.modulate.a = 0.0
+	map_rect.scale = Vector2(0.9, 0.9)
+	_update_marker()
+	_map_tween = create_tween().set_parallel(true).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	_map_tween.tween_property(map_root, "modulate:a", 1.0, 0.22)
+	_map_tween.tween_property(map_rect, "scale", Vector2.ONE, 0.28).set_trans(Tween.TRANS_BACK)
+
+func _close_map() -> void:
+	_map_open = false
+	if _map_tween != null and _map_tween.is_valid():
+		_map_tween.kill()
+	_map_tween = create_tween().set_parallel(true).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_CUBIC)
+	_map_tween.tween_property(map_root, "modulate:a", 0.0, 0.18)
+	_map_tween.tween_property(map_rect, "scale", Vector2(0.92, 0.92), 0.18)
+	_map_tween.chain().tween_callback(func() -> void: map_layer.visible = false)
 
 func _update_marker() -> void:
 	if map_rect == null or map_rect.texture == null:
@@ -763,8 +893,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			_pinch_dist = d
 		else:
 			var sens: float = Settings.sensitivity
+			var iy: float = -1.0 if Settings.invert_y else 1.0
 			cam_yaw -= event.relative.x * 0.006 * sens
-			cam_pitch = clampf(cam_pitch - event.relative.y * 0.004 * sens, -1.2, 0.4)
+			cam_pitch = clampf(cam_pitch - event.relative.y * 0.004 * sens * iy, -1.2, 0.4)
 			cam_yaw_node.rotation.y = cam_yaw
 			cam_pitch_node.rotation.x = cam_pitch
 
@@ -815,6 +946,15 @@ func _physics_process(delta: float) -> void:
 func _process(delta: float) -> void:
 	if player == null:
 		return
+	# гироскоп: наклон устройства вращает камеру (синхронизировано с настройками)
+	if Settings.gyro_enabled:
+		var gy := Input.get_gyroscope()
+		var gs := Settings.gyro_sensitivity * 2.2
+		var iy: float = -1.0 if Settings.invert_y else 1.0
+		cam_yaw -= gy.y * delta * gs
+		cam_pitch = clampf(cam_pitch + gy.x * delta * gs * iy, -1.2, 0.4)
+		cam_yaw_node.rotation.y = cam_yaw
+		cam_pitch_node.rotation.x = cam_pitch
 	var target := player.global_position + Vector3(0, 1.2, 0) + pan_offset
 	cam_yaw_node.position = cam_yaw_node.position.lerp(target, minf(1.0, delta * 9.0))
 	if map_layer != null and map_layer.visible:

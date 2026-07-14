@@ -60,13 +60,18 @@ def emit(name, alb, height, rough, nstr, rgh_range=None):
 xx, yy = np.mgrid[0:S, 0:S] / S
 LIB = {}
 
-# 1. ЛУГ — сочная зелёная трава с редкими цветами
-g1 = fbm(S, 8, 5, 11); g2 = fbm(S, 40, 3, 12)
-alb = np.array([0.19,0.33,0.11])[None,None]*(1-g1[...,None]*0.5) + np.array([0.32,0.46,0.17])[None,None]*(g1[...,None]*0.5)
-alb *= (0.85+0.3*g2[...,None])
-flowers = patches(fbm(S,60,2,13), 0.82, 0.9)
-alb = alb*(1-flowers[...,None]) + np.array([0.9,0.85,0.4])[None,None]*flowers[...,None]
-emit("meadow", alb, g1*0.4+g2*0.6, 0.9, 2.0)
+# 1. ЛУГ — настоящая травяная ЗЕМЛЯ (тёмная почва + мох + редкая трава), не «неон».
+# Пышную зелень даёт геометрия травы сверху; сама земля — приглушённая и земляная.
+g1 = fbm(S, 8, 5, 11); g2 = fbm(S, 40, 4, 12)
+soil = np.array([0.13, 0.11, 0.07])                       # тёмная почва
+gras = np.array([0.16, 0.24, 0.09])                       # приглушённая трава
+alb = soil[None,None]*(1-g1[...,None]) + gras[None,None]*g1[...,None]
+alb = alb*(0.8+0.4*g2[...,None])
+moss = patches(fbm(S,16,4,14), 0.6, 0.85)
+alb = alb*(1-moss[...,None]) + np.array([0.14,0.22,0.08])[None,None]*moss[...,None]
+dirtp = patches(fbm(S,6,4,15), 0.7, 0.9)                  # проплешины земли
+alb = alb*(1-dirtp[...,None]) + np.array([0.18,0.13,0.08])[None,None]*dirtp[...,None]
+emit("meadow", alb, g1*0.4+g2*0.6, 0.9, 2.5)
 LIB["meadow"] = {"name":"Луговая трава","tile":8.0,"rough":0.9}
 
 # 2. СУХАЯ ТРАВА — степная, желтовато-бурая

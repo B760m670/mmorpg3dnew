@@ -6,7 +6,10 @@ signal changed
 
 var quality: String = "high"        # high / balanced / performance
 var master_volume: float = 0.8
-var sensitivity: float = 1.0
+var sensitivity: float = 1.0        # чувствительность камеры (свайп)
+var gyro_enabled: bool = false      # управление камерой гироскопом
+var gyro_sensitivity: float = 1.0   # чувствительность гироскопа
+var invert_y: bool = false          # инверсия вертикали камеры
 var time_of_day: float = 10.0       # часы 0..24 — определяют положение солнца
 var selected_map: String = "gatchina"
 
@@ -34,6 +37,9 @@ func load_settings() -> void:
 	quality = cf.get_value("gfx", "quality", quality)
 	master_volume = cf.get_value("audio", "master_volume", master_volume)
 	sensitivity = cf.get_value("control", "sensitivity", sensitivity)
+	gyro_enabled = cf.get_value("control", "gyro_enabled", gyro_enabled)
+	gyro_sensitivity = cf.get_value("control", "gyro_sensitivity", gyro_sensitivity)
+	invert_y = cf.get_value("control", "invert_y", invert_y)
 	time_of_day = cf.get_value("world", "time_of_day", time_of_day)
 	selected_map = cf.get_value("world", "selected_map", selected_map)
 	_apply_volume()
@@ -43,6 +49,9 @@ func save_settings() -> void:
 	cf.set_value("gfx", "quality", quality)
 	cf.set_value("audio", "master_volume", master_volume)
 	cf.set_value("control", "sensitivity", sensitivity)
+	cf.set_value("control", "gyro_enabled", gyro_enabled)
+	cf.set_value("control", "gyro_sensitivity", gyro_sensitivity)
+	cf.set_value("control", "invert_y", invert_y)
 	cf.set_value("world", "time_of_day", time_of_day)
 	cf.set_value("world", "selected_map", selected_map)
 	cf.save(PATH)

@@ -120,7 +120,7 @@ func _build_ui() -> void:
 	main_col.anchor_right = 1.0; main_col.anchor_bottom = 1.0
 	ui.add_child(main_col)
 
-	var title := _label("ИМПЕРІЯ", 76)
+	var title := _label("ИМПЕРИЯ", 76)
 	title.add_theme_color_override("font_color", TEXT)
 	title.position = Vector2(64, 70)
 	main_col.add_child(title)
@@ -224,10 +224,19 @@ func _map_card(id: String, m: Dictionary) -> Control:
 
 # ---------- настройки ----------
 func _build_settings_panel() -> void:
-	var r := _panel_box(680, 600, "Настройки")
-	settings_panel = r[0]; var vb: VBoxContainer = r[1]
+	var r := _panel_box(720, 660, "Настройки")
+	settings_panel = r[0]; var outer: VBoxContainer = r[1]
 
-	# качество графики (сегментированный выбор)
+	# прокручиваемая область — вмещает все настройки на любом экране
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(680, 470)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	outer.add_child(scroll)
+	var vb := VBoxContainer.new(); vb.add_theme_constant_override("separation", 14)
+	vb.custom_minimum_size = Vector2(660, 0)
+	scroll.add_child(vb)
+
+	# --- Графика ---
 	vb.add_child(_label("Качество графики", 20))
 	var qrow := HBoxContainer.new(); qrow.add_theme_constant_override("separation", 10)
 	vb.add_child(qrow)
@@ -243,26 +252,52 @@ func _build_settings_panel() -> void:
 			for k in qbtns: qbtns[k].button_pressed = (k == key))
 		qrow.add_child(qb)
 
-	# ползунки
-	var tod_lbl := _label("Время суток: %02d:00" % int(Settings.time_of_day), 20)
+	# --- Звук ---
 	vb.add_child(_slider_row("Громкость", 0.0, 1.0, Settings.master_volume, 0.01,
 		func(v: float) -> void: Settings.master_volume = v))
+
+	# --- Управление ---
+	vb.add_child(_label("Управление", 20, ACCENT))
 	vb.add_child(_slider_row("Чувствительность камеры", 0.3, 2.5, Settings.sensitivity, 0.05,
 		func(v: float) -> void: Settings.sensitivity = v))
+	vb.add_child(_toggle_row("Инверсия вертикали", Settings.invert_y,
+		func(on: bool) -> void: Settings.invert_y = on))
+	vb.add_child(_toggle_row("Гироскоп (наклон устройства)", Settings.gyro_enabled,
+		func(on: bool) -> void: Settings.gyro_enabled = on))
+	vb.add_child(_slider_row("Чувствительность гироскопа", 0.2, 3.0, Settings.gyro_sensitivity, 0.05,
+		func(v: float) -> void: Settings.gyro_sensitivity = v))
+
+	# --- Мир ---
+	vb.add_child(_label("Мир", 20, ACCENT))
+	var tod_lbl := _label("Время суток: %02d:00" % int(Settings.time_of_day), 18, MUTED)
 	vb.add_child(tod_lbl)
 	vb.add_child(_slider_row("", 0.0, 24.0, Settings.time_of_day, 0.5,
 		func(v: float) -> void:
 			Settings.time_of_day = v
 			tod_lbl.text = "Время суток: %02d:00" % int(v)))
 
+	# кнопки (вне прокрутки, всегда видны)
 	var row := HBoxContainer.new(); row.add_theme_constant_override("separation", 14)
-	vb.add_child(row)
+	outer.add_child(row)
 	var apply := _button("Применить")
 	apply.pressed.connect(func() -> void: Settings.save_settings(); _back())
 	row.add_child(apply)
 	var back := _button("Назад")
 	back.pressed.connect(func() -> void: Settings.load_settings(); _back())
 	row.add_child(back)
+
+# строка-переключатель вкл/выкл
+func _toggle_row(name: String, val: bool, cb: Callable) -> Control:
+	var row := HBoxContainer.new(); row.add_theme_constant_override("separation", 14)
+	var l := _label(name, 18, MUTED); l.custom_minimum_size = Vector2(420, 0)
+	row.add_child(l)
+	var b := _button("Вкл" if val else "Выкл")
+	b.custom_minimum_size = Vector2(120, 44)
+	b.toggle_mode = true; b.button_pressed = val
+	b.toggled.connect(func(on: bool) -> void:
+		b.text = "Вкл" if on else "Выкл"; cb.call(on))
+	row.add_child(b)
+	return row
 
 func _slider_row(name: String, lo: float, hi: float, val: float, step: float, cb: Callable) -> Control:
 	var vb := VBoxContainer.new(); vb.add_theme_constant_override("separation", 4)
