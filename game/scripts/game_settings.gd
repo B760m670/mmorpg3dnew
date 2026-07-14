@@ -4,7 +4,7 @@ extends Node
 
 signal changed
 
-var quality: String = "high"        # high / balanced / performance
+var quality: String = "balanced"    # high(60, кино) / balanced(120) / performance(120)
 var master_volume: float = 0.8
 var sensitivity: float = 1.0        # чувствительность камеры (свайп)
 var gyro_enabled: bool = false      # управление камерой гироскопом
@@ -29,6 +29,9 @@ const MAPS := {
 
 func _ready() -> void:
 	load_settings()
+	# до 120 FPS везде (меню и мир); на ProMotion iPhone раскрывается при наличии
+	# ключа CADisableMinimumFrameDurationOnPhone в Info.plist (см. export_presets).
+	Engine.max_fps = 120
 
 func load_settings() -> void:
 	var cf := ConfigFile.new()

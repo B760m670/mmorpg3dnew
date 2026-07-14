@@ -35,11 +35,13 @@ var _pinch_dist := -1.0
 func _ready() -> void:
 	data = WorldData.new()
 	data.load_all()
-	EnvironmentBuilder.build(self)
+	var gp := GraphicsProfile.from_settings()
+	gp.apply_to(self)                      # Engine.max_fps=120, MSAA, масштаб рендера
+	EnvironmentBuilder.build(self, gp)
 	TerrainBuilder.build(self, data)
-	GroundPatchBuilder.build(self, data)   # детальная земля с рельефом под игроком
-	GrassBuilder.build(self, data)
-	RockBuilder.build(self, data)
+	GroundPatchBuilder.build(self, data, gp)   # детальная земля с рельефом под игроком
+	GrassBuilder.build(self, data, gp)
+	RockBuilder.build(self, data, gp)
 	WaterBuilder.build(self, data)
 	BuildingPlacer.new(self, data).build_all()
 	ForestBuilder.build(self, data)

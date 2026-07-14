@@ -6,10 +6,9 @@ extends RefCounted
 ## крупным рельефом по краю (плавное затухание смещения). Материал — тот же
 ## грунтовый шейдер, но с мелким тайлингом для резкой детализации вблизи.
 
-const R := 46.0
-const STEP := 0.45
-
-static func build(world: Node3D, data: WorldData) -> void:
+static func build(world: Node3D, data: WorldData, gp: GraphicsProfile) -> void:
+	var R: float = gp.patch_radius
+	var STEP: float = gp.patch_step
 	var sp := data.spawn_xz()
 	var cx := sp.x; var cz := sp.y
 

@@ -3,13 +3,14 @@ extends RefCounted
 ## Небо (физическая атмосфера), солнце, туман, пост-обработка и качество графики.
 ## Строится один раз при загрузке мира.
 
-static func build(world: Node3D) -> void:
+static func build(world: Node3D, gp: GraphicsProfile) -> void:
 	var sky_mat := ShaderMaterial.new()
 	sky_mat.shader = load("res://shaders/sky.gdshader")
 	var sky := Sky.new()
 	sky.sky_material = sky_mat
 	sky.radiance_size = Sky.RADIANCE_SIZE_64
-	sky.process_mode = Sky.PROCESS_MODE_REALTIME      # небо анимировано — ambient каждый кадр
+	# realtime только на верхних уровнях: пересчёт ambient каждый кадр дорог
+	sky.process_mode = Sky.PROCESS_MODE_REALTIME if gp.sky_realtime else Sky.PROCESS_MODE_INCREMENTAL
 	var env := Environment.new()
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
@@ -18,34 +19,34 @@ static func build(world: Node3D) -> void:
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
 	env.tonemap_exposure = 1.0
 
-	# Затенение в складках/углах и экранное непрямое освещение
-	env.ssao_enabled = true
+	# Затенение в складках/углах и экранное непрямое освещение (по профилю)
+	env.ssao_enabled = gp.ssao
 	env.ssao_radius = 3.0
 	env.ssao_intensity = 3.2
 	env.ssao_power = 2.0
 	env.ssao_detail = 1.0
-	env.ssil_enabled = true
+	env.ssil_enabled = gp.ssil
 	env.ssil_radius = 4.0
 	env.ssil_intensity = 1.0
 	# Экранные отражения (вода, полированные поверхности)
-	env.ssr_enabled = true
+	env.ssr_enabled = gp.ssr
 	env.ssr_max_steps = 48
 	env.ssr_fade_in = 0.15
 	env.ssr_fade_out = 3.0
 	# Объёмный туман — атмосфера, «воздух» между зданиями и над озёрами
-	env.volumetric_fog_enabled = true
+	env.volumetric_fog_enabled = gp.volumetric_fog
 	env.volumetric_fog_density = 0.0016
 	env.volumetric_fog_albedo = Color(0.86, 0.89, 0.94)
 	env.volumetric_fog_length = 180.0
 	env.volumetric_fog_gi_inject = 0.6
 	# Дальний туман для глубины
-	env.fog_enabled = true
+	env.fog_enabled = gp.distant_fog
 	env.fog_light_color = Color(0.72, 0.78, 0.84)
 	env.fog_density = 0.0009
 	env.fog_sky_affect = 0.25
 	env.fog_aerial_perspective = 0.5
 	# Свечение ярких мест (солнце на золоте/воде)
-	env.glow_enabled = true
+	env.glow_enabled = gp.glow
 	env.glow_intensity = 0.5
 	env.glow_bloom = 0.1
 	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
@@ -55,7 +56,6 @@ static func build(world: Node3D) -> void:
 	env.adjustment_contrast = 1.16
 	env.adjustment_saturation = 1.18
 
-	_apply_quality(world, env)
 	var we := WorldEnvironment.new(); we.environment = env
 	world.add_child(we)
 
@@ -65,23 +65,9 @@ static func build(world: Node3D) -> void:
 	sun.light_color = Color(1.0, 0.95, 0.86)
 	sun.shadow_enabled = true
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
-	sun.directional_shadow_max_distance = 260.0
+	sun.directional_shadow_max_distance = gp.shadow_distance
 	sun.directional_shadow_split_1 = 0.08
 	sun.directional_shadow_split_2 = 0.2
 	sun.directional_shadow_split_3 = 0.5
 	sun.directional_shadow_blend_splits = true
 	world.add_child(sun)
-
-# качество графики из настроек: отключаем тяжёлые эффекты на слабых устройствах
-static func _apply_quality(world: Node3D, env: Environment) -> void:
-	match Settings.quality:
-		"balanced":
-			env.ssil_enabled = false
-			env.ssr_enabled = false
-			env.volumetric_fog_density = 0.001
-		"performance":
-			env.ssao_enabled = false
-			env.ssil_enabled = false
-			env.ssr_enabled = false
-			env.volumetric_fog_enabled = false
-			world.get_viewport().msaa_3d = Viewport.MSAA_DISABLED

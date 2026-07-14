@@ -42,14 +42,14 @@ static func make_tuft() -> Mesh:
 	m.surface_set_material(0, mat)
 	return m
 
-static func build(world: Node3D, data: WorldData) -> void:
+static func build(world: Node3D, data: WorldData, gp: GraphicsProfile) -> void:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.mesh = make_tuft()
 	var rng := RandomNumberGenerator.new(); rng.seed = 2025
-	# плотный ковёр рядом с игроком (как в эталоне) — под A18 Pro
-	var count := 240000
-	var radius := 110.0
+	# плотность и радиус — из профиля производительности
+	var count := gp.grass_count
+	var radius := gp.grass_radius
 	var sp := data.spawn_xz()
 	var cx := sp.x; var cz := sp.y
 	mm.instance_count = count

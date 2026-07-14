@@ -31,7 +31,7 @@ static func make_mesh(seed: int) -> Mesh:
 	st.generate_normals()
 	return st.commit()
 
-static func build(world: Node3D, data: WorldData) -> void:
+static func build(world: Node3D, data: WorldData, gp: GraphicsProfile) -> void:
 	var rmat := StandardMaterial3D.new()
 	rmat.albedo_color = Color(0.30, 0.29, 0.27)
 	rmat.normal_enabled = true
@@ -40,15 +40,20 @@ static func build(world: Node3D, data: WorldData) -> void:
 	rmat.uv1_triplanar = true
 	rmat.uv1_scale = Vector3(1.2, 1.2, 1.2)
 	rmat.roughness = 0.92
+	# 4 варианта валуна, каждый — свой MultiMesh (валуны инстансируются, не по одному)
+	var variants := 4
 	var meshes := []
-	for k in range(4):
+	for k in range(variants):
 		var mm := make_mesh(k * 13 + 1)
 		mm.surface_set_material(0, rmat)
 		meshes.append(mm)
+	var xforms := []
+	for _k in range(variants):
+		xforms.append([] as Array[Transform3D])
 	var rng := RandomNumberGenerator.new(); rng.seed = 771
 	var sp := data.spawn_xz()
 	var cx := sp.x; var cz := sp.y
-	for _i in range(500):
+	for _i in range(gp.rock_count):
 		var a := rng.randf() * TAU
 		var rr := sqrt(rng.randf()) * 420.0
 		var x := cx + cos(a) * rr; var z := cz + sin(a) * rr
@@ -58,10 +63,22 @@ static func build(world: Node3D, data: WorldData) -> void:
 		var y := data.height_at(x, z)
 		if y < -1.0:
 			continue
-		var inst := MeshInstance3D.new()
-		inst.mesh = meshes[rng.randi() % meshes.size()]
+		var t := Transform3D()
 		var s := rng.randf_range(0.3, 1.1)
-		inst.scale = Vector3(s, s * rng.randf_range(0.7, 1.0), s)
-		inst.rotation.y = rng.randf() * TAU
-		inst.position = Vector3(x, y + 0.05, z)
-		world.add_child(inst)
+		t = t.scaled(Vector3(s, s * rng.randf_range(0.7, 1.0), s))
+		t = t.rotated(Vector3.UP, rng.randf() * TAU)
+		t.origin = Vector3(x, y + 0.05, z)
+		(xforms[rng.randi() % variants] as Array).append(t)
+	for k in range(variants):
+		var list: Array = xforms[k]
+		if list.is_empty():
+			continue
+		var mmesh := MultiMesh.new()
+		mmesh.transform_format = MultiMesh.TRANSFORM_3D
+		mmesh.mesh = meshes[k]
+		mmesh.instance_count = list.size()
+		for i in range(list.size()):
+			mmesh.set_instance_transform(i, list[i])
+		var mmi := MultiMeshInstance3D.new()
+		mmi.multimesh = mmesh
+		world.add_child(mmi)
