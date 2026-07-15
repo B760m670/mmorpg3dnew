@@ -53,8 +53,8 @@ T("chin", "chin-bones-incr", 0.28)
 T("chin", "chin-prominent-incr", 0.10)
 T("cheek", "l-cheek-bones-incr", 0.25)
 T("cheek", "r-cheek-bones-incr", 0.25)
-T("cheek", "l-cheek-inner-decr", 0.2)
-T("cheek", "r-cheek-inner-decr", 0.2)
+T("cheek", "l-cheek-inner-decr", 0.42)
+T("cheek", "r-cheek-inner-decr", 0.42)
 T("head", "head-oval", 0.35)
 T("forehead", "forehead-scale-vert-incr", 0.10)
 T("ears", "l-ear-flap-incr", 0.4)
@@ -275,9 +275,11 @@ eye_objs = []
 def make_eye(c, name):
     # ОДНА сфера: зоны зрачок/радужка/склера — по углу нормали от оси взгляда (-Y).
     # Радужка видна всегда, никакой мутной линзы; влажный блеск — покрытием (Coat).
-    r = 0.0104
-    bpy.ops.mesh.primitive_uv_sphere_add(radius=r, segments=32, ring_count=24, location=tuple(c))
+    r = 0.0108
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=r, segments=32, ring_count=24,
+        location=(c.x, c.y + 0.0011, c.z - 0.0011))
     sc = bpy.context.active_object; sc.name = name
+    sc.rotation_euler = (math.radians(-4.0), 0, 0)   # взгляд чуть вниз, не «выпучен»
     for p in sc.data.polygons:
         p.use_smooth = True
     m = bpy.data.materials.new("EyeMat_" + name); m.use_nodes = True
@@ -394,17 +396,35 @@ def hf_scalp(c):
     return c.z > H0 - 0.062
 
 vgroup_from_filter("scalp", hf_scalp)
+z_brow_line = z_eyes + 0.019           # брови ближе к глазам, не «на лбу»
 vgroup_from_filter("brows_g",
-    lambda c: (c.y < cy0 - 0.025) and (zb0 - 0.004 < c.z < zb0 + 0.006) and 0.015 < abs(c.x - cx0) < 0.041)
+    lambda c: (c.y < cy0 - 0.025) and (z_brow_line - 0.0055 < c.z < z_brow_line + 0.0055) and 0.013 < abs(c.x - cx0) < 0.042)
 vgroup_from_filter("must_g",
-    lambda c: (c.y < cy0 - 0.05) and (zm0 + 0.004 < c.z < zn0 - 0.008) and abs(c.x - cx0) < 0.027)
+    lambda c: (c.y < cy0 - 0.05) and (zm0 + 0.012 < c.z < zn0 + 0.002) and abs(c.x - cx0) < 0.032)
+# БОРОДА (у Николая II в 1894 — полная борода): подбородок + челюсть + щёки
+# до бакенбард; свободна только полоска непосредственно под губой
+def beard_filter(c):
+    dx = abs(c.x - cx0)
+    if c.z < zm0 - 0.085 or c.y > cy0 + 0.01:
+        return False
+    under_lip = (c.z > zm0 - 0.008 and dx < 0.016)      # ямка под губой
+    if under_lip:
+        return False
+    if c.z < zm0 + 0.004 and dx < 0.060:                 # подбородок и челюсть
+        return True
+    if c.z < zn0 + 0.004 and 0.030 < dx < 0.075 and c.y < cy0 - 0.005:
+        return True                                       # щёки до бакенбард
+    return False
+vgroup_from_filter("beard_g", beard_filter)
 
 DN = 1 if QUICK else 2
 scalp_sys = hair_system("hair_scalp", "scalp", 2300 * DN, 0.024, hair_mi, clump=0.82,
             kink_amp=0.0005, rough=0.010, children=16 * DN)
-hair_system("hair_brows", "brows_g", 180, 0.0048, hair_mi, clump=0.55, rough=0.015, children=10)
-hair_system("hair_must", "must_g", 380, 0.0115, hair_mi, clump=0.9, kink_amp=0.0,
-            rough=0.008, children=10)
+hair_system("hair_brows", "brows_g", 240, 0.0042, hair_mi, clump=0.55, rough=0.015, children=8)
+hair_system("hair_must", "must_g", 340, 0.0110, hair_mi, clump=0.9, kink_amp=0.0,
+            rough=0.008, children=8)
+hair_system("hair_beard", "beard_g", 1100 * DN, 0.0135, hair_mi, clump=0.75, kink_amp=0.0004,
+            rough=0.012, children=10)
 
 # «ПРИЧЕСАТЬ» физикой: динамика волос + гравитация укладывают пряди (не ёжик)
 scalp_sys.use_hair_dynamics = True
