@@ -1,0 +1,17 @@
+Subject: [PATCH] Apple embedded export: report missing ETC2/ASTC import instead of failing silently
+
+Upstream bug: has_valid_project_configuration() sets valid=false when
+rendering/textures/vram_compression/import_etc2_astc is disabled, but
+appends NO error text — export dies with an empty "configuration errors:"
+list. Cost us a CI debugging session (build-ipa2 run #1).
+
+--- a/editor/export/editor_export_platform_apple_embedded.cpp
++++ b/editor/export/editor_export_platform_apple_embedded.cpp
+@@ -2313,6 +2313,7 @@ bool EditorExportPlatformAppleEmbedded::has_valid_project_configuration(const R
+ 	}
+ 
+ 	if (!ResourceImporterTextureSettings::should_import_etc2_astc()) {
++		err += TTR("ETC2/ASTC texture import must be enabled: set rendering/textures/vram_compression/import_etc2_astc=true in project settings.") + "\n";
+ 		valid = false;
+ 	}
+ 
