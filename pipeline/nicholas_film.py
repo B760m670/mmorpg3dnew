@@ -56,11 +56,16 @@ T("cheek", "l-cheek-bones-incr", 0.25)
 T("cheek", "r-cheek-bones-incr", 0.25)
 T("cheek", "l-cheek-inner-decr", 0.42)
 T("cheek", "r-cheek-inner-decr", 0.42)
-T("head", "head-oval", 0.35)
-T("forehead", "forehead-scale-vert-incr", 0.10)
+T("head", "head-oval", 0.18)
 T("ears", "l-ear-flap-incr", 0.4)
 T("ears", "r-ear-flap-incr", 0.4)
-T("mouth", "mouth-scale-horiz-decr", 0.08)
+# губы: объём, лук Купидона, фильтрум — рот не «щель»
+T("mouth", "mouth-lowerlip-volume-incr", 0.55)
+T("mouth", "mouth-upperlip-volume-incr", 0.45)
+T("mouth", "mouth-cupidsbow-incr", 0.4)
+T("mouth", "mouth-cupidsbow-width-incr", 0.2)
+T("mouth", "mouth-philtrum-volume-incr", 0.45)
+T("mouth", "mouth-scale-depth-incr", 0.15)
 
 eyes_path = os.path.join(MH_DATA, "eyes", "low-poly", "low-poly.mhclo")
 HumanService.add_mhclo_asset(eyes_path, human, asset_type="Eyes", material_type="MAKESKIN")
@@ -124,7 +129,7 @@ crown_chin = H0 - menton
 mid_third = zb0 - zn0            # бровь → основание носа
 low_third = zn0 - menton         # основание носа → подбородок
 eye_mid_ratio = (z_eyes - menton) / max(crown_chin, 1e-6)   # глаза на середине черепа ≈ 0.5
-bizygo = _width_at(z_eyes - 0.012)                # скуловая ширина
+bizygo = _width_at(z_eyes - 0.012, ymax=cy0 - 0.005)   # скуловая ширина (БЕЗ ушей)
 bigonial = _width_at(zm0 - 0.038)                 # челюстная ширина (углы)
 alar_vs = [abs(v.x - cx0) for v in hv0 if abs(v.z - (zn0 + 0.004)) < 0.006 and v.y < nose_y + 0.018]
 alar = 2 * max(alar_vs) if alar_vs else 0.0       # ширина крыльев носа
@@ -241,43 +246,55 @@ rgh_img.pixels.foreach_set(rpx.reshape(-1))
 # ============ СТАНОК 2: микрорельеф — TRUE DISPLACEMENT ============
 # карта высот: поры (мелкие) + морщинки лба/у глаз (направленные) + вены тыльные
 disp_h = np.zeros(P.shape[0], np.float32)
-pores = fbm_uv(700, 2, 41)
-disp_h += (pores - 0.5) * 1.0
+# поры НЕ здесь: они 3D-шумом в шейдере (в UV — швы и «вязаный» узор);
+# тут лишь крупная неровность кожи
+pores = fbm_uv(300, 3, 41)
+disp_h += (pores - 0.5) * 0.22
 # морщины лба: горизонтальные волны, только лоб
 forehead = band(zb0 + 0.012, H0 - 0.055, 0.012) * front
 waves = (np.sin(P[:, 2] * 900.0 + fbm_uv(60, 2, 55) * 6.0) * 0.5 + 0.5).astype(np.float32)
-disp_h += (waves - 0.5) * 0.8 * forehead
+disp_h += (waves - 0.5) * 0.5 * forehead
 # гусиные лапки у глаз
 for sx in (-1, 1):
     crow = sph((cx0 + sx * 0.052, cy0 - 0.035, z_eyes - 0.004), 0.02, 0.02)
     disp_h += (np.sin((P[:, 0] - cx0) * 1400.0) * 0.5) * crow * 0.7
 
 # ---------- АНАТОМИЧЕСКИЙ РЕЛЬЕФ: кости черепа и мышцы лица ----------
+# (амплитуды крупнее пор — рельеф ДОЛЖЕН читаться на голом лице)
 # надбровные дуги (супраорбитальный валик)
-disp_h += band(zb0 - 0.003, zb0 + 0.011, 0.006) * front * 1.1
+disp_h += band(zb0 - 0.003, zb0 + 0.011, 0.006) * front * 1.6
 # глабелла (межбровье) — мягкий бугор
-disp_h += sph((cx0, nose_y + 0.014, zb0 + 0.002), 0.011, 0.010) * 0.8
+disp_h += sph((cx0, nose_y + 0.014, zb0 + 0.002), 0.011, 0.010) * 1.2
 # височные впадины (temporalis под фасцией — лёгкая вогнутость)
 for sx in (-1, 1):
-    disp_h -= sph((cx0 + sx * 0.063, cy0 - 0.004, zb0 + 0.012), 0.020, 0.020) * 1.0
+    disp_h -= sph((cx0 + sx * 0.063, cy0 - 0.004, zb0 + 0.012), 0.020, 0.020) * 1.4
 # скуловые дуги: от скуловой кости к уху
 for sx in (-1, 1):
     for t in (0.0, 0.33, 0.66, 1.0):
         ax = 0.042 + t * (ear_x - 0.052)
         ay = cy0 - 0.028 + t * 0.030
-        disp_h += sph((cx0 + sx * ax, ay, z_eyes - 0.013), 0.011, 0.011) * 0.75
+        disp_h += sph((cx0 + sx * ax, ay, z_eyes - 0.013), 0.011, 0.011) * 1.15
 # жевательная мышца (masseter) — объём у угла челюсти
 for sx in (-1, 1):
-    disp_h += sph((cx0 + sx * 0.051, cy0 + 0.010, zm0 - 0.030), 0.020, 0.018) * 0.7
+    disp_h += sph((cx0 + sx * 0.051, cy0 + 0.010, zm0 - 0.030), 0.020, 0.018) * 1.1
 # носогубная борозда — лёгкая складка от крыла носа к углу рта
 for sx in (-1, 1):
     for t in (0.0, 0.5, 1.0):
         nx_ = 0.016 + t * 0.012
         nz_ = zn0 - 0.004 - t * 0.026
-        disp_h -= sph((cx0 + sx * nx_, nose_y + 0.010 + t * 0.008, nz_), 0.0045, 0.0045) * 0.8
+        disp_h -= sph((cx0 + sx * nx_, nose_y + 0.010 + t * 0.008, nz_), 0.0045, 0.0045) * 1.0
 # губоподбородочная борозда + подбородочный бугор
-disp_h -= band(zm0 - 0.021, zm0 - 0.013, 0.004) * front * (np.abs(P[:, 0] - cx0) < 0.015) * 0.9
-disp_h += sph((cx0, nose_y + 0.012, zm0 - 0.034), 0.014, 0.012) * 0.9
+disp_h -= band(zm0 - 0.021, zm0 - 0.013, 0.004) * front * (np.abs(P[:, 0] - cx0) < 0.015) * 1.2
+disp_h += sph((cx0, nose_y + 0.012, zm0 - 0.034), 0.014, 0.012) * 1.4
+# ШЕЯ: кивательные мышцы (от сосцевидного отростка к яремной вырезке) + кадык
+neck_front_y = cy0 - 0.055
+for sx in (-1, 1):
+    for t in (0.0, 0.4, 0.8):
+        sy = cy0 + 0.015 - t * 0.055
+        sz = (H0 - 0.245) - t * 0.055
+        sxx = 0.032 - t * 0.012
+        disp_h += sph((cx0 + sx * sxx, sy, sz), 0.013, 0.013) * 0.8
+disp_h += sph((cx0, neck_front_y, H0 - 0.30), 0.009, 0.008) * 1.0   # кадык
 dpx = np.ones((P.shape[0], 4), np.float32)
 dval = np.clip(disp_h * 0.5 + 0.5, 0, 1)
 dpx[:, 0] = dpx[:, 1] = dpx[:, 2] = dval
@@ -300,6 +317,15 @@ nt.links.new(t_alb.outputs["Color"], bsdf.inputs["Base Color"])
 t_r = nt.nodes.new("ShaderNodeTexImage"); t_r.image = rgh_img
 t_r.image.colorspace_settings.name = 'Non-Color'
 nt.links.new(t_r.outputs["Color"], bsdf.inputs["Roughness"])
+# ПОРЫ: 3D-шум → Bump — бесшовно (в UV были швы и «вязаный» узор), ~0.5 мм
+ptex = nt.nodes.new("ShaderNodeTexNoise")
+ptex.inputs["Scale"].default_value = 950.0
+ptex.inputs["Detail"].default_value = 3.0
+pbump = nt.nodes.new("ShaderNodeBump")
+pbump.inputs["Strength"].default_value = 0.16
+pbump.inputs["Distance"].default_value = 0.0005
+nt.links.new(ptex.outputs["Fac"], pbump.inputs["Height"])
+nt.links.new(pbump.outputs["Normal"], bsdf.inputs["Normal"])
 for key, val in [("Subsurface Weight", 1.0), ("IOR", 1.4), ("Coat Weight", 0.12),
                  ("Coat Roughness", 0.28)]:
     if key in bsdf.inputs:
@@ -336,9 +362,9 @@ eye_objs = []
 def make_eye(c, name):
     # ОДНА сфера: зоны зрачок/радужка/склера — по углу нормали от оси взгляда (-Y).
     # Радужка видна всегда, никакой мутной линзы; влажный блеск — покрытием (Coat).
-    r = 0.0108
+    r = 0.0113
     bpy.ops.mesh.primitive_uv_sphere_add(radius=r, segments=32, ring_count=24,
-        location=(c.x, c.y + 0.0011, c.z - 0.0011))
+        location=(c.x, c.y + 0.0013, c.z - 0.0011))
     sc = bpy.context.active_object; sc.name = name
     sc.rotation_euler = (math.radians(-4.0), 0, 0)   # взгляд чуть вниз, не «выпучен»
     for p in sc.data.polygons:
