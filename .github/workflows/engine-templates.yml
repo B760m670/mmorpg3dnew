@@ -6,6 +6,12 @@ name: Engine iOS Templates (Metal)
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - claude/romanov-game-dev-uurxhs
+    paths:
+      - "engine/**"
+      - ".github/workflows/engine-templates.yml"
 
 permissions:
   contents: write
