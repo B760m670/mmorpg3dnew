@@ -14,6 +14,7 @@ OUT = os.path.join(SCRATCH, "film")
 MH_DATA = os.path.join(SCRATCH, "makehuman", "makehuman", "data")
 os.makedirs(OUT, exist_ok=True)
 QUICK = "--quick" in sys.argv     # быстрый прогон для итераций
+NAKED = "--naked" in sys.argv     # стадия A0: голая анатомия, ни одного волоса
 
 addon_utils.enable("bl_ext.user_default.mpfb", default_set=True, persistent=True)
 
@@ -105,6 +106,39 @@ zn0 = z_eyes - 0.045
 zm0 = z_eyes - 0.078
 nose_ys = [v.y for v in hv0 if abs(v.x - cx0) < 0.012 and abs(v.z - zn0) < 0.012]
 nose_y = min(nose_ys) if nose_ys else cy0 - 0.11
+
+# ---------- АУДИТ АНАТОМИИ: замеры против канонов пластической анатомии ------
+def _menton():   # нижняя точка подбородка
+    cand = [v.z for v in WORLD_V if abs(v.x - cx0) < 0.015 and v.y < cy0 - 0.03
+            and H0 - 0.32 < v.z < zm0]
+    return min(cand) if cand else zm0 - 0.05
+
+def _width_at(z, dz=0.008, ymax=None):
+    vs = [abs(v.x - cx0) for v in WORLD_V if abs(v.z - z) < dz and v.z > H0 - 0.32
+          and (ymax is None or v.y < ymax)]
+    return 2 * max(vs) if vs else 0.0
+
+menton = _menton()
+ipd = (eye_c["l"] - eye_c["r"]).length if eye_c else 0.0
+crown_chin = H0 - menton
+mid_third = zb0 - zn0            # бровь → основание носа
+low_third = zn0 - menton         # основание носа → подбородок
+eye_mid_ratio = (z_eyes - menton) / max(crown_chin, 1e-6)   # глаза на середине черепа ≈ 0.5
+bizygo = _width_at(z_eyes - 0.012)                # скуловая ширина
+bigonial = _width_at(zm0 - 0.038)                 # челюстная ширина (углы)
+alar_vs = [abs(v.x - cx0) for v in hv0 if abs(v.z - (zn0 + 0.004)) < 0.006 and v.y < nose_y + 0.018]
+alar = 2 * max(alar_vs) if alar_vs else 0.0       # ширина крыльев носа
+eye_ball_d = 2 * 0.0108
+K = 0.063 / max(ipd, 1e-6)                        # перевод в «реальные метры» по IPD=63мм
+print("[audit] ---- ГОЛАЯ АНАТОМИЯ: замеры (в мм реального масштаба) ----")
+print(f"[audit] IPD={ipd*1000:.1f} модельных мм (норма-якорь 63мм, K={K:.3f})")
+print(f"[audit] crown-chin={crown_chin*K*1000:.0f} (норма 230-250)")
+print(f"[audit] глаза на высоте {eye_mid_ratio:.2f} черепа (канон 0.50)")
+print(f"[audit] средняя треть (бровь-нос) ={mid_third*K*1000:.0f} vs нижняя (нос-подбородок)={low_third*K*1000:.0f} (канон: равны)")
+print(f"[audit] скуловая ширина={bizygo*K*1000:.0f} (норма муж 130-145)")
+print(f"[audit] челюстная ширина={bigonial*K*1000:.0f} (канон ≈0.75-0.8 скуловой: {bizygo*0.77*K*1000:.0f})")
+print(f"[audit] крылья носа={alar*K*1000:.0f} (канон ≈ межслёзное ≈ 32-36)")
+print(f"[audit] лицевой индекс (бровь-подбородок)/скуловая = {(zb0-menton)/max(bizygo,1e-6):.2f} (канон 0.9-1.0)")
 
 # ============ СТАНОК 3: кожа (карты по анатомии + Random Walk SSS) ============
 TS = 4096 if not QUICK else 2048
@@ -217,6 +251,33 @@ disp_h += (waves - 0.5) * 0.8 * forehead
 for sx in (-1, 1):
     crow = sph((cx0 + sx * 0.052, cy0 - 0.035, z_eyes - 0.004), 0.02, 0.02)
     disp_h += (np.sin((P[:, 0] - cx0) * 1400.0) * 0.5) * crow * 0.7
+
+# ---------- АНАТОМИЧЕСКИЙ РЕЛЬЕФ: кости черепа и мышцы лица ----------
+# надбровные дуги (супраорбитальный валик)
+disp_h += band(zb0 - 0.003, zb0 + 0.011, 0.006) * front * 1.1
+# глабелла (межбровье) — мягкий бугор
+disp_h += sph((cx0, nose_y + 0.014, zb0 + 0.002), 0.011, 0.010) * 0.8
+# височные впадины (temporalis под фасцией — лёгкая вогнутость)
+for sx in (-1, 1):
+    disp_h -= sph((cx0 + sx * 0.063, cy0 - 0.004, zb0 + 0.012), 0.020, 0.020) * 1.0
+# скуловые дуги: от скуловой кости к уху
+for sx in (-1, 1):
+    for t in (0.0, 0.33, 0.66, 1.0):
+        ax = 0.042 + t * (ear_x - 0.052)
+        ay = cy0 - 0.028 + t * 0.030
+        disp_h += sph((cx0 + sx * ax, ay, z_eyes - 0.013), 0.011, 0.011) * 0.75
+# жевательная мышца (masseter) — объём у угла челюсти
+for sx in (-1, 1):
+    disp_h += sph((cx0 + sx * 0.051, cy0 + 0.010, zm0 - 0.030), 0.020, 0.018) * 0.7
+# носогубная борозда — лёгкая складка от крыла носа к углу рта
+for sx in (-1, 1):
+    for t in (0.0, 0.5, 1.0):
+        nx_ = 0.016 + t * 0.012
+        nz_ = zn0 - 0.004 - t * 0.026
+        disp_h -= sph((cx0 + sx * nx_, nose_y + 0.010 + t * 0.008, nz_), 0.0045, 0.0045) * 0.8
+# губоподбородочная борозда + подбородочный бугор
+disp_h -= band(zm0 - 0.021, zm0 - 0.013, 0.004) * front * (np.abs(P[:, 0] - cx0) < 0.015) * 0.9
+disp_h += sph((cx0, nose_y + 0.012, zm0 - 0.034), 0.014, 0.012) * 0.9
 dpx = np.ones((P.shape[0], 4), np.float32)
 dval = np.clip(disp_h * 0.5 + 0.5, 0, 1)
 dpx[:, 0] = dpx[:, 1] = dpx[:, 2] = dval
@@ -253,7 +314,7 @@ if hasattr(bsdf, "subsurface_method"):
 t_d = nt.nodes.new("ShaderNodeTexImage"); t_d.image = disp_img
 t_d.image.colorspace_settings.name = 'Non-Color'
 dsp = nt.nodes.new("ShaderNodeDisplacement")
-dsp.inputs["Scale"].default_value = 0.0016
+dsp.inputs["Scale"].default_value = 0.0021
 dsp.inputs["Midlevel"].default_value = 0.5
 nt.links.new(t_d.outputs["Color"], dsp.inputs["Height"])
 nt.links.new(dsp.outputs["Displacement"], out_n.inputs["Displacement"])
@@ -418,25 +479,28 @@ def beard_filter(c):
 vgroup_from_filter("beard_g", beard_filter)
 
 DN = 1 if QUICK else 2
-scalp_sys = hair_system("hair_scalp", "scalp", 2300 * DN, 0.024, hair_mi, clump=0.82,
-            kink_amp=0.0005, rough=0.010, children=16 * DN)
-hair_system("hair_brows", "brows_g", 240, 0.0042, hair_mi, clump=0.55, rough=0.015, children=8)
-hair_system("hair_must", "must_g", 340, 0.0110, hair_mi, clump=0.9, kink_amp=0.0,
-            rough=0.008, children=8)
-hair_system("hair_beard", "beard_g", 1100 * DN, 0.0135, hair_mi, clump=0.75, kink_amp=0.0004,
-            rough=0.012, children=10)
+if not NAKED:
+    scalp_sys = hair_system("hair_scalp", "scalp", 2300 * DN, 0.024, hair_mi, clump=0.82,
+                kink_amp=0.0005, rough=0.010, children=16 * DN)
+    hair_system("hair_brows", "brows_g", 240, 0.0042, hair_mi, clump=0.55, rough=0.015, children=8)
+    hair_system("hair_must", "must_g", 340, 0.0110, hair_mi, clump=0.9, kink_amp=0.0,
+                rough=0.008, children=8)
+    hair_system("hair_beard", "beard_g", 1100 * DN, 0.0135, hair_mi, clump=0.75, kink_amp=0.0004,
+                rough=0.012, children=10)
 
-# «ПРИЧЕСАТЬ» физикой: динамика волос + гравитация укладывают пряди (не ёжик)
-scalp_sys.use_hair_dynamics = True
-if scalp_sys.cloth is not None:
-    hs = scalp_sys.cloth.settings
-    hs.mass = 0.05
-    hs.bending_stiffness = 0.15
-scene.frame_start = 1
-scene.frame_end = 18
-for f in range(1, 19):
-    scene.frame_set(f)
-print("[film] hair systems ready (groomed by physics)")
+    # «ПРИЧЕСАТЬ» физикой: динамика волос + гравитация укладывают пряди (не ёжик)
+    scalp_sys.use_hair_dynamics = True
+    if scalp_sys.cloth is not None:
+        hs = scalp_sys.cloth.settings
+        hs.mass = 0.05
+        hs.bending_stiffness = 0.15
+    scene.frame_start = 1
+    scene.frame_end = 18
+    for f in range(1, 19):
+        scene.frame_set(f)
+    print("[film] hair systems ready (groomed by physics)")
+else:
+    print("[film] NAKED: анатомия без волос — все пряди выключены")
 
 # ============ СТАНОК 7: кино-стейдж (свет, камера, рендер) ============
 world = bpy.data.worlds.new("studio")
@@ -487,6 +551,18 @@ scene.render.resolution_x = 1200 if QUICK else 2160
 scene.render.resolution_y = 1500 if QUICK else 2700
 scene.view_settings.view_transform = 'Filmic' if 'Filmic' else 'Standard'
 scene.view_settings.look = 'Medium High Contrast'
-scene.render.filepath = os.path.join(OUT, "portrait.png")
-bpy.ops.render.render(write_still=True)
-print("[film] PORTRAIT RENDERED ->", scene.render.filepath)
+if NAKED:
+    # три ракурса голой анатомии: анфас / три четверти / профиль
+    views = [("front", (cx0, fy - 0.80, z_eyes + 0.015), (math.radians(90), 0, 0)),
+             ("threeq", (cx0 - 0.57, fy - 0.57, z_eyes + 0.015), (math.radians(90), 0, math.radians(-45))),
+             ("profile", (cx0 - 0.80, cy0 - 0.02, z_eyes + 0.015), (math.radians(90), 0, math.radians(-90)))]
+    for nm, loc, rot in views:
+        cam.location = loc
+        cam.rotation_euler = rot
+        scene.render.filepath = os.path.join(OUT, f"anatomy_{nm}.png")
+        bpy.ops.render.render(write_still=True)
+        print("[film] ANATOMY RENDERED ->", scene.render.filepath)
+else:
+    scene.render.filepath = os.path.join(OUT, "portrait.png")
+    bpy.ops.render.render(write_still=True)
+    print("[film] PORTRAIT RENDERED ->", scene.render.filepath)
