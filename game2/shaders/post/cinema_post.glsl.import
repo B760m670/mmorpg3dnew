@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://b6siwmgsekgv8"
+path="res://.godot/imported/cinema_post.glsl-ee86a4dddbf8f626a5c80a428adf915a.res"
+
+[deps]
+
+source_file="res://shaders/post/cinema_post.glsl"
+dest_files=["res://.godot/imported/cinema_post.glsl-ee86a4dddbf8f626a5c80a428adf915a.res"]
+
+[params]
+
