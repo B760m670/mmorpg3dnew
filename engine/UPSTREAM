@@ -1,0 +1,3 @@
+# База форка движка (см. docs/engine_fork_architecture.md)
+GODOT_TAG=4.5.2-stable
+GODOT_COMMIT=6ce3de25aa58466e14ef354703ba8d9791a417da

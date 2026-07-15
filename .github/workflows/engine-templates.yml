@@ -1,0 +1,36 @@
+name: Engine iOS Templates (Metal)
+
+# Сборка НАШИХ шаблонов iOS из форка движка (пин + патчи из engine/).
+# Нативный Metal + MetalFX (Godot 4.5.2). Запуск вручную; артефакт ios.zip
+# затем подключается в build-ipa.yml вместо официальных шаблонов.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  templates:
+    name: Godot fork -> ios.zip (native Metal)
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - name: Checkout game repo
+        uses: actions/checkout@v4
+
+      - name: Install scons
+        run: pipx install scons || pip3 install --user scons
+
+      - name: Fetch pinned engine + apply patches
+        run: bash engine/fetch.sh "$HOME/godot-fork"
+
+      - name: Build iOS templates (arm64, Metal)
+        run: bash engine/build_ios_templates.sh "$HOME/godot-fork"
+
+      - name: Upload templates artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-templates-metal
+          path: ~/godot-fork/out/ios.zip
+          retention-days: 30
