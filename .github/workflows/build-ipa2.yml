@@ -1,0 +1,122 @@
+name: Build IPA 2 (Metal)
+
+# game2 (форк-конвейер): редактор Godot 4.5.2 + НАШИ Metal-шаблоны из
+# артефакта workflow «Engine iOS Templates (Metal)». Нативный Metal + MetalFX.
+# Старый Build IPA (game/, 4.3) не трогаем — черновик остаётся устанавливаемым.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - claude/romanov-game-dev-uurxhs
+    paths:
+      - "game2/**"
+      - ".github/workflows/build-ipa2.yml"
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  GODOT_VERSION: "4.5.2-stable"
+  GODOT_TPL_DIR: "4.5.2.stable"
+
+jobs:
+  build:
+    name: game2 -> unsigned IPA (Metal, LiveContainer)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Godot 4.5.2 editor
+        run: |
+          curl -sSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_macos.universal.zip"
+          unzip -q godot.zip
+          echo "GODOT=$PWD/Godot.app/Contents/MacOS/Godot" >> "$GITHUB_ENV"
+
+      - name: Download OUR Metal templates (artifact ios-templates-metal)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID=$(gh run list --repo "${{ github.repository }}" \
+            --workflow engine-templates.yml --status success -L 1 \
+            --json databaseId --jq '.[0].databaseId')
+          echo "templates run: $RUN_ID"
+          test -n "$RUN_ID"
+          gh run download "$RUN_ID" --repo "${{ github.repository }}" \
+            --name ios-templates-metal --dir tpl
+          ls -la tpl
+          mkdir -p "$HOME/Library/Application Support/Godot/export_templates/${GODOT_TPL_DIR}"
+          cp tpl/ios.zip "$HOME/Library/Application Support/Godot/export_templates/${GODOT_TPL_DIR}/ios.zip"
+
+      - name: Import game2 (headless)
+        run: |
+          "$GODOT" --headless --path game2 --import 2>&1 | tail -25 || true
+
+      - name: Export Xcode project
+        run: |
+          mkdir -p game2/build
+          "$GODOT" --headless --path game2 --export-release "iOS" "$PWD/game2/build/empire2.ipa" 2>&1 | tail -30 || true
+          find game2/build -maxdepth 2 | head -30
+
+      - name: Set display name in Info.plist
+        run: |
+          PLIST=$(find game2/build -name "*Info.plist" -not -path "*xcframework*" | head -1)
+          echo "Info.plist: $PLIST"
+          if [ -n "$PLIST" ]; then
+            /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Империя 1894 Next" "$PLIST" \
+              || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Империя 1894 Next" "$PLIST"
+          fi
+
+      - name: Export game pack (.pck)
+        run: |
+          "$GODOT" --headless --path game2 --export-pack "iOS" "$PWD/game2/build/empire2.pck" 2>&1 | tail -8 || true
+          ls -la game2/build/empire2.pck
+
+      - name: Repair project.pbxproj (strip unsubstituted placeholders)
+        run: |
+          PBX=$(find game2/build -name "project.pbxproj" | head -1)
+          echo "pbxproj: $PBX"
+          test -n "$PBX"
+          sed -i '' -e '/\$additional_pbx/d' -e '/\$pbx_embeded_frameworks/d' -e '/\$pbx_launch/d' "$PBX" || true
+          grep -n '\$[a-z_]' "$PBX" | head -5 || echo "плейсхолдеров не осталось"
+
+      - name: Build unsigned .app with xcodebuild
+        run: |
+          XCPROJ=$(find game2/build -name "*.xcodeproj" -maxdepth 2 | head -1)
+          echo "Xcode project: $XCPROJ"
+          test -n "$XCPROJ"
+          SCHEME=$(xcodebuild -project "$XCPROJ" -list | awk '/Schemes:/{getline; gsub(/^ +/,""); print; exit}')
+          echo "Scheme: $SCHEME"
+          xcodebuild \
+            -project "$XCPROJ" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            ARCHS=arm64 \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CONFIGURATION_BUILD_DIR="$PWD/appbuild" \
+            build
+          ls appbuild
+
+      - name: Package IPA (embed .pck)
+        run: |
+          APP=$(find appbuild -maxdepth 1 -name "*.app" | head -1)
+          test -n "$APP"
+          cp game2/build/empire2.pck "$APP/"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry Empire1894Next-unsigned.ipa Payload
+          ls -la Empire1894Next-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Empire1894Next-IPA
+          path: Empire1894Next-unsigned.ipa
+          retention-days: 30
