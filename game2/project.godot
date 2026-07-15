@@ -1,4 +1,5 @@
 ; Империя 1894 — пересоздание (Ф0). База: наш форк Godot 4.5.2 (Metal/MetalFX).
+; Сборка: шаблоны run#3 (с MoltenVK.xcframework).
 config_version=5
 
 [application]
