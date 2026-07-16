@@ -195,14 +195,13 @@ func _on_ground(x: float, z: float, y_off: float) -> Vector3:
 	return Vector3(x, h + y_off, z)
 
 func _build_camera() -> void:
-	var cam := Camera3D.new()
+	var cam := FreeCamera.new()
 	cam.fov = 50.0
-	cam.far = 4000.0                                # видим весь километровый рельеф
+	cam.terrain = _terrain
 	add_child(cam)
-	# установочный обзор с возвышенности: весь километровый рельеф + озёрная впадина
-	var eye := _on_ground(-150.0, 120.0, 34.0)
-	var target := Vector3(150.0, -8.0, -150.0)       # диагональ к озеру
-	cam.look_at_from_position(eye, target, Vector3.UP)
+	# старт: над землёй у объектов-эталонов, смотрим на них — сразу можно крутить/летать
+	var eye := _on_ground(18.0, 22.0, 6.0)
+	cam.setup(eye, _on_ground(0.0, 0.0, 0.8))
 	cam.current = true
 
 func _build_post_overlay() -> void:
