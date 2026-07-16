@@ -102,16 +102,52 @@ func _compute_and_apply() -> void:
 	var up := Vector3.UP if absf(to_sun.y) < 0.98 else Vector3(0, 0, 1)
 	sun.look_at_from_position(Vector3.ZERO, -to_sun, up)
 
-	# энергия/цвет по высоте: ночь → сумерки → тёплый низкий → нейтральный высокий
+	# цвет и энергия — ФИЗИЧЕСКИ: чернотельник 5778 K через атмосферу.
 	if sun_elevation_deg <= -0.83:                 # Солнце за горизонтом (с рефракцией)
 		sun.light_energy = 0.0
 		sun.shadow_enabled = false
 	else:
 		sun.shadow_enabled = true
-		var warm := clampf(sun_elevation_deg / 12.0, 0.0, 1.0)     # 0 у горизонта, 1 выше 12°
-		sun.light_color = Color(1.0, 0.55, 0.30).lerp(Color(1.0, 0.97, 0.92), warm)
-		var day := clampf(sun_elevation_deg / 25.0, 0.0, 1.0)
-		sun.light_energy = lerp(0.4, 3.8, day)
+		var ce := _physical_sun(sun_elevation_deg)
+		sun.light_color = ce[0]
+		sun.light_energy = ce[1]
+		sun_color_temp_k = ce[2]
+
+# --- физический свет Солнца: экстинкция Рэлея по воздушной массе ---
+# Спектр Солнца (5778 K) фильтруется атмосферой; путь через воздух (airmass)
+# растёт к горизонту → синее рассеивается сильнее → закат краснеет и слабеет.
+const BB_5778 := Vector3(1.0, 0.985, 0.955)   # чернотельник 5778 K в sRGB (норм.)
+# зенитные оптические толщи Рэлея по каналам (R~615, G~535, B~465 нм)
+const TAU_R := 0.061
+const TAU_G := 0.113
+const TAU_B := 0.209
+const SUN_BASE_ENERGY := 4.3
+var sun_color_temp_k: float = 5778.0
+
+func _airmass(elev_deg: float) -> float:
+	# Kasten–Young (1989): реальный путь через атмосферу, растёт к горизонту
+	var h := maxf(elev_deg, -0.5)
+	return 1.0 / (sin(h * RAD) + 0.50572 * pow(h + 6.07995, -1.6364))
+
+func _physical_sun(elev_deg: float) -> Array:
+	var am := _airmass(elev_deg)
+	# прямой луч = спектр Солнца × пропускание атмосферы по каналам
+	var beam := Vector3(
+		BB_5778.x * exp(-TAU_R * am),
+		BB_5778.y * exp(-TAU_G * am),
+		BB_5778.z * exp(-TAU_B * am))
+	# яркость луча относительно высокого солнца (airmass≈1.15 при ~60°)
+	var lum := 0.2126 * beam.x + 0.7152 * beam.y + 0.0722 * beam.z
+	var ref := 0.2126 * (BB_5778.x * exp(-TAU_R * 1.15)) \
+		+ 0.7152 * (BB_5778.y * exp(-TAU_G * 1.15)) \
+		+ 0.0722 * (BB_5778.z * exp(-TAU_B * 1.15))
+	var energy := clampf(SUN_BASE_ENERGY * lum / ref, 0.0, SUN_BASE_ENERGY)
+	# цвет = оттенок луча (яркость несёт энергия), ярчайший канал = 1
+	var mx := maxf(beam.x, maxf(beam.y, beam.z))
+	var col := Color(beam.x / mx, beam.y / mx, beam.z / mx)
+	# оценка цветовой температуры (для отчёта): грубо по отношению B/R
+	var ct := clampf(1800.0 + 4000.0 * (col.b / maxf(col.r, 0.001)), 1500.0, 6500.0)
+	return [col, energy, ct]
 
 func is_daytime() -> bool:
 	return sun_elevation_deg > -0.83

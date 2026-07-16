@@ -97,6 +97,7 @@ func _print_state() -> void:
 		"daytime": _clock.is_daytime(),
 		"sun_energy": snappedf(_sun.light_energy, 0.01),
 		"sun_color": [snappedf(_sun.light_color.r, 0.01), snappedf(_sun.light_color.g, 0.01), snappedf(_sun.light_color.b, 0.01)],
+		"sun_ct_k": int(_clock.sun_color_temp_k),
 		"terrain_relief_m": snappedf(r["relief_m"], 0.1),
 		"tris": r["tris"],
 		"adapter": RenderingServer.get_video_adapter_name(),
