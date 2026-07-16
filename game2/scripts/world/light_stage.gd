@@ -76,7 +76,7 @@ func _build_environment(gi: bool) -> Environment:
 	sm.mie_eccentricity = 0.8
 	sm.mie_color = Color(0.69, 0.71, 0.74)
 	sm.turbidity = 3.2                        # чище воздух → голубой верх
-	sm.sun_disk_scale = 12.0
+	sm.sun_disk_scale = 1.6                   # почти реальный угловой размер (не «луна»)
 	sm.ground_color = Color(0.20, 0.16, 0.12)
 	sm.energy_multiplier = 1.1
 	sm.use_debanding = true
@@ -116,14 +116,16 @@ func _build_environment(gi: bool) -> Environment:
 		env.glow_hdr_threshold = 1.1
 		env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
 
-	# воздушная перспектива для КМ-масштаба: очень слабая, иначе даль белеет
+	# воздушная перспектива: дальний рельеф растворяется в ЦВЕТЕ НЕБА (aerial=1),
+	# контраст тёмная-земля/светлое-небо у горизонта падает → уходит алиасинг гряд
 	env.fog_enabled = true
+	env.fog_mode = Environment.FOG_MODE_DEPTH
 	env.fog_light_color = Color(0.80, 0.84, 0.92)
-	env.fog_density = 0.0003
+	env.fog_density = 0.0016
 	env.fog_sky_affect = 0.0
-	env.fog_aerial_perspective = 0.3
-	env.fog_depth_begin = 80.0
-	env.fog_depth_end = 2600.0
+	env.fog_aerial_perspective = 1.0
+	env.fog_depth_begin = 120.0
+	env.fog_depth_end = 1400.0
 
 	# ОБЪЁМНЫЙ туман: даёт световые шахты (god-rays) — тени в солнце режут
 	# рассеяние, вперёд-рассеяние (anisotropy) тянет свет к солнцу.

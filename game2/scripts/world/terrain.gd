@@ -114,21 +114,11 @@ func _ground_color(x: float, z: float, y: float, n: Vector3) -> Color:
 		col = col.lerp(wet, clampf((WATER_LEVEL + 2.5 - y) / 4.0, 0.0, 1.0))
 	return col
 
-func _ground_material() -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(1, 1, 1)
-	m.vertex_color_use_as_albedo = true            # цвет по склону/высоте
-	m.uv1_scale = Vector3(1, 1, 1)
-	m.roughness = 0.95
-	var nrm := FastNoiseLite.new()
-	nrm.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-	nrm.frequency = 0.35
-	var nt := NoiseTexture2D.new()
-	nt.width = 512; nt.height = 512; nt.seamless = true
-	nt.noise = nrm; nt.as_normal_map = true; nt.bump_strength = 1.6
-	m.normal_enabled = true
-	m.normal_texture = nt
-	m.normal_scale = 0.6
+func _ground_material() -> ShaderMaterial:
+	# специальный террейн-шейдер: диффуз без зеркалки (убирает френелевскую
+	# белую кайму у горизонта), цвет из вершинного COLOR (склон/высота)
+	var m := ShaderMaterial.new()
+	m.shader = load("res://shaders/world/terrain.gdshader")
 	return m
 
 func report() -> Dictionary:
