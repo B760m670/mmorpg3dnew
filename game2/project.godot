@@ -4,7 +4,7 @@ config_version=5
 
 [application]
 config/name="Империя 1894 — пересоздание"
-run/main_scene="res://scenes/light_stage.tscn"
+run/main_scene="res://scenes/earth.tscn"
 config/features=PackedStringArray("4.5", "Forward Plus")
 
 [autoload]
