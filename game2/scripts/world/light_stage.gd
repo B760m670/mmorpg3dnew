@@ -16,6 +16,7 @@ var _hud: Label
 var _env: Environment
 var _sun: DirectionalLight3D
 var _clock: WorldClock
+var _terrain: Terrain
 
 func _ready() -> void:
 	# --- аргументы стенда (для оффлайн-аудита на CI) ---
@@ -115,17 +116,19 @@ func _build_environment(gi: bool) -> Environment:
 		env.glow_hdr_threshold = 1.1
 		env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
 
-	# лёгкая воздушная перспектива (глубина)
+	# воздушная перспектива для КМ-масштаба: очень слабая, иначе даль белеет
 	env.fog_enabled = true
-	env.fog_light_color = Color(0.78, 0.70, 0.60)
-	env.fog_density = 0.006
+	env.fog_light_color = Color(0.80, 0.84, 0.92)
+	env.fog_density = 0.0003
 	env.fog_sky_affect = 0.0
-	env.fog_aerial_perspective = 0.35
+	env.fog_aerial_perspective = 0.3
+	env.fog_depth_begin = 80.0
+	env.fog_depth_end = 2600.0
 
 	# ОБЪЁМНЫЙ туман: даёт световые шахты (god-rays) — тени в солнце режут
 	# рассеяние, вперёд-рассеяние (anisotropy) тянет свет к солнцу.
 	env.volumetric_fog_enabled = true
-	env.volumetric_fog_density = 0.012
+	env.volumetric_fog_density = 0.003
 	env.volumetric_fog_albedo = Color(0.88, 0.80, 0.68)
 	env.volumetric_fog_emission = Color(0, 0, 0)
 	env.volumetric_fog_anisotropy = 0.72          # вперёд-рассеяние → лучи
@@ -153,62 +156,53 @@ func _build_sun() -> void:
 	_clock.set_datetime_utc(2025, 6, 21, 6, 0, 0)
 	add_child(_clock)
 
-# --- PBR-земля с микрорельефом (шум как альбедо/шероховатость/нормаль) ---
+# --- НАСТОЯЩАЯ земля: рельеф Гатчины в реальном масштабе (метры) ---
 func _build_ground() -> void:
-	var mi := MeshInstance3D.new()
-	var pm := PlaneMesh.new()
-	pm.size = Vector2(48, 48)
-	pm.subdivide_width = 64
-	pm.subdivide_depth = 64
-	mi.mesh = pm
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.42, 0.36, 0.28)          # земля/пыль
-	mat.albedo_texture = _noise_tex(512, 0.02, false, 0.0)
-	mat.uv1_scale = Vector3(8, 8, 1)
-	mat.roughness = 0.95
-	mat.roughness_texture = _noise_tex(512, 0.03, false, 0.0)
-	mat.normal_enabled = true
-	mat.normal_texture = _noise_tex(512, 0.05, true, 0.9)
-	mat.normal_scale = 0.8
-	mi.mesh.surface_set_material(0, mat)
-	add_child(mi)
+	_terrain = Terrain.new()
+	add_child(_terrain)
+	_terrain.build()
 
-# --- объекты: показать отскок, цветовое бликование, контактные тени ---
+# --- объекты-эталоны масштаба: реальные размеры, стоят НА рельефе ---
 func _build_props() -> void:
-	# насыщенно-красная стена — источник цветного отскока на землю (доказ. GI)
-	var wall := MeshInstance3D.new()
-	var wb := BoxMesh.new(); wb.size = Vector3(0.4, 2.6, 5.2)
-	wall.mesh = wb
-	wall.position = Vector3(-3.8, 1.3, -0.6)
-	wall.mesh.surface_set_material(0, _lit_mat(Color(0.74, 0.10, 0.08), 0.65))
-	add_child(wall)
+	# человекоростовой столб-эталон (1.8 м) — чувство масштаба земли
+	var post := MeshInstance3D.new()
+	var pb := BoxMesh.new(); pb.size = Vector3(0.4, 1.8, 0.4)
+	post.mesh = pb
+	post.position = _on_ground(2.0, 0.0, 0.9)
+	post.mesh.surface_set_material(0, _lit_mat(Color(0.74, 0.10, 0.08), 0.6))
+	add_child(post)
 
-	# нейтральные блоки — мягкие тени и AO в стыках
-	for spec in [
-		[Vector3(2.2, 0.6, -1.5), Vector3(1.2, 1.2, 1.2), Color(0.70, 0.68, 0.64), 0.6],
-		[Vector3(3.6, 0.4, 1.2), Vector3(0.8, 0.8, 0.8), Color(0.30, 0.32, 0.36), 0.4],
-		[Vector3(0.4, 0.3, 2.4), Vector3(0.6, 0.6, 0.6), Color(0.55, 0.50, 0.40), 0.8],
-	]:
+	# нейтральные кубы 1 м — эталон и мягкие тени, сидят на земле
+	for p in [Vector2(6, -4), Vector2(-5, 5), Vector2(0, 8)]:
 		var b := MeshInstance3D.new()
-		var bm := BoxMesh.new(); bm.size = spec[1]
+		var bm := BoxMesh.new(); bm.size = Vector3(1, 1, 1)
 		b.mesh = bm
-		b.position = spec[0]
-		b.mesh.surface_set_material(0, _lit_mat(spec[2], spec[3]))
+		b.position = _on_ground(p.x, p.y, 0.5)
+		b.mesh.surface_set_material(0, _lit_mat(Color(0.68, 0.66, 0.62), 0.6))
 		add_child(b)
 
-	# фокус-сфера, диэлектрик, средняя шероховатость
+	# сфера-эталон радиусом 0.5 м
 	var ball := MeshInstance3D.new()
-	var sph := SphereMesh.new(); sph.radius = 0.7; sph.height = 1.4
+	var sph := SphereMesh.new(); sph.radius = 0.5; sph.height = 1.0
 	ball.mesh = sph
-	ball.position = Vector3(0.6, 0.7, 0.0)
+	ball.position = _on_ground(0.0, 0.0, 0.5)
 	ball.mesh.surface_set_material(0, _lit_mat(Color(0.80, 0.78, 0.74), 0.35))
 	add_child(ball)
 
+## позиция на поверхности рельефа + смещение вверх (полувысота объекта)
+func _on_ground(x: float, z: float, y_off: float) -> Vector3:
+	var h := _terrain.height(x, z) if _terrain != null else 0.0
+	return Vector3(x, h + y_off, z)
+
 func _build_camera() -> void:
 	var cam := Camera3D.new()
-	cam.fov = 46.0
+	cam.fov = 50.0
+	cam.far = 4000.0                                # видим весь километровый рельеф
 	add_child(cam)
-	cam.look_at_from_position(Vector3(5.4, 2.3, 6.2), Vector3(0.4, 0.9, 0.0), Vector3.UP)
+	# установочный обзор с возвышенности: весь километровый рельеф + озёрная впадина
+	var eye := _on_ground(-150.0, 120.0, 34.0)
+	var target := Vector3(150.0, -8.0, -150.0)       # диагональ к озеру
+	cam.look_at_from_position(eye, target, Vector3.UP)
 	cam.current = true
 
 func _build_post_overlay() -> void:
@@ -280,8 +274,9 @@ func _update_hud() -> void:
 	var mode := _scaling_mode_name(vp)
 	var mfx := "ВКЛ" if mode.begins_with("MetalFX") else "нет"
 	var gi_on := ENABLE_GI and not bool(_hud.get_meta("gi_off", false)) and _env.sdfgi_enabled
-	_hud.text = "Ф1 · СВЕТ · Godot 4.5.2 (форк) · Metal\n" \
+	_hud.text = "Ф3 · ЗЕМЛЯ+СВЕТ · Godot 4.5.2 (форк) · Metal\n" \
 		+ "GPU: %s\n" % RenderingServer.get_video_adapter_name() \
+		+ _terrain_line() \
 		+ "Небо: физ.атмосфера   Туман(объём/god-rays): %s\n" % (
 			"ВКЛ" if _env.volumetric_fog_enabled else "выкл") \
 		+ "GI(SDFGI): %s   SSAO: %s   Glow: %s   пост: %s\n" % [
@@ -292,6 +287,13 @@ func _update_hud() -> void:
 		+ "MetalFX: %s (%s)  3D %d×%d → %d×%d\n" % [mfx, mode, inr.x, inr.y, int(out.x), int(out.y)] \
 		+ _clock_line() \
 		+ "FPS: %d / лимит %d" % [Engine.get_frames_per_second(), Engine.max_fps]
+
+func _terrain_line() -> String:
+	if _terrain == null:
+		return ""
+	var r := _terrain.report()
+	return "Земля: %.0f×%.0f м (реальный масштаб) · рельеф %.1f м · △ %d\n" % [
+		r["size_m"], r["size_m"], r["relief_m"], r["tris"]]
 
 func _clock_line() -> String:
 	if _clock == null:
