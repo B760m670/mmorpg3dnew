@@ -114,6 +114,58 @@ jobs:
           zip -qry Empire1894Next-unsigned.ipa Payload
           ls -la Empire1894Next-unsigned.ipa
 
+      - name: Generate LiveContainer source.json
+        run: |
+          SIZE=$(stat -f%z Empire1894Next-unsigned.ipa)
+          DATE=$(date -u +%Y-%m-%d)
+          VERSION="0.1.${{ github.run_number }}"
+          REL="https://github.com/${{ github.repository }}/releases/download/next-latest"
+          cat > source.json <<EOF
+          {
+            "name": "Империя 1894 Next",
+            "identifier": "com.romanov.source.next",
+            "subtitle": "Форк-движок Metal — кино-платформа",
+            "apps": [
+              {
+                "name": "Империя 1894 Next",
+                "bundleIdentifier": "com.romanov.empire1894.next",
+                "developerName": "Romanov Project",
+                "subtitle": "Godot 4.5.2 форк · нативный Metal · MetalFX",
+                "version": "$VERSION",
+                "versionDate": "$DATE",
+                "versionDescription": "Стенд Ф0 на собственном форке движка.",
+                "downloadURL": "$REL/Empire1894Next-unsigned.ipa",
+                "localizedDescription": "Пересоздание игры на форке Godot 4.5.2 с нативным Metal и MetalFX.",
+                "tintColor": "1D4E3B",
+                "size": $SIZE,
+                "versions": [
+                  {
+                    "version": "$VERSION",
+                    "date": "$DATE",
+                    "size": $SIZE,
+                    "downloadURL": "$REL/Empire1894Next-unsigned.ipa",
+                    "localizedDescription": "Стенд Ф0 (форк-движок)."
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
+          cat source.json
+
+      - name: Publish release "next-latest"
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: next-latest
+          name: "Империя 1894 Next — последняя сборка (форк-движок)"
+          body: |
+            Пересоздание на форке Godot 4.5.2 (нативный Metal + MetalFX).
+            LiveContainer-источник:
+            `https://github.com/${{ github.repository }}/releases/download/next-latest/source.json`
+          files: |
+            Empire1894Next-unsigned.ipa
+            source.json
+
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:

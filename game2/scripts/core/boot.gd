@@ -1,7 +1,10 @@
 extends Node3D
-## Загрузочная сцена Ф0: минимальный стенд, доказывающий конвейер —
-## Forward+, Compositor с кино-постом, масштабирование (MetalFX на Apple).
-## Это НЕ мир и НЕ меню — только проверяемый фундамент.
+## Ф0 boot — МИНИМАЛЬНЫЙ безопасный старт (изоляция краша на устройстве).
+## Только Forward+ на нативном Metal: небо, солнце, сфера, пол, надпись.
+## Кино-пост (Compositor) и MetalFX временно ВЫКЛЮЧЕНЫ — вернём по одному,
+## как только подтвердится, что платформа стартует на iPhone.
+
+const SAFE_MODE := true   # true = без компоситора и MetalFX
 
 func _ready() -> void:
 	var env := Environment.new()
@@ -15,12 +18,12 @@ func _ready() -> void:
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
 
-	var comp := Compositor.new()
-	comp.compositor_effects = [CinemaPost.new()]
-
 	var we := WorldEnvironment.new()
 	we.environment = env
-	we.compositor = comp
+	if not SAFE_MODE:
+		var comp := Compositor.new()
+		comp.compositor_effects = [CinemaPost.new()]
+		we.compositor = comp
 	add_child(we)
 
 	var sun := DirectionalLight3D.new()
@@ -28,7 +31,6 @@ func _ready() -> void:
 	sun.light_energy = 2.0
 	add_child(sun)
 
-	# проверочная геометрия: сфера с шахматкой roughness (виден пост и свет)
 	var ball := MeshInstance3D.new()
 	var sph := SphereMesh.new(); sph.radius = 0.5; sph.height = 1.0
 	ball.mesh = sph
@@ -53,12 +55,21 @@ func _ready() -> void:
 	add_child(cam)
 	cam.current = true
 
-	Core.apply_scaling(get_viewport())
-	print("[boot] Ф0 стенд поднят: Forward+, Compositor(CinemaPost), scaling=", Core.scaling)
+	# крупная надпись-подтверждение, что рендер жив
+	var layer := CanvasLayer.new()
+	add_child(layer)
+	var lbl := Label.new()
+	lbl.text = "game2 · Godot 4.5.2 (форк) · Metal\nстенд запущен"
+	lbl.add_theme_font_size_override("font_size", 42)
+	lbl.position = Vector2(60, 80)
+	layer.add_child(lbl)
+
+	if not SAFE_MODE:
+		Core.apply_scaling(get_viewport())
+	print("[boot] Ф0 стенд, SAFE_MODE=", SAFE_MODE, " driver=", RenderingServer.get_video_adapter_name())
 
 	if "--boot-shot" in OS.get_cmdline_user_args():
 		await get_tree().create_timer(1.0).timeout
-		var img := get_viewport().get_texture().get_image()
-		img.save_png("/tmp/claude-0/-home-user-mmorpg3dnew/45dce9e0-e4bb-550f-b915-c58072470dda/scratchpad/boot_shot.png")
+		get_viewport().get_texture().get_image().save_png("/tmp/claude-0/-home-user-mmorpg3dnew/45dce9e0-e4bb-550f-b915-c58072470dda/scratchpad/boot_shot.png")
 		print("[boot] shot saved")
 		get_tree().quit()
