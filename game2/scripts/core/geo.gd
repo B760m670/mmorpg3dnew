@@ -17,10 +17,6 @@ const MEAN_R := 6371008.7714                # средний радиус, м
 const RAD := PI / 180.0
 const DEG := 180.0 / PI
 
-# опорная точка контента (позже) — Гатчина, Дворец
-const GATCHINA_LAT := 59.5648
-const GATCHINA_LON := 30.1282
-
 ## геодезические (широта,долгота в °, высота в м) → ECEF (X,Y,Z, м)
 func geodetic_to_ecef(lat_deg: float, lon_deg: float, h: float) -> Array:
 	var lat := lat_deg * RAD
@@ -105,11 +101,11 @@ func run_self_test() -> void:
 		"OK" if absf(po[2] - B) < 1e-3 else "ПРОВАЛ")
 	ok = ok and absf(eq[0] - A) < 1e-3 and absf(po[2] - B) < 1e-3
 
-	# 2) круговой обход геодезические→ECEF→геодезические (Гатчина)
-	var e := geodetic_to_ecef(GATCHINA_LAT, GATCHINA_LON, 137.0)
+	# 2) круговой обход геодезические→ECEF→геодезические (нейтральная точка)
+	var e := geodetic_to_ecef(48.0, 11.0, 137.0)
 	var g := ecef_to_geodetic(e[0], e[1], e[2])
-	var derr := maxf(absf(g[0] - GATCHINA_LAT), absf(g[1] - GATCHINA_LON))
-	print("  Гатчина ECEF = (%.1f, %.1f, %.1f) м" % [e[0], e[1], e[2]])
+	var derr := maxf(absf(g[0] - 48.0), absf(g[1] - 11.0))
+	print("  точка(48,11,137) ECEF = (%.1f, %.1f, %.1f) м" % [e[0], e[1], e[2]])
 	print("  обратно = (%.7f°, %.7f°, %.2f м)  ошибка=%.4f н°  %s" % [
 		g[0], g[1], g[2], derr * 1e9, "OK" if derr < 1e-7 else "ПРОВАЛ"])
 	ok = ok and derr < 1e-7
@@ -120,9 +116,9 @@ func run_self_test() -> void:
 		vd, absf(vd - 54972.271) * 1000.0, "OK" if absf(vd - 54972.271) < 0.005 else "ПРОВАЛ"])
 	ok = ok and absf(vd - 54972.271) < 0.005
 
-	# 4) реальное расстояние Гатчина→Санкт-Петербург (Дворцовая пл. 59.9386,30.3159)
-	var sp := vincenty_distance(GATCHINA_LAT, GATCHINA_LON, 59.9386, 30.3159)
-	print("  Гатчина→Петербург = %.0f м (~42–45 км по факту)" % sp)
+	# 4) известное расстояние Лондон→Париж (~343.9 км)
+	var lp := vincenty_distance(51.5074, -0.1278, 48.8566, 2.3522)
+	print("  Лондон→Париж = %.0f м (~344 км по факту)" % lp)
 
 	# 5) длина экватора и горизонт
 	print("  длина экватора 2πa = %.0f м (реальность 40075017 м)" % (TAU * A))

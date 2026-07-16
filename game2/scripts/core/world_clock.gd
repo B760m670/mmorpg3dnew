@@ -6,12 +6,13 @@ extends Node
 ## DirectionalLight + физическое небо. День/ночь/золотой час/длина дня/сезоны
 ## рождаются из реальности, а не подобраны вручную.
 ##
-## Проверка — числами: полуденная высота Солнца в Гатчине должна совпасть с
-## аналитикой (солнцестояния 53.9°/7.0°, равноденствие 30.4°). См. run_self_test().
+## Даёт направление на Солнце в ECEF (sun_ecef_direction) — это тело в
+## пространстве, не привязано к месту. Опц. широта/долгота — только для
+## наземного HUD высоты/азимута наблюдателя (по умолчанию нейтральные 0,0).
 
-@export var latitude_deg: float = 59.5648      # Гатчина
-@export var longitude_deg: float = 30.1282     # восток — положительный
-@export var tz_offset_hours: float = 3.0        # для отображения местного времени
+@export var latitude_deg: float = 0.0          # наблюдатель (нейтрально), не место контента
+@export var longitude_deg: float = 0.0
+@export var tz_offset_hours: float = 0.0        # для отображения местного времени
 @export var time_scale: float = 600.0           # 1 c реала = 600 c мира (сутки ≈ 2.4 мин)
 
 var utc_unix: float = 0.0                        # мировое время (UTC), секунды
@@ -83,7 +84,17 @@ func solar_position(unix_utc: float) -> Dictionary:
 	if ha > 0.0:
 		az = 360.0 - az
 
-	return {"elevation": elev, "azimuth": az, "declination": decl}
+	return {"elevation": elev, "azimuth": az, "declination": decl, "eot": eot}
+
+## направление НА Солнце в ECEF (единичный вектор). Подсолнечная точка:
+## широта = склонение, долгота = там, где сейчас солнечный полдень. Не зависит
+## от места наблюдателя — это положение тела относительно вращающейся Земли.
+func sun_ecef_direction(unix_utc: float) -> Vector3:
+	var s := solar_position(unix_utc)
+	var decl: float = s["declination"] * RAD
+	var minutes_utc := fposmod(unix_utc / 60.0, 1440.0)
+	var sub_lon := (720.0 - minutes_utc - float(s["eot"])) / 4.0 * RAD   # долгота полудня
+	return Vector3(cos(decl) * cos(sub_lon), cos(decl) * sin(sub_lon), sin(decl)).normalized()
 
 func _compute_and_apply() -> void:
 	var s := solar_position(utc_unix)

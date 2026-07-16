@@ -58,7 +58,7 @@ jobs:
       - name: Export Xcode project
         run: |
           mkdir -p game2/build
-          "$GODOT" --headless --path game2 --export-release "iOS" "$PWD/game2/build/empire2.ipa" 2>&1 | tail -30 || true
+          "$GODOT" --headless --path game2 --export-release "iOS" "$PWD/game2/build/world.ipa" 2>&1 | tail -30 || true
           find game2/build -maxdepth 2 | head -30
 
       - name: Set display name in Info.plist
@@ -66,14 +66,14 @@ jobs:
           PLIST=$(find game2/build -name "*Info.plist" -not -path "*xcframework*" | head -1)
           echo "Info.plist: $PLIST"
           if [ -n "$PLIST" ]; then
-            /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Империя 1894 Next" "$PLIST" \
-              || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Империя 1894 Next" "$PLIST"
+            /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Настоящий мир" "$PLIST" \
+              || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Настоящий мир" "$PLIST"
           fi
 
       - name: Export game pack (.pck)
         run: |
-          "$GODOT" --headless --path game2 --export-pack "iOS" "$PWD/game2/build/empire2.pck" 2>&1 | tail -8 || true
-          ls -la game2/build/empire2.pck
+          "$GODOT" --headless --path game2 --export-pack "iOS" "$PWD/game2/build/world.pck" 2>&1 | tail -8 || true
+          ls -la game2/build/world.pck
 
       - name: Repair project.pbxproj (strip unsubstituted placeholders)
         run: |
@@ -108,33 +108,33 @@ jobs:
         run: |
           APP=$(find appbuild -maxdepth 1 -name "*.app" | head -1)
           test -n "$APP"
-          cp game2/build/empire2.pck "$APP/"
+          cp game2/build/world.pck "$APP/"
           mkdir -p Payload
           cp -R "$APP" Payload/
-          zip -qry Empire1894Next-unsigned.ipa Payload
-          ls -la Empire1894Next-unsigned.ipa
+          zip -qry World-unsigned.ipa Payload
+          ls -la World-unsigned.ipa
 
       - name: Generate LiveContainer source.json
         run: |
-          SIZE=$(stat -f%z Empire1894Next-unsigned.ipa)
+          SIZE=$(stat -f%z World-unsigned.ipa)
           DATE=$(date -u +%Y-%m-%d)
           VERSION="0.1.${{ github.run_number }}"
           REL="https://github.com/${{ github.repository }}/releases/download/next-latest"
           cat > source.json <<EOF
           {
-            "name": "Империя 1894 Next",
-            "identifier": "com.romanov.source.next",
+            "name": "Настоящий мир",
+            "identifier": "com.realworld.source",
             "subtitle": "Форк-движок Metal — кино-платформа",
             "apps": [
               {
-                "name": "Империя 1894 Next",
-                "bundleIdentifier": "com.romanov.empire1894.next",
-                "developerName": "Romanov Project",
+                "name": "Настоящий мир",
+                "bundleIdentifier": "com.realworld.app",
+                "developerName": "Real World",
                 "subtitle": "Godot 4.5.2 форк · нативный Metal · MetalFX",
                 "version": "$VERSION",
                 "versionDate": "$DATE",
                 "versionDescription": "Стенд Ф0 на собственном форке движка.",
-                "downloadURL": "$REL/Empire1894Next-unsigned.ipa",
+                "downloadURL": "$REL/World-unsigned.ipa",
                 "localizedDescription": "Пересоздание игры на форке Godot 4.5.2 с нативным Metal и MetalFX.",
                 "tintColor": "1D4E3B",
                 "size": $SIZE,
@@ -143,7 +143,7 @@ jobs:
                     "version": "$VERSION",
                     "date": "$DATE",
                     "size": $SIZE,
-                    "downloadURL": "$REL/Empire1894Next-unsigned.ipa",
+                    "downloadURL": "$REL/World-unsigned.ipa",
                     "localizedDescription": "Стенд Ф0 (форк-движок)."
                   }
                 ]
@@ -157,18 +157,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: next-latest
-          name: "Империя 1894 Next — последняя сборка (форк-движок)"
+          name: "Настоящий мир — последняя сборка (форк-движок)"
           body: |
             Пересоздание на форке Godot 4.5.2 (нативный Metal + MetalFX).
             LiveContainer-источник:
             `https://github.com/${{ github.repository }}/releases/download/next-latest/source.json`
           files: |
-            Empire1894Next-unsigned.ipa
+            World-unsigned.ipa
             source.json
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Empire1894Next-IPA
-          path: Empire1894Next-unsigned.ipa
+          name: World-IPA
+          path: World-unsigned.ipa
           retention-days: 30
