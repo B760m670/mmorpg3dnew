@@ -56,16 +56,22 @@ func _build_environment(gi: bool) -> Environment:
 	var env := Environment.new()
 	env.background_mode = Environment.BG_SKY
 	var sky := Sky.new()
-	var sm := ProceduralSkyMaterial.new()
-	# золотой час: глубокий зенит, тёплый горизонт
-	sm.sky_top_color = Color(0.18, 0.34, 0.58)
-	sm.sky_horizon_color = Color(0.82, 0.66, 0.50)
-	sm.sky_curve = 0.12
-	sm.ground_horizon_color = Color(0.60, 0.50, 0.42)
-	sm.ground_bottom_color = Color(0.14, 0.12, 0.10)
-	sm.sun_angle_max = 6.0
-	sm.sky_energy_multiplier = 1.15
+	# ФИЗИЧЕСКОЕ небо: рэлеевское+ми рассеяние (не градиент). Золотой час
+	# получается сам из низкого солнца — длинный путь через атмосферу краснит.
+	var sm := PhysicalSkyMaterial.new()
+	sm.rayleigh_coefficient = 2.6            # синева зенита
+	sm.rayleigh_color = Color(0.26, 0.41, 0.58)
+	sm.mie_coefficient = 0.005               # меньше мути
+	sm.mie_eccentricity = 0.8
+	sm.mie_color = Color(0.69, 0.71, 0.74)
+	sm.turbidity = 3.2                        # чище воздух → голубой верх
+	sm.sun_disk_scale = 12.0
+	sm.ground_color = Color(0.20, 0.16, 0.12)
+	sm.energy_multiplier = 1.1
+	sm.use_debanding = true
 	sky.sky_material = sm
+	sky.process_mode = Sky.PROCESS_MODE_REALTIME   # без чёрного экрана до схождения
+	sky.radiance_size = Sky.RADIANCE_SIZE_256       # realtime-небо требует 256
 	env.sky = sky
 
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
@@ -79,10 +85,10 @@ func _build_environment(gi: bool) -> Environment:
 	if gi:
 		env.sdfgi_enabled = true
 		env.sdfgi_use_occlusion = true
-		env.sdfgi_bounce_feedback = 0.6
+		env.sdfgi_bounce_feedback = 0.85       # больше отскоков → заметнее цвет
 		env.sdfgi_cascades = 4
 		env.sdfgi_min_cell_size = 0.06
-		env.sdfgi_energy = 1.15
+		env.sdfgi_energy = 1.6                  # усиленный вклад GI
 		env.sdfgi_y_scale = Environment.SDFGI_Y_SCALE_75_PERCENT
 
 	if ENABLE_SSAO:
@@ -102,9 +108,21 @@ func _build_environment(gi: bool) -> Environment:
 	# лёгкая воздушная перспектива (глубина)
 	env.fog_enabled = true
 	env.fog_light_color = Color(0.78, 0.70, 0.60)
-	env.fog_density = 0.008
+	env.fog_density = 0.006
 	env.fog_sky_affect = 0.0
 	env.fog_aerial_perspective = 0.35
+
+	# ОБЪЁМНЫЙ туман: даёт световые шахты (god-rays) — тени в солнце режут
+	# рассеяние, вперёд-рассеяние (anisotropy) тянет свет к солнцу.
+	env.volumetric_fog_enabled = true
+	env.volumetric_fog_density = 0.012
+	env.volumetric_fog_albedo = Color(0.88, 0.80, 0.68)
+	env.volumetric_fog_emission = Color(0, 0, 0)
+	env.volumetric_fog_anisotropy = 0.72          # вперёд-рассеяние → лучи
+	env.volumetric_fog_gi_inject = 1.0            # GI подсвечивает туман
+	env.volumetric_fog_ambient_inject = 0.4
+	env.volumetric_fog_length = 96.0
+	env.volumetric_fog_detail_spread = 2.0
 	return env
 
 # --- солнце золотого часа с мягкой полутенью ---
@@ -249,6 +267,8 @@ func _update_hud() -> void:
 	var gi_on := ENABLE_GI and not bool(_hud.get_meta("gi_off", false)) and _env.sdfgi_enabled
 	_hud.text = "Ф1 · СВЕТ · Godot 4.5.2 (форк) · Metal\n" \
 		+ "GPU: %s\n" % RenderingServer.get_video_adapter_name() \
+		+ "Небо: физ.атмосфера   Туман(объём/god-rays): %s\n" % (
+			"ВКЛ" if _env.volumetric_fog_enabled else "выкл") \
 		+ "GI(SDFGI): %s   SSAO: %s   Glow: %s   пост: %s\n" % [
 			"ВКЛ" if gi_on else "выкл",
 			"ВКЛ" if ENABLE_SSAO else "выкл",
