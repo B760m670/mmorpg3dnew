@@ -14,11 +14,21 @@ const ENABLE_GLOW := true        # мягкое свечение в бликах
 var _post_mat: ShaderMaterial
 var _hud: Label
 var _env: Environment
+var _sun: DirectionalLight3D
+var _clock: WorldClock
 
 func _ready() -> void:
 	# --- аргументы стенда (для оффлайн-аудита на CI) ---
 	var args := OS.get_cmdline_user_args()
 	var gi_off := "--gi-off" in args
+
+	# самопроверка астрономии числами и выход
+	if "--astro-test" in args:
+		var wc := WorldClock.new()
+		add_child(wc)
+		wc.run_self_test()
+		get_tree().quit()
+		return
 
 	_env = _build_environment(ENABLE_GI and not gi_off)
 	var we := WorldEnvironment.new()
@@ -127,16 +137,21 @@ func _build_environment(gi: bool) -> Environment:
 
 # --- солнце золотого часа с мягкой полутенью ---
 func _build_sun() -> void:
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-18.0, -52.0, 0.0)   # низко над горизонтом
-	sun.light_color = Color(1.0, 0.83, 0.62)            # тёплый ключ
-	sun.light_energy = 3.6
-	sun.shadow_enabled = true
-	sun.light_angular_distance = 1.4                    # диаметр диска → полутень
-	sun.shadow_blur = 1.2
-	sun.directional_shadow_max_distance = 80.0
-	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
-	add_child(sun)
+	# Солнце: параметры тени задаём тут, а НАПРАВЛЕНИЕ/ЦВЕТ/ЭНЕРГИЮ ведёт
+	# WorldClock из настоящей астрономии.
+	_sun = DirectionalLight3D.new()
+	_sun.shadow_enabled = true
+	_sun.light_angular_distance = 1.4                   # диаметр диска → полутень
+	_sun.shadow_blur = 1.2
+	_sun.directional_shadow_max_distance = 90.0
+	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+	add_child(_sun)
+
+	_clock = WorldClock.new()
+	_clock.sun = _sun
+	# старт: летнее утро над Гатчиной, ясный фронтальный свет (местное 09:00 → UTC 06:00)
+	_clock.set_datetime_utc(2025, 6, 21, 6, 0, 0)
+	add_child(_clock)
 
 # --- PBR-земля с микрорельефом (шум как альбедо/шероховатость/нормаль) ---
 func _build_ground() -> void:
@@ -275,7 +290,16 @@ func _update_hud() -> void:
 			"ВКЛ" if ENABLE_GLOW else "выкл",
 			"ВКЛ" if ENABLE_POST else "выкл"] \
 		+ "MetalFX: %s (%s)  3D %d×%d → %d×%d\n" % [mfx, mode, inr.x, inr.y, int(out.x), int(out.y)] \
+		+ _clock_line() \
 		+ "FPS: %d / лимит %d" % [Engine.get_frames_per_second(), Engine.max_fps]
+
+func _clock_line() -> String:
+	if _clock == null:
+		return ""
+	return "Гатчина %s · %s · Солнце %.1f°/аз %.0f° · ×%s\n" % [
+		_clock.local_time_string(),
+		"ДЕНЬ" if _clock.is_daytime() else "НОЧЬ",
+		_clock.sun_elevation_deg, _clock.sun_azimuth_deg, str(_clock.time_scale)]
 
 func _process(_delta: float) -> void:
 	if _post_mat != null:
