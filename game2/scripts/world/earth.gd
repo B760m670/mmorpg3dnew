@@ -9,11 +9,12 @@ extends Node3D
 
 const ANCHOR_LAT := Geo.GATCHINA_LAT
 const ANCHOR_LON := Geo.GATCHINA_LON
-const CAP_HALF_DEG := 2.6          # полуразмер участка по широте/долготе (~290 км)
-const CAP_RES := 160               # разбиение сетки участка
-const START_ALT := 4000.0          # старт камеры над якорем, м (видно кривизну)
+const LON_SEG := 512               # разбиение планеты по долготе
+const LAT_SEG := 256               # по широте
+const START_ALT := 12000000.0      # старт камеры: 12000 км — видно всю Землю (шар)
 
 var _geo := Geo.new()
+var _dem := Dem.new()
 var _anchor := Vector3.ZERO        # ECEF якоря (через double-массив ниже)
 var _ax := 0.0
 var _ay := 0.0
@@ -49,7 +50,7 @@ func _ready() -> void:
 			out = "/tmp/claude-0/-home-user-mmorpg3dnew/45dce9e0-e4bb-550f-b915-c58072470dda/scratchpad/earth.png"
 		var alt := _arg_val(args, "--alt")
 		if alt != "":
-			_cam.setup(Vector3(0, float(alt), 0), Vector3(0, float(alt) - 300.0, -8000.0))
+			_cam.setup(Vector3(0, float(alt), 0), _ecef_to_render(0.0, 0.0, 0.0))
 		await get_tree().create_timer(2.0).timeout
 		get_viewport().get_texture().get_image().save_png(out)
 		print("[earth] shot -> ", out)
@@ -94,30 +95,44 @@ func _surface_normal(lat_deg: float, lon_deg: float) -> Vector3:
 	var u := _up.x * nx + _up.y * ny + _up.z * nz
 	return Vector3(e, u, -n).normalized()
 
-# --- поверхность эллипсоида (участок вокруг якоря) ---
+# --- ВСЯ планета: реальные высоты (DEM), суша/океан по данным ---
 func _build_surface() -> void:
+	_dem.load_global()
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var row := CAP_RES + 1
-	for j in range(row):
+	var row := LON_SEG + 1
+	for j in range(LAT_SEG + 1):
+		var lat := -89.0 + 178.0 * float(j) / float(LAT_SEG)
 		for i in range(row):
-			var lat := ANCHOR_LAT - CAP_HALF_DEG + 2.0 * CAP_HALF_DEG * float(j) / float(CAP_RES)
-			var lon := ANCHOR_LON - CAP_HALF_DEG + 2.0 * CAP_HALF_DEG * float(i) / float(CAP_RES)
+			var lon := -180.0 + 360.0 * float(i) / float(LON_SEG)
+			var h := _dem.elevation(lat, lon)          # НАСТОЯЩАЯ высота
+			st.set_color(_elev_color(h))
 			st.set_normal(_surface_normal(lat, lon))
-			st.add_vertex(_geo_to_render(lat, lon, 0.0))
-	for j in range(CAP_RES):
-		for i in range(CAP_RES):
+			st.add_vertex(_geo_to_render(lat, lon, h))
+	for j in range(LAT_SEG):
+		for i in range(LON_SEG):
 			var a := j * row + i
 			st.add_index(a); st.add_index(a + row); st.add_index(a + 1)
 			st.add_index(a + 1); st.add_index(a + row); st.add_index(a + row + 1)
 	var mi := MeshInstance3D.new()
 	mi.mesh = st.commit()
 	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(0.20, 0.30, 0.16)   # суша (без данных — временно однотонно)
+	m.vertex_color_use_as_albedo = true
 	m.roughness = 1.0
 	m.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
 	mi.material_override = m
 	add_child(mi)
+
+## цвет поверхности по реальной высоте: океан (глубина) / суша / снег
+func _elev_color(h: float) -> Color:
+	if h < 0.0:
+		var d := clampf(-h / 6000.0, 0.0, 1.0)
+		return Color(0.09, 0.22, 0.38).lerp(Color(0.01, 0.04, 0.13), d)
+	var t := clampf(h / 2500.0, 0.0, 1.0)
+	var c := Color(0.22, 0.36, 0.16).lerp(Color(0.42, 0.34, 0.22), t)
+	if h > 3000.0:
+		c = c.lerp(Color(0.92, 0.93, 0.95), clampf((h - 3000.0) / 2500.0, 0.0, 1.0))
+	return c
 
 func _build_environment() -> void:
 	var env := Environment.new()
@@ -139,13 +154,7 @@ func _build_environment() -> void:
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
 	env.tonemap_white = 6.0
-	# воздушная перспектива к горизонту (сотни км)
-	env.fog_enabled = true
-	env.fog_mode = Environment.FOG_MODE_DEPTH
-	env.fog_aerial_perspective = 1.0
-	env.fog_density = 0.00008
-	env.fog_depth_begin = 4000.0
-	env.fog_depth_end = 260000.0
+	env.fog_enabled = false            # вид из космоса — приземная дымка не нужна
 	var we := WorldEnvironment.new()
 	we.environment = env
 	add_child(we)
@@ -165,11 +174,13 @@ func _build_sun() -> void:
 
 func _build_camera() -> void:
 	_cam = FreeCamera.new()
-	_cam.fov = 55.0
-	_cam.cloud_level = 120000.0             # выше — можно подняться до края атмосферы
+	_cam.fov = 60.0
+	_cam.near = 50.0
+	_cam.far = 5.0e7                        # планета простирается на миллионы метров
+	_cam.cloud_level = 30000000.0          # можно отлететь и увидеть всю Землю
 	add_child(_cam)
-	# старт: над якорем, смотрим к горизонту (видно кривизну)
-	_cam.setup(Vector3(0, START_ALT, 0), Vector3(0, START_ALT - 500.0, -20000.0))
+	# старт: высоко над Гатчиной, взгляд в ЦЕНТР Земли — виден весь шар
+	_cam.setup(Vector3(0, START_ALT, 0), _ecef_to_render(0.0, 0.0, 0.0))
 	_cam.current = true
 
 func _build_hud() -> void:
@@ -188,9 +199,10 @@ func _process(_delta: float) -> void:
 		return
 	var alt := _cam.position.y
 	var horizon := _geo.horizon_distance(maxf(alt, 1.0))
-	_hud.text = "Земля E2 · WGS84 · настоящий масштаб · Metal\n" \
+	_hud.text = "Земля E3 · WGS84 · РЕАЛЬНЫЕ высоты (DEM %s) · Metal\n" % (
+			"загружен" if _dem.loaded else "НЕТ") \
 		+ "якорь: Гатчина %.4f°N %.4f°E (ECEF, double)\n" % [ANCHOR_LAT, ANCHOR_LON] \
-		+ "высота камеры: %.0f м   горизонт: %.0f км (расчёт)\n" % [alt, horizon / 1000.0] \
+		+ "высота камеры: %.1f км   горизонт: %.0f км\n" % [alt / 1000.0, horizon / 1000.0] \
 		+ "%s · Солнце %.1f°/аз %.0f°\n" % [_clock.local_time_string(),
 			_clock.sun_elevation_deg, _clock.sun_azimuth_deg] \
 		+ "FPS: %d" % Engine.get_frames_per_second()

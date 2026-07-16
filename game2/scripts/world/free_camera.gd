@@ -36,7 +36,8 @@ func setup(pos: Vector3, look_at_target: Vector3) -> void:
 	_apply_orientation()
 
 func _ready() -> void:
-	far = 8000.0
+	if far < 8000.0:            # не переопределять, если сцена уже задала дальность
+		far = 8000.0
 
 func _apply_orientation() -> void:
 	_pitch = clampf(_pitch, deg_to_rad(-89.0), deg_to_rad(89.0))
