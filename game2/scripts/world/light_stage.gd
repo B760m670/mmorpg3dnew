@@ -17,6 +17,7 @@ var _env: Environment
 var _sun: DirectionalLight3D
 var _clock: WorldClock
 var _terrain: Terrain
+var _cam: FreeCamera
 
 func _ready() -> void:
 	# --- аргументы стенда (для оффлайн-аудита на CI) ---
@@ -48,19 +49,59 @@ func _ready() -> void:
 	if ENABLE_METALFX:
 		Core.apply_scaling(get_viewport())
 
+	# --- режим ИНСПЕКЦИИ (я «вхожу в мир»): задать время/камеру, выгрузить числа ---
+	var inspect := "--inspect" in args
+	var utc := _arg_val(args, "--utc")           # "HH:MM"
+	if utc != "":
+		var pp := utc.split(":")
+		_clock.set_datetime_utc(2025, 6, 21, int(pp[0]), int(pp[1]) if pp.size() > 1 else 0, 0)
+		_clock.time_scale = 0.0                   # фиксируем момент детерминированно
+		_clock._compute_and_apply()
+	var cp := _arg_val(args, "--campos")
+	var cl := _arg_val(args, "--camlook")
+	if cp != "" and cl != "":
+		_cam.setup(_vec3(cp), _vec3(cl))
+
 	print("[light] Ф1 свет, gi=", ENABLE_GI and not gi_off,
 		" adapter=", RenderingServer.get_video_adapter_name())
 
-	# офлайн-снимок для аудита: ждём схождения SDFGI
-	if "--boot-shot" in args:
-		var out_path := "/tmp/claude-0/-home-user-mmorpg3dnew/45dce9e0-e4bb-550f-b915-c58072470dda/scratchpad/light_shot.png"
-		for a in args:
-			if a.begins_with("--out="):
-				out_path = a.substr(6)
-		await get_tree().create_timer(3.5).timeout
+	# офлайн-снимок / инспекция: ждём схождения и выгружаем состояние
+	if "--boot-shot" in args or inspect:
+		var out_path := _arg_val(args, "--out")
+		if out_path == "":
+			out_path = "/tmp/claude-0/-home-user-mmorpg3dnew/45dce9e0-e4bb-550f-b915-c58072470dda/scratchpad/light_shot.png"
+		await get_tree().create_timer(2.5 if inspect else 3.5).timeout
+		if inspect:
+			_print_state()
 		get_viewport().get_texture().get_image().save_png(out_path)
 		print("[light] shot saved -> ", out_path)
 		get_tree().quit()
+
+func _arg_val(args: PackedStringArray, key: String) -> String:
+	for a in args:
+		if a.begins_with(key + "="):
+			return a.substr(key.length() + 1)
+	return ""
+
+func _vec3(s: String) -> Vector3:
+	var p := s.split(",")
+	return Vector3(float(p[0]), float(p[1]), float(p[2]))
+
+## выгрузка состояния мира числами (машинно-читаемо) — «взгляд изнутри»
+func _print_state() -> void:
+	var r := _terrain.report()
+	var d := {
+		"local": _clock.local_time_string(),
+		"sun_el": snappedf(_clock.sun_elevation_deg, 0.1),
+		"sun_az": snappedf(_clock.sun_azimuth_deg, 0.1),
+		"daytime": _clock.is_daytime(),
+		"sun_energy": snappedf(_sun.light_energy, 0.01),
+		"sun_color": [snappedf(_sun.light_color.r, 0.01), snappedf(_sun.light_color.g, 0.01), snappedf(_sun.light_color.b, 0.01)],
+		"terrain_relief_m": snappedf(r["relief_m"], 0.1),
+		"tris": r["tris"],
+		"adapter": RenderingServer.get_video_adapter_name(),
+	}
+	print("STATE ", JSON.stringify(d))
 
 # --- окружение: небо, тонемап, GI, SSAO, glow ---
 func _build_environment(gi: bool) -> Environment:
@@ -197,14 +238,14 @@ func _on_ground(x: float, z: float, y_off: float) -> Vector3:
 	return Vector3(x, h + y_off, z)
 
 func _build_camera() -> void:
-	var cam := FreeCamera.new()
-	cam.fov = 50.0
-	cam.terrain = _terrain
-	add_child(cam)
+	_cam = FreeCamera.new()
+	_cam.fov = 50.0
+	_cam.terrain = _terrain
+	add_child(_cam)
 	# старт: над землёй у объектов-эталонов, смотрим на них — сразу можно крутить/летать
 	var eye := _on_ground(18.0, 22.0, 6.0)
-	cam.setup(eye, _on_ground(0.0, 0.0, 0.8))
-	cam.current = true
+	_cam.setup(eye, _on_ground(0.0, 0.0, 0.8))
+	_cam.current = true
 
 func _build_post_overlay() -> void:
 	var layer := CanvasLayer.new(); layer.layer = 100
