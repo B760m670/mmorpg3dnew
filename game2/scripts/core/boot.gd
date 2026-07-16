@@ -1,10 +1,9 @@
 extends Node3D
-## Ф0 boot — МИНИМАЛЬНЫЙ безопасный старт (изоляция краша на устройстве).
-## Только Forward+ на нативном Metal: небо, солнце, сфера, пол, надпись.
-## Кино-пост (Compositor) и MetalFX временно ВЫКЛЮЧЕНЫ — вернём по одному,
-## как только подтвердится, что платформа стартует на iPhone.
+## Ф0 boot — возвращаем фичи ПО ОДНОЙ (платформа на iPhone подтверждена).
+## Слой 2: кино-пост (compute-компоситор) ВКЛ. MetalFX пока ВЫКЛ — отдельным шагом.
 
-const SAFE_MODE := true   # true = без компоситора и MetalFX
+const ENABLE_POST := true      # кино-пост: зерно/виньетка/хроматика (compute)
+const ENABLE_METALFX := false  # MetalFX-апскейл (следующий слой)
 
 func _ready() -> void:
 	var env := Environment.new()
@@ -20,7 +19,7 @@ func _ready() -> void:
 
 	var we := WorldEnvironment.new()
 	we.environment = env
-	if not SAFE_MODE:
+	if ENABLE_POST:
 		var comp := Compositor.new()
 		comp.compositor_effects = [CinemaPost.new()]
 		we.compositor = comp
@@ -59,14 +58,16 @@ func _ready() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
 	var lbl := Label.new()
-	lbl.text = "game2 · Godot 4.5.2 (форк) · Metal\nстенд запущен"
-	lbl.add_theme_font_size_override("font_size", 42)
+	lbl.text = "game2 · Godot 4.5.2 (форк) · Metal\nкино-пост: %s   MetalFX: %s" % [
+		"ВКЛ" if ENABLE_POST else "выкл", "ВКЛ" if ENABLE_METALFX else "выкл"]
+	lbl.add_theme_font_size_override("font_size", 40)
 	lbl.position = Vector2(60, 80)
 	layer.add_child(lbl)
 
-	if not SAFE_MODE:
+	if ENABLE_METALFX:
 		Core.apply_scaling(get_viewport())
-	print("[boot] Ф0 стенд, SAFE_MODE=", SAFE_MODE, " driver=", RenderingServer.get_video_adapter_name())
+	print("[boot] Ф0, post=", ENABLE_POST, " metalfx=", ENABLE_METALFX,
+		" adapter=", RenderingServer.get_video_adapter_name())
 
 	if "--boot-shot" in OS.get_cmdline_user_args():
 		await get_tree().create_timer(1.0).timeout
