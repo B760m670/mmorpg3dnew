@@ -16,9 +16,8 @@ extends Camera3D
 @export var rot_sensitivity: float = 0.0026        # рад/пиксель (поворот за пальцем)
 @export var pan_gain: float = 0.0016               # перенос: доля от высоты на пиксель
 @export var dolly_gain: float = 0.0022             # зум: доля от высоты на пиксель
-@export var cloud_level: float = 2500.0            # потолок высоты/дальности
+@export var cloud_level: float = 2500.0            # потолок высоты (пока хватит)
 @export var min_speed_alt: float = 3.0             # мин. «высота» для скорости у земли
-@export var planet_radius: float = 0.0             # >0: радиальный режим (тело в космосе)
 
 var terrain: Terrain                               # для высоты земли (скорость/потолок)
 
@@ -37,8 +36,7 @@ func setup(pos: Vector3, look_at_target: Vector3) -> void:
 	_apply_orientation()
 
 func _ready() -> void:
-	if far < 8000.0:            # не переопределять, если сцена уже задала дальность
-		far = 8000.0
+	far = 8000.0
 
 func _apply_orientation() -> void:
 	_pitch = clampf(_pitch, deg_to_rad(-89.0), deg_to_rad(89.0))
@@ -48,10 +46,9 @@ func _ground_y(x: float, z: float) -> float:
 	return terrain.height(x, z) if terrain != null else 0.0
 
 func _speed_scale() -> float:
-	# скорость ∝ высоте над поверхностью (у поверхности медленно, далеко быстро)
-	if planet_radius > 0.0:
-		return maxf(position.length() - planet_radius, min_speed_alt)
-	return maxf(position.y - _ground_y(position.x, position.z), min_speed_alt)
+	# скорость ∝ высоте над землёй (у земли медленно, высоко быстро)
+	var alt := position.y - _ground_y(position.x, position.z)
+	return maxf(alt, min_speed_alt)
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
@@ -100,11 +97,5 @@ func _two_finger() -> void:
 	position += b.y * d_centroid.y * pan_gain * s
 
 func _process(_delta: float) -> void:
-	if planet_radius > 0.0:
-		# радиальный режим: не нырять под поверхность, не улетать за предел
-		var dist := clampf(position.length(), planet_radius + 1.5, cloud_level)
-		if position.length() > 0.001:
-			position = position.normalized() * dist
-		return
 	var gy := _ground_y(position.x, position.z)
 	position.y = clampf(position.y, gy + 1.5, cloud_level)

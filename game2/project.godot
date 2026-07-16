@@ -1,9 +1,10 @@
-; Настоящий мир — реальная Вселенная (content-free основа). Форк Godot 4.5.2.
+; Империя 1894 — пересоздание (Ф0). База: наш форк Godot 4.5.2 (Metal/MetalFX).
+; Сборка: шаблоны run#3 (с MoltenVK.xcframework).
 config_version=5
 
 [application]
-config/name="Настоящий мир"
-run/main_scene="res://scenes/earth.tscn"
+config/name="Империя 1894 — пересоздание"
+run/main_scene="res://scenes/light_stage.tscn"
 config/features=PackedStringArray("4.5", "Forward Plus")
 
 [autoload]

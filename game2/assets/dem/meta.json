@@ -1,9 +1,0 @@
-{
-  "format": "raw int16 little-endian, row-major",
-  "width": 1024,
-  "height": 1024,
-  "projection": "web_mercator",
-  "lat_limit": 85.0511,
-  "unit": "meters (sea level = 0)",
-  "sample": "x=(lon+180)/360*W ; y=(1-asinh(tan(lat))/pi)/2*H"
-}

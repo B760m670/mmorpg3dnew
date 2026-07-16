@@ -32,12 +32,6 @@ func _ready() -> void:
 		get_tree().quit()
 		return
 
-	# научная проверка геодезии Земли (E1) и выход
-	if "--geo-test" in args:
-		Geo.new().run_self_test()
-		get_tree().quit()
-		return
-
 	_env = _build_environment(ENABLE_GI and not gi_off)
 	var we := WorldEnvironment.new()
 	we.environment = _env
