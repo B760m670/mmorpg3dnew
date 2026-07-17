@@ -1,0 +1,21 @@
+{
+ "anchor": {
+  "lat": 59.56344564515459,
+  "lon": 30.10748733007132,
+  "source": "Overture 2026-06-17 (здание «Большой Гатчинский дворец», centroid)"
+ },
+ "axes": "x=восток (м), y=север (м); в движке z=-y",
+ "layers": [
+  "water.json",
+  "landuse.json",
+  "roads.json",
+  "buildings.json"
+ ],
+ "simplify_tol_m": {
+  "water": 1.5,
+  "landuse": 3.0,
+  "roads": 2.0,
+  "buildings": 1.0
+ },
+ "radius_m": 6500.0
+}

@@ -24,8 +24,8 @@ ASSET_DIR = os.path.join(ROOT, "game2", "assets", "dem")
 TILE = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
 TMP = "/tmp/claude-0/-home-user-mmorpg3dnew/45dce9e0-e4bb-550f-b915-c58072470dda/scratchpad/dem_tiles"
 
-CENTER_LAT = 59.5648            # центр территории (дворец) — контент-координата,
-CENTER_LON = 30.1282            # применяется ТОЛЬКО в конвейере данных
+CENTER_LAT = 59.563446           # Гатчинский дворец (centroid из Overture)
+CENTER_LON = 30.107487
 Z = 13                          # ~9.7 м/пиксель на этой широте
 GRID_N = 513                    # узлов на сторону
 STEP_M = 32.0                   # шаг сетки, м  → территория 16384 м

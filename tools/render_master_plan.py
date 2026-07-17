@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Карта генплана: зоны/вода/дороги/ориентиры поверх РЕАЛЬНОГО рельефа Гатчины.
+"""Карта генплана v2 — РЕАЛЬНЫЕ контуры Гатчины поверх реального рельефа.
 
-Фон — теневая отмывка (hillshade) нашей сетки высот (реальные измерения),
-поверх — слои из game2/data/master_plan.json. Выход — PNG на утверждение.
+Слои из game2/data/real (Overture): землепользование, вода, дороги/ж-д,
+здания; ориентиры из game2/data/master_plan.json. Фон — теневая отмывка DEM.
 
 Запуск: python3 tools/render_master_plan.py
 """
@@ -14,113 +14,125 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 PLAN = json.load(open(os.path.join(ROOT, "game2", "data", "master_plan.json")))
+REAL = os.path.join(ROOT, "game2", "data", "real")
 DEM = os.path.join(ROOT, "game2", "assets", "dem", "gatchina_cm.bin")
 OUT = "/tmp/claude-0/-home-user-mmorpg3dnew/45dce9e0-e4bb-550f-b915-c58072470dda/scratchpad/master_plan.png"
 
-# охват карты (м от дворца) и размер изображения
-EXT = 4200                    # -EXT..+EXT по обеим осям
-PX = 1500
-S = PX / (2.0 * EXT)          # пикселей на метр
+EXT = 3000                    # показываем центр: -EXT..+EXT м
+PX = 1600
+S = PX / (2.0 * EXT)
 
 FONT = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 22)
 FONT_S = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 17)
 FONT_B = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 26)
 
+LU_FILL = {
+    "park": (90, 155, 80, 110), "garden": (90, 155, 80, 110),
+    "grass": (120, 170, 95, 90), "meadow": (140, 180, 100, 90),
+    "recreation_ground": (110, 165, 90, 90),
+    "forest": (45, 110, 55, 120), "wood": (45, 110, 55, 120),
+    "farmland": (200, 195, 120, 70), "orchard": (150, 180, 90, 80),
+    "cemetery": (120, 140, 110, 80), "residential": (205, 170, 120, 55),
+    "military": (170, 150, 130, 60),
+}
+
 
 def to_px(p):
-    """(восток, север) м → пиксели (x вправо, y вниз)"""
     return (PX / 2 + p[0] * S, PX / 2 - p[1] * S)
 
 
 def hillshade_bg():
     g = np.fromfile(DEM, dtype="<i2").reshape(513, 513) / 100.0
-    # окно ±EXT из сетки (шаг 32 м, центр 256)
     n = int(EXT / 32)
     c = 256
     sub = g[c - n:c + n + 1, c - n:c + n + 1]
     gy, gx = np.gradient(sub, 32.0)
-    # свет с северо-запада, высота 45°
     az, alt = np.radians(315.0), np.radians(45.0)
-    slope = np.arctan(np.hypot(gx, gy))
+    slope = np.arctan(np.hypot(gx, gy) * 2.0)
     aspect = np.arctan2(-gx, gy)
     hs = np.sin(alt) * np.cos(slope) + np.cos(alt) * np.sin(slope) * np.cos(az - aspect)
     hs = np.clip((hs + 1) / 2, 0, 1)
-    # высотная подкраска: ниже — темнее и зеленее, выше — светлее и суше
     t = (sub - sub.min()) / max(1e-6, (sub.max() - sub.min()))
-    base = np.stack([
-        168 + 50 * t, 172 + 40 * t, 150 + 34 * t], axis=-1)
-    img = (base * (0.55 + 0.45 * hs[..., None])).astype(np.uint8)
+    base = np.stack([190 + 40 * t, 188 + 34 * t, 172 + 30 * t], axis=-1)
+    img = (base * (0.6 + 0.4 * hs[..., None])).astype(np.uint8)
     return Image.fromarray(img).resize((PX, PX), Image.BILINEAR)
 
 
-ZONE_STYLE = {
-    "парк": ((70, 140, 60, 70), (40, 110, 40)),
-    "лес": ((30, 100, 40, 80), (20, 80, 30)),
-    "город": ((200, 150, 90, 60), (150, 100, 50)),
-    "поля": ((190, 190, 110, 40), (150, 150, 80)),
-}
+def draw_polys(d, rec, fill, outline=None, width=1):
+    for poly in rec.get("polys", []):
+        for k, ring in enumerate(poly):
+            if len(ring) < 3:
+                continue
+            f = (0, 0, 0, 0) if k > 0 else fill      # дырки не заливаем
+            d.polygon([to_px(p) for p in ring], fill=f,
+                      outline=outline, width=width)
 
 
 def main():
-    img = hillshade_bg().convert("RGB")
+    img = hillshade_bg().convert("RGBA")
     ov = Image.new("RGBA", (PX, PX), (0, 0, 0, 0))
     d = ImageDraw.Draw(ov)
 
-    for z in PLAN["zones"]:
-        fill, outline = ZONE_STYLE.get(z["kind"], ((120, 120, 120, 40), (90, 90, 90)))
-        d.polygon([to_px(p) for p in z["poly"]], fill=fill, outline=outline, width=3)
+    landuse = json.load(open(os.path.join(REAL, "landuse.json")))
+    for z in landuse:
+        f = LU_FILL.get(z["class"])
+        if f:
+            draw_polys(d, z, f)
 
-    for r in PLAN["roads"]:
-        pts = [to_px(p) for p in r["line"]]
-        w = max(2, int(r["width_m"] * S * 2.2))
-        col = (70, 70, 75, 230) if r["kind"] == "железная дорога" else (235, 220, 180, 235)
-        d.line(pts, fill=col, width=w, joint="curve")
-
-    for w in PLAN["water"]:
-        if "poly" in w:
-            d.polygon([to_px(p) for p in w["poly"]], fill=(60, 110, 170, 200),
-                      outline=(30, 70, 120), width=3)
+    roads = json.load(open(os.path.join(REAL, "roads.json")))
+    order = {"rail": 0, "residential": 1, "unclassified": 1, "living_street": 1,
+             "pedestrian": 1, "tertiary": 2, "secondary": 3, "primary": 4,
+             "trunk": 5, "motorway": 5}
+    for r in sorted(roads, key=lambda r: order.get(r["class"] if r["kind"] == "road" else "rail", 1)):
+        if r["kind"] == "rail":
+            col, w = (60, 55, 60, 235), 4
+        elif r["class"] in ("primary", "trunk", "motorway"):
+            col, w = (250, 235, 190, 245), 7
+        elif r["class"] in ("secondary", "tertiary"):
+            col, w = (250, 245, 215, 235), 5
         else:
-            d.line([to_px(p) for p in w["line"]],
-                   fill=(60, 110, 170, 220), width=max(3, int(w["width_m"] * S * 2)),
-                   joint="curve")
+            col, w = (255, 255, 255, 200), 3
+        for line in r.get("lines", []):
+            d.line([to_px(p) for p in line], fill=col, width=w, joint="curve")
 
-    img = Image.alpha_composite(img.convert("RGBA"), ov)
+    water = json.load(open(os.path.join(REAL, "water.json")))
+    for w in water:
+        draw_polys(d, w, (70, 125, 185, 235), outline=(35, 80, 130), width=2)
+        for line in w.get("lines", []):
+            d.line([to_px(p) for p in line], fill=(70, 125, 185, 235), width=4, joint="curve")
+
+    buildings = json.load(open(os.path.join(REAL, "buildings.json")))
+    for b in buildings:
+        draw_polys(d, b, (95, 85, 80, 190))
+
+    img = Image.alpha_composite(img, ov)
     d = ImageDraw.Draw(img)
 
     for lm in PLAN["landmarks"]:
         x, y = to_px(lm["pos"])
-        d.ellipse([x - 7, y - 7, x + 7, y + 7], fill=(180, 30, 30), outline=(255, 255, 255), width=2)
-        d.text((x + 11, y - 13), lm["name"], font=FONT_S, fill=(30, 20, 15),
-               stroke_width=3, stroke_fill=(255, 255, 255))
+        d.ellipse([x - 8, y - 8, x + 8, y + 8], fill=(185, 25, 25),
+                  outline=(255, 255, 255), width=3)
+        d.text((x + 12, y - 14), lm["name"], font=FONT, fill=(35, 15, 10),
+               stroke_width=4, stroke_fill=(255, 255, 255))
 
-    # подписи зон и воды
-    for z in PLAN["zones"]:
-        cx = sum(p[0] for p in z["poly"]) / len(z["poly"])
-        cy = sum(p[1] for p in z["poly"]) / len(z["poly"])
-        x, y = to_px((cx, cy))
-        d.text((x, y), z["name"], font=FONT, fill=(25, 45, 25), anchor="mm",
-               stroke_width=3, stroke_fill=(240, 245, 235))
-    for w in PLAN["water"]:
-        pts = w.get("poly") or w["line"]
-        cx = sum(p[0] for p in pts) / len(pts)
-        cy = sum(p[1] for p in pts) / len(pts)
-        x, y = to_px((cx, cy))
-        d.text((x, y + 14), w["name"], font=FONT_S, fill=(15, 40, 80), anchor="mm",
-               stroke_width=3, stroke_fill=(235, 240, 250))
+    # подписи крупных озёр
+    lake_labels = {"Белое озеро", "Серебряное озеро", "Чёрное озеро", "Колпанское озеро"}
+    for w in water:
+        if w.get("name") in lake_labels and w.get("polys"):
+            ring = w["polys"][0][0]
+            cx = sum(p[0] for p in ring) / len(ring)
+            cy = sum(p[1] for p in ring) / len(ring)
+            d.text(to_px((cx, cy)), w["name"], font=FONT_S, fill=(10, 35, 75),
+                   anchor="mm", stroke_width=3, stroke_fill=(225, 235, 250))
 
-    # заголовок, легенда, масштаб
-    d.text((20, 14), PLAN["title"], font=FONT_B, fill=(20, 15, 10),
-           stroke_width=4, stroke_fill=(255, 255, 255))
-    d.text((20, 50), PLAN["status"], font=FONT_S, fill=(90, 30, 30),
-           stroke_width=3, stroke_fill=(255, 255, 255))
-    # шкала 1 км
+    d.text((20, 14), PLAN["title"] + " — контуры РЕАЛЬНЫЕ", font=FONT_B,
+           fill=(20, 15, 10), stroke_width=4, stroke_fill=(255, 255, 255))
+    d.text((20, 50), "вода/парки/улицы/здания: Overture Maps (реальные данные) · фон: реальный рельеф",
+           font=FONT_S, fill=(70, 45, 25), stroke_width=3, stroke_fill=(255, 255, 255))
     x0, y0 = 30, PX - 40
     d.line([(x0, y0), (x0 + 1000 * S, y0)], fill=(0, 0, 0), width=5)
-    d.text((x0 + 500 * S, y0 - 12), "1 км", font=FONT_S, fill=(0, 0, 0), anchor="mm",
-           stroke_width=3, stroke_fill=(255, 255, 255))
-    d.text((PX - 30, PX - 40), "фон: реальный рельеф (DEM), отмывка", font=FONT_S,
-           fill=(60, 60, 60), anchor="rm", stroke_width=3, stroke_fill=(255, 255, 255))
+    d.text((x0 + 500 * S, y0 - 12), "1 км", font=FONT_S, fill=(0, 0, 0),
+           anchor="mm", stroke_width=3, stroke_fill=(255, 255, 255))
 
     img.convert("RGB").save(OUT)
     print("карта:", OUT)
