@@ -177,6 +177,29 @@ func _ground_material() -> ShaderMaterial:
 	m.set_shader_parameter("zone_size_m", world_size_m)
 	return m
 
+## ФИЗИКА: рельеф — твёрдое тело (HeightMapShape по той же height()).
+## С этого момента мир не декорация: по нему ходят тела, на него падают предметы.
+func build_collision() -> void:
+	var n := chunks_per_side * chunk_res + 1        # 385 — как сетка рендера
+	var cell := world_size_m / float(n - 1)
+	var heights := PackedFloat32Array()
+	heights.resize(n * n)
+	var half := world_size_m * 0.5
+	for j in range(n):
+		for i in range(n):
+			heights[j * n + i] = height(-half + i * cell, -half + j * cell)
+	var shape := HeightMapShape3D.new()
+	shape.map_width = n
+	shape.map_depth = n
+	shape.map_data = heights
+	var cs := CollisionShape3D.new()
+	cs.shape = shape
+	cs.scale = Vector3(cell, 1.0, cell)             # ячейка сетки → метры
+	var body := StaticBody3D.new()
+	body.add_child(cs)
+	add_child(body)
+	print("[terrain] коллизия: heightmap %d² (ячейка %.0f м) — рельеф стал твёрдым" % [n, cell])
+
 func report() -> Dictionary:
 	return {"size_m": world_size_m, "relief_m": max_h - min_h,
 		"min_h": min_h, "max_h": max_h, "tris": tri_count,

@@ -212,6 +212,7 @@ func _build_ground() -> void:
 	_terrain = Terrain.new()
 	add_child(_terrain)
 	_terrain.build()
+	_terrain.build_collision()          # рельеф — твёрдое тело (физика)
 
 # --- вода по реальным контурам (шаг 1 генплана) ---
 var _water: WaterBodies
@@ -241,18 +242,29 @@ func _build_props() -> void:
 		b.mesh.surface_set_material(0, _lit_mat(Color(0.68, 0.66, 0.62), 0.6))
 		add_child(b)
 
-	# сфера-эталон радиусом 0.5 м
-	var ball := MeshInstance3D.new()
+	# сфера-эталон — ПЕРВЫЙ ФИЗИЧЕСКИЙ ОБЪЕКТ: настоящее тело (масса, гравитация,
+	# столкновения) — падает, катится по склону, её можно толкнуть телом
+	var ball := RigidBody3D.new()
+	ball.mass = 12.0
+	var bcol := CollisionShape3D.new()
+	var bsh := SphereShape3D.new(); bsh.radius = 0.5
+	bcol.shape = bsh
+	ball.add_child(bcol)
+	var bmesh := MeshInstance3D.new()
 	var sph := SphereMesh.new(); sph.radius = 0.5; sph.height = 1.0
-	ball.mesh = sph
-	ball.position = _on_ground(0.0, 0.0, 0.5)
-	ball.mesh.surface_set_material(0, _lit_mat(Color(0.80, 0.78, 0.74), 0.35))
+	bmesh.mesh = sph
+	bmesh.mesh.surface_set_material(0, _lit_mat(Color(0.80, 0.78, 0.74), 0.35))
+	ball.add_child(bmesh)
+	ball.position = _on_ground(0.0, 0.0, 1.5)   # уронится и уляжется сам — физика
 	add_child(ball)
 
 ## позиция на поверхности рельефа + смещение вверх (полувысота объекта)
 func _on_ground(x: float, z: float, y_off: float) -> Vector3:
 	var h := _terrain.height(x, z) if _terrain != null else 0.0
 	return Vector3(x, h + y_off, z)
+
+var _walker: Walker
+var _walk_active := false
 
 func _build_camera() -> void:
 	_cam = FreeCamera.new()
@@ -264,6 +276,26 @@ func _build_camera() -> void:
 	var eye := _on_ground(18.0, 22.0, 6.0)
 	_cam.setup(eye, _on_ground(0.0, 0.0, 0.8))
 	_cam.current = true
+	_cam.toggle_requested.connect(_toggle_walk)
+
+	_walker = Walker.new()
+	add_child(_walker)
+	_walker.deactivate()
+	_walker.toggle_requested.connect(_toggle_walk)
+
+func _toggle_walk() -> void:
+	_walk_active = not _walk_active
+	if _walk_active:
+		# спуститься телом на землю под камерой
+		var gp := _cam.position
+		var gy := _terrain.height(gp.x, gp.z)
+		_cam.set_process_input(false)
+		_walker.activate(Vector3(gp.x, gy + 0.3, gp.z), _cam.yaw())
+	else:
+		_walker.deactivate()
+		_cam.position = _walker.global_position + Vector3(0, 25.0, 0)
+		_cam.current = true
+		_cam.set_process_input(true)
 
 func _build_post_overlay() -> void:
 	var layer := CanvasLayer.new(); layer.layer = 100
@@ -348,7 +380,7 @@ func _update_hud() -> void:
 		+ _clock_line() \
 		+ "FPS: %d / лимит %d · режим: %s (двойной тап — сменить)" % [
 			Engine.get_frames_per_second(), Engine.max_fps,
-			"ПЕШЕХОД" if _cam != null and _cam.mode == "walk" else "ПОЛЁТ"]
+			"ПЕШЕХОД·физика" if _walk_active else "ПОЛЁТ"]
 
 func _terrain_line() -> String:
 	if _terrain == null:
