@@ -146,26 +146,35 @@ func _build_chunk_mesh(ox: float, oz: float, size: float, res: int) -> ArrayMesh
 			tri_count += 2
 	return st.commit()
 
-## цвет земли по склону и НАСТОЯЩЕЙ высоте: трава на пологом, грунт на склонах,
-## сырой тёмный в низинах (озёрные котловины реального рельефа)
+## атрибуты рельефа в вершинном COLOR: r=крутизна, g=низина(сырость), b=шум.
+## Итоговый цвет собирает террейн-шейдер: тон зоны (реальное землепользование)
+## + эти атрибуты.
 func _ground_color(x: float, z: float, y: float, n: Vector3) -> Color:
-	var grass := Color(0.24, 0.32, 0.14)
-	var earth := Color(0.32, 0.25, 0.16)
-	var wet := Color(0.15, 0.18, 0.15)
 	var slope := clampf((1.0 - n.y) * 3.5, 0.0, 1.0)
-	var col := grass.lerp(earth, slope)
 	var v := _ridge.get_noise_2d(x * 0.7, z * 0.7) * 0.5 + 0.5
-	col = col.lerp(col.darkened(0.18), v * 0.5)
+	var lowland := 0.0
 	if real_dem:
 		var habs := y + _h_ref
-		var lowland := clampf((abs_min + 6.0 - habs) / 6.0, 0.0, 1.0)
-		col = col.lerp(wet, lowland * 0.8)
-	return col
+		lowland = clampf((abs_min + 6.0 - habs) / 6.0, 0.0, 1.0)
+	return Color(slope, lowland, v)
+
+const ZONES_PATH := "res://assets/dem/zones_1024.bin"
+const ZONES_N := 1024
 
 func _ground_material() -> ShaderMaterial:
-	# террейн-шейдер: диффуз без зеркалки (не бликует у горизонта), цвет из вершин
+	# террейн-шейдер: зоны реального землепользования + атрибуты рельефа
 	var m := ShaderMaterial.new()
 	m.shader = load("res://shaders/world/terrain.gdshader")
+	var f := FileAccess.open(ZONES_PATH, FileAccess.READ)
+	if f != null:
+		var bytes := f.get_buffer(ZONES_N * ZONES_N)
+		var img := Image.create_from_data(ZONES_N, ZONES_N, false, Image.FORMAT_R8, bytes)
+		m.set_shader_parameter("zone_tex", ImageTexture.create_from_image(img))
+	else:
+		push_warning("[terrain] нет карты зон (%s) — вся земля будет лугом" % ZONES_PATH)
+		var img1 := Image.create(4, 4, false, Image.FORMAT_R8)
+		m.set_shader_parameter("zone_tex", ImageTexture.create_from_image(img1))
+	m.set_shader_parameter("zone_size_m", world_size_m)
 	return m
 
 func report() -> Dictionary:
