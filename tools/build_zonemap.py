@@ -49,12 +49,25 @@ def main():
     d = ImageDraw.Draw(img)
 
     landuse = json.load(open(os.path.join(REAL, "landuse.json")))
-    # порядок: сперва крупные общие (поля/лес), потом парки/город поверх
-    for target in (3, 2, 1, 4):
+    landcover = json.load(open(os.path.join(REAL, "landcover.json")))
+    # порядок: поля → кустарник → ЛЕС (land_cover: Зверинец и массивы) →
+    # парки → город → болота → вода
+    for z in landuse:
+        if CLASS_ZONE.get(z["class"]) == 3:
+            draw_layer(d, z, 3)
+    for z in landcover:
+        if z["class"] == "shrub":
+            draw_layer(d, z, 6)
+    for z in landcover:
+        if z["class"] == "forest":
+            draw_layer(d, z, 2)
+    for target in (1, 4):
         for z in landuse:
-            zid = CLASS_ZONE.get(z["class"])
-            if zid == target:
-                draw_layer(d, z, zid)
+            if CLASS_ZONE.get(z["class"]) == target:
+                draw_layer(d, z, target)
+    for z in landcover:
+        if z["class"] == "wetland":
+            draw_layer(d, z, 7)
 
     water = json.load(open(os.path.join(REAL, "water.json")))
     for w in water:
@@ -64,7 +77,8 @@ def main():
     arr.tofile(OUT)
     total = arr.size
     print("зоны:", OUT, f"({os.path.getsize(OUT)/1e6:.1f} МБ)")
-    names = {0: "луг", 1: "парк", 2: "лес", 3: "поля", 4: "город", 5: "вода"}
+    names = {0: "луг", 1: "парк", 2: "лес", 3: "поля", 4: "город", 5: "вода",
+             6: "кустарник", 7: "болото"}
     for zid, nm in names.items():
         share = (arr == zid).sum() / total * 100.0
         print("  %d %-6s %5.1f%%" % (zid, nm, share))
