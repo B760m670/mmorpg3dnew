@@ -12,7 +12,7 @@ extends Node
 @export var latitude_deg: float = 59.5648      # Гатчина
 @export var longitude_deg: float = 30.1282     # восток — положительный
 @export var tz_offset_hours: float = 3.0        # для отображения местного времени
-@export var time_scale: float = 600.0           # 1 c реала = 600 c мира (сутки ≈ 2.4 мин)
+@export var time_scale: float = 60.0            # 1 c реала = 60 c мира (сутки = 24 мин)
 
 var utc_unix: float = 0.0                        # мировое время (UTC), секунды
 var sun: DirectionalLight3D                      # ведомый источник (назначается сценой)
@@ -113,41 +113,147 @@ func _compute_and_apply() -> void:
 		sun.light_energy = ce[1]
 		sun_color_temp_k = ce[2]
 
-# --- физический свет Солнца: экстинкция Рэлея по воздушной массе ---
-# Спектр Солнца (5778 K) фильтруется атмосферой; путь через воздух (airmass)
-# растёт к горизонту → синее рассеивается сильнее → закат краснеет и слабеет.
-const BB_5778 := Vector3(1.0, 0.985, 0.955)   # чернотельник 5778 K в sRGB (норм.)
-# зенитные оптические толщи Рэлея по каналам (R~615, G~535, B~465 нм)
-const TAU_R := 0.061
-const TAU_G := 0.113
-const TAU_B := 0.209
+# --- ПОЛНАЯ СПЕКТРАЛЬНАЯ ФИЗИКА прямого солнечного луча ---
+# Спектр: закон Планка при T=5778 K, 41 отсчёт 380..780 нм.
+# Атмосфера, оптическая толща по каждой длине волны τ(λ):
+#   Рэлей: 0.008569·λ⁻⁴(1+0.0113·λ⁻²+0.00013·λ⁻⁴), λ в мкм (τ550≈0.097 — как в лит.)
+#   аэрозоль Ангстрёма: β·λ^−α (α=1.3, β=0.046 — ясный день)
+#   озон, полоса Шаппюи: пик ~602 нм, столб 0.3 атм·см
+# Пропускание T(λ)=exp(−m·τ(λ)), m — воздушная масса Kasten–Young (1989).
+# Цвет: спектр → CIE XYZ (аналитические CMF Wyman–Sloan–Shirley 2013) →
+#   линейный sRGB. Цвет. температура — McCamy (1992). Освещённость — из Y,
+#   калибровка: внеатмосферная освещённость Солнца 133.3 клк.
+# Проверка: run_spectral_test() — в вакууме конвейер обязан дать ≈5778 K.
 const SUN_BASE_ENERGY := 4.3
+const SUN_T_K := 5778.0
+const EXO_ILLUM_KLX := 133.3        # освещённость вне атмосферы, клк
+const SPEC_N := 41
+const LAM0 := 380.0
+const DLAM := 10.0
+
 var sun_color_temp_k: float = 5778.0
+var sun_direct_klx: float = 0.0      # освещённость прямым лучом (клк)
+
+var _lut_ready := false
+var _lut_col: Array[Color] = []
+var _lut_energy: PackedFloat32Array = PackedFloat32Array()
+var _lut_ct: PackedFloat32Array = PackedFloat32Array()
+var _lut_klx: PackedFloat32Array = PackedFloat32Array()
 
 func _airmass(elev_deg: float) -> float:
-	# Kasten–Young (1989): реальный путь через атмосферу, растёт к горизонту
-	var h := maxf(elev_deg, -0.5)
+	# Kasten–Young (1989): реальный путь луча через атмосферу
+	var h := maxf(elev_deg, 0.0)
 	return 1.0 / (sin(h * RAD) + 0.50572 * pow(h + 6.07995, -1.6364))
 
+func _planck(lam_nm: float) -> float:
+	# спектральная плотность излучения (относительная), T = 5778 K
+	var lam := lam_nm * 1e-9
+	return 1.0 / (pow(lam, 5.0) * (exp(0.0143877688 / (lam * SUN_T_K)) - 1.0))
+
+func _tau(lam_nm: float) -> float:
+	var um := lam_nm / 1000.0
+	var um2 := um * um
+	var rayleigh := 0.008569 / (um2 * um2) * (1.0 + 0.0113 / um2 + 0.00013 / (um2 * um2))
+	var aerosol := 0.046 * pow(um, -1.3)
+	var ozone := 0.036 * exp(-0.5 * pow((lam_nm - 602.0) / 55.0, 2.0))
+	return rayleigh + aerosol + ozone
+
+func _cmf_lobe(l: float, mu: float, s1: float, s2: float) -> float:
+	var s := s1 if l < mu else s2
+	return exp(-0.5 * pow((l - mu) / s, 2.0))
+
+func _cmf(l: float) -> Vector3:
+	# CIE 1931 2° через аналитические гауссианы (Wyman–Sloan–Shirley 2013)
+	var x := 1.056 * _cmf_lobe(l, 599.8, 37.9, 31.0) \
+		+ 0.362 * _cmf_lobe(l, 442.0, 16.0, 26.7) \
+		- 0.065 * _cmf_lobe(l, 501.1, 20.4, 26.2)
+	var y := 0.821 * _cmf_lobe(l, 568.8, 46.9, 40.5) \
+		+ 0.286 * _cmf_lobe(l, 530.9, 16.3, 31.1)
+	var z := 1.217 * _cmf_lobe(l, 437.0, 11.8, 36.0) \
+		+ 0.681 * _cmf_lobe(l, 459.0, 26.0, 13.8)
+	return Vector3(x, y, z)
+
+## интеграл спектра через атмосферу (m<0 → вакуум) → XYZ
+func _beam_xyz(m: float) -> Vector3:
+	var acc := Vector3.ZERO
+	for k in range(SPEC_N):
+		var lam := LAM0 + float(k) * DLAM
+		var s := _planck(lam)
+		if m >= 0.0:
+			s *= exp(-m * _tau(lam))
+		acc += _cmf(lam) * s
+	return acc
+
+func _xyz_to_linear_srgb(v: Vector3) -> Color:
+	var r := 3.2406 * v.x - 1.5372 * v.y - 0.4986 * v.z
+	var g := -0.9689 * v.x + 1.8758 * v.y + 0.0415 * v.z
+	var b := 0.0557 * v.x - 0.2040 * v.y + 1.0570 * v.z
+	r = maxf(r, 0.0); g = maxf(g, 0.0); b = maxf(b, 0.0)
+	var mx := maxf(r, maxf(g, b))
+	if mx <= 0.0:
+		return Color.WHITE
+	return Color(r / mx, g / mx, b / mx)
+
+func _mccamy_cct(v: Vector3) -> float:
+	var sum := v.x + v.y + v.z
+	if sum <= 0.0:
+		return 0.0
+	var x := v.x / sum
+	var y := v.y / sum
+	var n := (x - 0.3320) / (0.1858 - y)
+	return 449.0 * n * n * n + 3525.0 * n * n + 6823.3 * n + 5520.33
+
+func _ensure_lut() -> void:
+	if _lut_ready:
+		return
+	var y_vac := _beam_xyz(-1.0).y
+	var y_ref := _beam_xyz(_airmass(60.0)).y      # опорная яркость (солнце высоко)
+	_lut_col.resize(91)
+	_lut_energy.resize(91)
+	_lut_ct.resize(91)
+	_lut_klx.resize(91)
+	for e in range(91):
+		var xyz := _beam_xyz(_airmass(float(e)))
+		_lut_col[e] = _xyz_to_linear_srgb(xyz)
+		_lut_energy[e] = clampf(SUN_BASE_ENERGY * xyz.y / y_ref, 0.0, SUN_BASE_ENERGY)
+		_lut_ct[e] = _mccamy_cct(xyz)
+		_lut_klx[e] = EXO_ILLUM_KLX * xyz.y / y_vac
+	_lut_ready = true
+
 func _physical_sun(elev_deg: float) -> Array:
-	var am := _airmass(elev_deg)
-	# прямой луч = спектр Солнца × пропускание атмосферы по каналам
-	var beam := Vector3(
-		BB_5778.x * exp(-TAU_R * am),
-		BB_5778.y * exp(-TAU_G * am),
-		BB_5778.z * exp(-TAU_B * am))
-	# яркость луча относительно высокого солнца (airmass≈1.15 при ~60°)
-	var lum := 0.2126 * beam.x + 0.7152 * beam.y + 0.0722 * beam.z
-	var ref := 0.2126 * (BB_5778.x * exp(-TAU_R * 1.15)) \
-		+ 0.7152 * (BB_5778.y * exp(-TAU_G * 1.15)) \
-		+ 0.0722 * (BB_5778.z * exp(-TAU_B * 1.15))
-	var energy := clampf(SUN_BASE_ENERGY * lum / ref, 0.0, SUN_BASE_ENERGY)
-	# цвет = оттенок луча (яркость несёт энергия), ярчайший канал = 1
-	var mx := maxf(beam.x, maxf(beam.y, beam.z))
-	var col := Color(beam.x / mx, beam.y / mx, beam.z / mx)
-	# оценка цветовой температуры (для отчёта): грубо по отношению B/R
-	var ct := clampf(1800.0 + 4000.0 * (col.b / maxf(col.r, 0.001)), 1500.0, 6500.0)
+	_ensure_lut()
+	var e := clampf(elev_deg, 0.0, 90.0)
+	var i := int(floor(e))
+	var j := mini(i + 1, 90)
+	var f := e - float(i)
+	var col := _lut_col[i].lerp(_lut_col[j], f)
+	var energy := lerpf(_lut_energy[i], _lut_energy[j], f)
+	var ct := lerpf(_lut_ct[i], _lut_ct[j], f)
+	sun_direct_klx = lerpf(_lut_klx[i], _lut_klx[j], f)
 	return [col, energy, ct]
+
+## научная самопроверка спектрального конвейера — числами
+func run_spectral_test() -> void:
+	print("=== СПЕКТР-ТЕСТ: Планк 5778K × атмосфера → CIE XYZ → sRGB ===")
+	var vac := _beam_xyz(-1.0)
+	var vac_ct := _mccamy_cct(vac)
+	var ok_vac := absf(vac_ct - SUN_T_K) < 120.0
+	print("  вакуум (без атмосферы): ЦТ=%.0fK (обязано ≈5778K)  %s" % [
+		vac_ct, "OK — конвейер верен" if ok_vac else "ПРОВАЛ"])
+	_ensure_lut()
+	print("  высота☉ | возд.масса | ЦТ,K | клк | sRGB")
+	var prev_ct := 1e9
+	var mono := true
+	for e in [90, 60, 30, 20, 10, 5, 2, 1, 0]:
+		var m := _airmass(float(e))
+		var c := _lut_col[e]
+		print("  %6d° | %6.2f | %5.0f | %5.1f | (%.2f,%.2f,%.2f)" % [
+			e, m, _lut_ct[e], _lut_klx[e], c.r, c.g, c.b])
+		if _lut_ct[e] > prev_ct + 1.0:
+			mono = false
+		prev_ct = _lut_ct[e]
+	print("  ЦТ монотонно падает к горизонту: %s" % ("да" if mono else "НЕТ — ПРОВАЛ"))
+	print("  ИТОГ: %s" % ("СПЕКТР ВЕРЕН" if ok_vac and mono else "ЕСТЬ ПРОВАЛЫ"))
 
 func is_daytime() -> bool:
 	return sun_elevation_deg > -0.83

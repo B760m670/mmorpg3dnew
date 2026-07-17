@@ -24,11 +24,17 @@ func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
 	var gi_off := "--gi-off" in args
 
-	# самопроверка астрономии числами и выход
+	# самопроверки числами и выход
 	if "--astro-test" in args:
 		var wc := WorldClock.new()
 		add_child(wc)
 		wc.run_self_test()
+		get_tree().quit()
+		return
+	if "--spectral-test" in args:
+		var wc2 := WorldClock.new()
+		add_child(wc2)
+		wc2.run_spectral_test()
 		get_tree().quit()
 		return
 
@@ -345,10 +351,12 @@ func _terrain_line() -> String:
 func _clock_line() -> String:
 	if _clock == null:
 		return ""
-	return "Гатчина %s · %s · Солнце %.1f°/аз %.0f° · ×%s\n" % [
+	return "Гатчина %s · %s · Солнце %.1f°/аз %.0f° · %dK/%dклк · ×%d\n" % [
 		_clock.local_time_string(),
 		"ДЕНЬ" if _clock.is_daytime() else "НОЧЬ",
-		_clock.sun_elevation_deg, _clock.sun_azimuth_deg, str(_clock.time_scale)]
+		_clock.sun_elevation_deg, _clock.sun_azimuth_deg,
+		int(_clock.sun_color_temp_k), int(_clock.sun_direct_klx),
+		int(_clock.time_scale)]
 
 func _process(_delta: float) -> void:
 	if _post_mat != null:
