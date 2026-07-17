@@ -1,15 +1,29 @@
 class_name Terrain
 extends Node3D
-## Ф3.1 «Земля» — настоящий рельеф в РЕАЛЬНОМ масштабе (1 юнит = 1 метр).
-## Чанковый heightfield: пологая парковая равнина Гатчины с озёрной впадиной.
-## Высота задаётся аналитически (height()), нормали — точным конечным разностям,
-## поэтому объекты можно сажать ровно на поверхность. Масштаб/рельеф проверяем
-## числами (report()): протяжённость в метрах, перепад высот, число треугольников.
+## Земля игры — РЕАЛЬНЫЙ рельеф территории Гатчины (1 юнит = 1 метр).
+## Высоты — из настоящих измерений (SRTM/ASTER, terrarium z13 ≈10 м/пиксель),
+## собраны конвейером tools/fetch_dem_gatchina.py в сетку int16-см
+## (513×513 × 32 м = 16384 м; высоты 62–142 м — Гатчинская равнина).
+## Начало координат мира — центр территории (высота там = 0), сетка даёт
+## height(x,z) билинейно; поверх — микрорельеф-шум ±0.5 м как слой детализации
+## (разрешение DEM ~10 м, вблизи нужна мелкая неровность грунта).
+## Если файла данных нет — честный фолбэк на процедурный рельеф с пометкой.
 
-@export var world_size_m: float = 1024.0        # квадрат 1×1 км вокруг начала
-@export var chunks_per_side: int = 8             # 8×8 чанков → чанк 128 м
-@export var chunk_res: int = 32                  # 32 квада/чанк → шаг ~4 м
+@export var world_size_m: float = 12288.0       # территория 12.3×12.3 км
+@export var chunks_per_side: int = 12            # чанк 1024 м
+@export var chunk_res: int = 32                  # 32 квада/чанк → шаг 32 м
 @export var tile_m: float = 4.0                  # масштаб тайла материала, м
+
+const DEM_PATH := "res://assets/dem/gatchina_cm.bin"
+const DEM_N := 513
+const DEM_STEP := 32.0
+const DEM_HALF := (DEM_N - 1) * DEM_STEP * 0.5   # 8192 м
+
+var real_dem: bool = false
+var _dem: PackedByteArray
+var _h_ref: float = 0.0                          # высота центра (дворец) — ноль мира
+var abs_min: float = 0.0                         # реальные высоты территории, м
+var abs_max: float = 0.0
 
 var _noise: FastNoiseLite
 var _ridge: FastNoiseLite
@@ -17,16 +31,10 @@ var tri_count: int = 0
 var min_h: float = INF
 var max_h: float = -INF
 
-# озёрная впадина (Белое озеро Гатчины — условно)
-const LAKE_CENTER := Vector2(210.0, -150.0)
-const LAKE_RADIUS := 170.0
-const LAKE_DEPTH := 9.0
-const WATER_LEVEL := -3.0
-
 func _init() -> void:
 	_noise = FastNoiseLite.new()
 	_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-	_noise.frequency = 0.0016                     # крупные пологие холмы
+	_noise.frequency = 0.0016
 	_noise.fractal_octaves = 5
 	_noise.fractal_lacunarity = 2.1
 	_noise.fractal_gain = 0.5
@@ -34,19 +42,58 @@ func _init() -> void:
 	_ridge.noise_type = FastNoiseLite.TYPE_SIMPLEX
 	_ridge.frequency = 0.02                        # мелкая неровность грунта
 	_ridge.fractal_octaves = 3
+	_load_dem()
 
-## высота поверхности (м) в точке мира
+func _load_dem() -> void:
+	var f := FileAccess.open(DEM_PATH, FileAccess.READ)
+	if f == null:
+		push_warning("[terrain] нет данных рельефа (%s) — процедурный фолбэк" % DEM_PATH)
+		return
+	_dem = f.get_buffer(DEM_N * DEM_N * 2)
+	if _dem.size() != DEM_N * DEM_N * 2:
+		push_warning("[terrain] файл рельефа неполный — процедурный фолбэк")
+		return
+	real_dem = true
+	_h_ref = _dem_at(DEM_N / 2, DEM_N / 2)
+	abs_min = INF; abs_max = -INF
+	for k in range(0, DEM_N * DEM_N, 7):          # быстрая выборка статистики
+		var v := float(_dem.decode_s16(k * 2)) / 100.0
+		abs_min = minf(abs_min, v)
+		abs_max = maxf(abs_max, v)
+
+func _dem_at(i: int, j: int) -> float:
+	i = clampi(i, 0, DEM_N - 1)
+	j = clampi(j, 0, DEM_N - 1)
+	return float(_dem.decode_s16((j * DEM_N + i) * 2)) / 100.0
+
+## реальная высота из сетки (билинейно). x=восток, z=юг (строка 0 — север).
+func _dem_height(x: float, z: float) -> float:
+	var u := (x + DEM_HALF) / DEM_STEP
+	var v := (z + DEM_HALF) / DEM_STEP
+	var i := int(floor(u))
+	var j := int(floor(v))
+	var fx := u - float(i)
+	var fy := v - float(j)
+	var h00 := _dem_at(i, j)
+	var h10 := _dem_at(i + 1, j)
+	var h01 := _dem_at(i, j + 1)
+	var h11 := _dem_at(i + 1, j + 1)
+	return lerp(lerp(h00, h10, fx), lerp(h01, h11, fx), fy)
+
+## высота поверхности мира (м); 0 — уровень центра территории
 func height(x: float, z: float) -> float:
-	var h := _noise.get_noise_2d(x, z) * 14.0            # ±14 м крупных холмов
-	h += _noise.get_noise_2d(x * 3.7 + 100.0, z * 3.7) * 4.0   # ±4 м средних всхолмлений
-	h += _ridge.get_noise_2d(x, z) * 0.6                 # ±0.6 м микрорельеф
-	# озёрная впадина: плавное понижение к центру
-	var d := Vector2(x, z).distance_to(LAKE_CENTER)
-	h -= smoothstep(LAKE_RADIUS, LAKE_RADIUS * 0.25, d) * LAKE_DEPTH
-	return h
+	if real_dem:
+		var h := _dem_height(x, z) - _h_ref
+		h += _ridge.get_noise_2d(x, z) * 0.5       # слой детализации вблизи
+		return h
+	# фолбэк: процедурная равнина (ИМИТАЦИЯ, помечено)
+	var hp := _noise.get_noise_2d(x, z) * 14.0
+	hp += _noise.get_noise_2d(x * 3.7 + 100.0, z * 3.7) * 4.0
+	hp += _ridge.get_noise_2d(x, z) * 0.6
+	return hp
 
 func normal_at(x: float, z: float) -> Vector3:
-	var e := 1.0
+	var e := 8.0 if real_dem else 1.0              # шаг производной ~ разрешению данных
 	var hl := height(x - e, z)
 	var hr := height(x + e, z)
 	var hd := height(x, z - e)
@@ -66,9 +113,10 @@ func build() -> void:
 			mi.mesh = _build_chunk_mesh(ox, oz, chunk, chunk_res)
 			mi.material_override = mat
 			add_child(mi)
-	print("[terrain] %.0f×%.0f м, чанков %d², шаг %.1f м, перепад %.1f..%.1f м, △=%d" % [
-		world_size_m, world_size_m, chunks_per_side, chunk / float(chunk_res),
-		min_h, max_h, tri_count])
+	print("[terrain] %.0f×%.0f м, рельеф=%s, абс. высоты %.0f..%.0f м, перепад %.1f м, △=%d" % [
+		world_size_m, world_size_m,
+		"РЕАЛЬНЫЙ (Гатчина, DEM)" if real_dem else "процедурный (фолбэк!)",
+		abs_min, abs_max, max_h - min_h, tri_count])
 
 func _build_chunk_mesh(ox: float, oz: float, size: float, res: int) -> ArrayMesh:
 	var st := SurfaceTool.new()
@@ -98,29 +146,29 @@ func _build_chunk_mesh(ox: float, oz: float, size: float, res: int) -> ArrayMesh
 			tri_count += 2
 	return st.commit()
 
-## цвет земли по склону и высоте: трава на пологом, грунт на склонах,
-## сырой тёмный у озёрного дна — через вершинные цвета (без шейдера)
+## цвет земли по склону и НАСТОЯЩЕЙ высоте: трава на пологом, грунт на склонах,
+## сырой тёмный в низинах (озёрные котловины реального рельефа)
 func _ground_color(x: float, z: float, y: float, n: Vector3) -> Color:
 	var grass := Color(0.24, 0.32, 0.14)
 	var earth := Color(0.32, 0.25, 0.16)
-	var wet := Color(0.16, 0.19, 0.15)
-	var slope := clampf((1.0 - n.y) * 3.5, 0.0, 1.0)     # 0 плоско, 1 круто
+	var wet := Color(0.15, 0.18, 0.15)
+	var slope := clampf((1.0 - n.y) * 3.5, 0.0, 1.0)
 	var col := grass.lerp(earth, slope)
-	# лёгкая пятнистость травы
 	var v := _ridge.get_noise_2d(x * 0.7, z * 0.7) * 0.5 + 0.5
 	col = col.lerp(col.darkened(0.18), v * 0.5)
-	# у озёрного дна — сырой тёмный грунт
-	if y < WATER_LEVEL + 2.5:
-		col = col.lerp(wet, clampf((WATER_LEVEL + 2.5 - y) / 4.0, 0.0, 1.0))
+	if real_dem:
+		var habs := y + _h_ref
+		var lowland := clampf((abs_min + 6.0 - habs) / 6.0, 0.0, 1.0)
+		col = col.lerp(wet, lowland * 0.8)
 	return col
 
 func _ground_material() -> ShaderMaterial:
-	# специальный террейн-шейдер: диффуз без зеркалки (убирает френелевскую
-	# белую кайму у горизонта), цвет из вершинного COLOR (склон/высота)
+	# террейн-шейдер: диффуз без зеркалки (не бликует у горизонта), цвет из вершин
 	var m := ShaderMaterial.new()
 	m.shader = load("res://shaders/world/terrain.gdshader")
 	return m
 
 func report() -> Dictionary:
 	return {"size_m": world_size_m, "relief_m": max_h - min_h,
-		"min_h": min_h, "max_h": max_h, "tris": tri_count}
+		"min_h": min_h, "max_h": max_h, "tris": tri_count,
+		"real": real_dem, "abs_min": abs_min, "abs_max": abs_max}

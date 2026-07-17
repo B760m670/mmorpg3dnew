@@ -1,0 +1,10 @@
+{
+  "format": "raw int16 LE, row-major, сантиметры",
+  "grid_n": 513,
+  "step_m": 32.0,
+  "size_m": 16384.0,
+  "center_lat": 59.5648,
+  "center_lon": 30.1282,
+  "row0": "северный край; x=восток, строки к югу",
+  "source": "terrarium z13 (SRTM/ASTER), билинейно"
+}

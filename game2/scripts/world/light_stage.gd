@@ -166,8 +166,8 @@ func _build_environment(gi: bool) -> Environment:
 	env.fog_density = 0.0016
 	env.fog_sky_affect = 0.0
 	env.fog_aerial_perspective = 1.0
-	env.fog_depth_begin = 120.0
-	env.fog_depth_end = 1400.0
+	env.fog_depth_begin = 250.0
+	env.fog_depth_end = 7000.0                    # территория 12.3 км — видим даль
 
 	# ОБЪЁМНЫЙ туман: даёт световые шахты (god-rays) — тени в солнце режут
 	# рассеяние, вперёд-рассеяние (anisotropy) тянет свет к солнцу.
@@ -243,6 +243,7 @@ func _build_camera() -> void:
 	_cam.fov = 50.0
 	_cam.terrain = _terrain
 	add_child(_cam)
+	_cam.far = 22000.0                            # видеть всю территорию 12.3 км
 	# старт: над землёй у объектов-эталонов, смотрим на них — сразу можно крутить/летать
 	var eye := _on_ground(18.0, 22.0, 6.0)
 	_cam.setup(eye, _on_ground(0.0, 0.0, 0.8))
@@ -335,7 +336,10 @@ func _terrain_line() -> String:
 	if _terrain == null:
 		return ""
 	var r := _terrain.report()
-	return "Земля: %.0f×%.0f м (реальный масштаб) · рельеф %.1f м · △ %d\n" % [
+	if r["real"]:
+		return "Земля: %.1f×%.1f км · рельеф РЕАЛЬНЫЙ (Гатчина, DEM) %.0f..%.0f м · △ %d\n" % [
+			r["size_m"] / 1000.0, r["size_m"] / 1000.0, r["abs_min"], r["abs_max"], r["tris"]]
+	return "Земля: %.0f×%.0f м · рельеф ПРОЦЕДУРНЫЙ (фолбэк!) %.1f м · △ %d\n" % [
 		r["size_m"], r["size_m"], r["relief_m"], r["tris"]]
 
 func _clock_line() -> String:
