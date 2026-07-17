@@ -45,6 +45,7 @@ func _ready() -> void:
 
 	_build_sun()
 	_build_ground()
+	_build_water()
 	_build_props()
 	_build_camera()
 
@@ -212,6 +213,15 @@ func _build_ground() -> void:
 	add_child(_terrain)
 	_terrain.build()
 
+# --- вода по реальным контурам (шаг 1 генплана) ---
+var _water: WaterBodies
+
+func _build_water() -> void:
+	_water = WaterBodies.new()
+	_water.terrain = _terrain
+	add_child(_water)
+	_water.build()
+
 # --- объекты-эталоны масштаба: реальные размеры, стоят НА рельефе ---
 func _build_props() -> void:
 	# человекоростовой столб-эталон (1.8 м) — чувство масштаба земли
@@ -343,8 +353,9 @@ func _terrain_line() -> String:
 		return ""
 	var r := _terrain.report()
 	if r["real"]:
-		return "Земля: %.1f×%.1f км · рельеф РЕАЛЬНЫЙ (Гатчина, DEM) %.0f..%.0f м · △ %d\n" % [
-			r["size_m"] / 1000.0, r["size_m"] / 1000.0, r["abs_min"], r["abs_max"], r["tris"]]
+		return "Земля: %.1f×%.1f км · рельеф РЕАЛЬНЫЙ (Гатчина, DEM) %.0f..%.0f м · △ %d · вода: %d\n" % [
+			r["size_m"] / 1000.0, r["size_m"] / 1000.0, r["abs_min"], r["abs_max"], r["tris"],
+			_water.count_built if _water != null else 0]
 	return "Земля: %.0f×%.0f м · рельеф ПРОЦЕДУРНЫЙ (фолбэк!) %.1f м · △ %d\n" % [
 		r["size_m"], r["size_m"], r["relief_m"], r["tris"]]
 
