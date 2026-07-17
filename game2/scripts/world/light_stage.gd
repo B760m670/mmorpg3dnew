@@ -346,7 +346,9 @@ func _update_hud() -> void:
 			"ВКЛ" if ENABLE_POST else "выкл"] \
 		+ "MetalFX: %s (%s)  3D %d×%d → %d×%d\n" % [mfx, mode, inr.x, inr.y, int(out.x), int(out.y)] \
 		+ _clock_line() \
-		+ "FPS: %d / лимит %d" % [Engine.get_frames_per_second(), Engine.max_fps]
+		+ "FPS: %d / лимит %d · режим: %s (двойной тап — сменить)" % [
+			Engine.get_frames_per_second(), Engine.max_fps,
+			"ПЕШЕХОД" if _cam != null and _cam.mode == "walk" else "ПОЛЁТ"]
 
 func _terrain_line() -> String:
 	if _terrain == null:
