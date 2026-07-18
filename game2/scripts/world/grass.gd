@@ -26,6 +26,14 @@ const ZONES_PATH := "res://assets/dem/zones_1024.bin"
 const ZONES_N := 1024
 const SLICE_BIN := "res://assets/dem/slice_palace.bin"
 const SLICE_META := "res://assets/dem/slice_palace.json"
+# ПОЛЕ ЖИЗНИ (tools/build_lifefield.py): плотность/высота/сочность травы,
+# ВЫЧИСЛЕННЫЕ из реальных условий (влага от воды/низин, свет от склона/полога,
+# вид от land-cover) — не подобранные. Внутри среза оно ведёт посев вместо
+# захардкоженных правил: трава вырастает из условий, а не «походит» на траву.
+const LIFE_BIN := "res://assets/life/slice_lifefield.bin"
+const LIFE_META := "res://assets/life/slice_lifefield.json"
+const LIFE_DRY := Color(0.42, 0.40, 0.16)   # сухой покров (низкая сочность)
+const LIFE_WET := Color(0.16, 0.40, 0.12)   # сочный покров (высокая сочность)
 
 var terrain: Terrain
 var zone_size_m := 12288.0
@@ -37,6 +45,12 @@ var _slice_n := 0
 var _slice_cx := 0.0
 var _slice_cy := 0.0
 var _slice_half := 0.0
+var _life: PackedByteArray
+var _life_n := 0
+var _life_cx := 0.0
+var _life_cy := 0.0
+var _life_half := 0.0
+var _life_hmax := 1.3
 var _mesh: ArrayMesh
 var _mat: ShaderMaterial
 var _tiles: Dictionary = {}          # Vector2i -> {"node":..., "band":int, "n":int}
@@ -79,6 +93,7 @@ func _ready() -> void:
 		_zones = PackedByteArray()
 		push_warning("[grass] нет карты зон — вся трава по правилу луга")
 	_load_slice()
+	_load_life()
 	_mesh = _build_clump_mesh()
 	_mat = ShaderMaterial.new()
 	_mat.shader = load("res://shaders/world/grass.gdshader")
@@ -97,6 +112,35 @@ func _load_slice() -> void:
 	if _slice.size() != _slice_n * _slice_n:
 		_slice = PackedByteArray()
 		_slice_half = 0.0
+
+func _load_life() -> void:
+	var fm := FileAccess.open(LIFE_META, FileAccess.READ)
+	var fb := FileAccess.open(LIFE_BIN, FileAccess.READ)
+	if fm == null or fb == null:
+		return
+	var meta: Dictionary = JSON.parse_string(fm.get_as_text())
+	_life_n = int(meta["n"])
+	_life_cx = float(meta["cx"])
+	_life_cy = float(meta["cy"])
+	_life_half = float(meta["half_m"])
+	_life_hmax = float(meta.get("h_max_m", 1.3))
+	_life = fb.get_buffer(_life_n * _life_n * 3)
+	if _life.size() != _life_n * _life_n * 3:
+		_life = PackedByteArray()
+
+## поле жизни в точке: [плотность 0..1, высота м, сочность 0..1] или [] вне поля
+func _life_at(x: float, z: float) -> Array:
+	if _life.is_empty():
+		return []
+	var u := int((x - _life_cx + _life_half) / (2.0 * _life_half) * float(_life_n))
+	# строка 0 = север; data_y = −z
+	var v := int((_life_cy + _life_half - (-z)) / (2.0 * _life_half) * float(_life_n))
+	if u < 0 or v < 0 or u >= _life_n or v >= _life_n:
+		return []
+	var idx := (v * _life_n + u) * 3
+	return [float(_life[idx]) / 255.0,
+		float(_life[idx + 1]) / 255.0 * _life_hmax,
+		float(_life[idx + 2]) / 255.0]
 
 func _zone_at(x: float, z: float) -> int:
 	if _zones.is_empty():
@@ -217,22 +261,34 @@ func _build_tile(key: Vector2i) -> void:
 	for k in range(attempts):
 		var x := (float(key.x) + rng.randf()) * TILE_M
 		var z := (float(key.y) + rng.randf()) * TILE_M
-		var sc := _slice_at(x, z)
-		var rule := _slice_rule(sc) if sc >= 0 else _zone_rule(_zone_at(x, z))
-		if rng.randf() > float(rule[0]):
+		# источник посева: ПОЛЕ ЖИЗНИ (реальные условия), иначе — правила зоны
+		var life := _life_at(x, z)
+		var prob: float
+		var base_h: float
+		var base_col: Color
+		if not life.is_empty():
+			prob = life[0]                       # плотность из влаги/света/вида
+			base_h = life[1]                     # высота вырастает из условий
+			base_col = LIFE_DRY.lerp(LIFE_WET, life[2])   # сочность → цвет
+		else:
+			var sc := _slice_at(x, z)
+			var rule := _slice_rule(sc) if sc >= 0 else _zone_rule(_zone_at(x, z))
+			prob = float(rule[0])
+			base_h = float(rule[1])
+			base_col = rule[2]
+		if rng.randf() > prob:
 			continue
 		if terrain.normal_at(x, z).y < SLOPE_MIN_NY:
 			continue
 		var h := terrain.height(x, z)
-		var hgt := float(rule[1]) * rng.randf_range(0.72, 1.3)
+		var hgt := base_h * rng.randf_range(0.72, 1.3)
 		var wxz := rng.randf_range(0.8, 1.25)
 		var basis := Basis(Vector3.UP, rng.randf() * TAU) \
 			* Basis.from_scale(Vector3(wxz, hgt, wxz))
 		xforms.append(Transform3D(basis, Vector3(x, h, z)))
-		var c: Color = rule[2]
 		var tone := rng.randf_range(0.82, 1.14)
-		colors.append(Color(c.r * tone * rng.randf_range(0.9, 1.1),
-			c.g * tone, c.b * tone * rng.randf_range(0.9, 1.1)))
+		colors.append(Color(base_col.r * tone * rng.randf_range(0.9, 1.1),
+			base_col.g * tone, base_col.b * tone * rng.randf_range(0.9, 1.1)))
 	var node: MultiMeshInstance3D = null
 	if not xforms.is_empty():
 		var mm := MultiMesh.new()
