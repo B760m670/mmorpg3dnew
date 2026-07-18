@@ -228,10 +228,14 @@ func _height_texture() -> ImageTexture:
 	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
 
+## текстура высот — общая для клипмапа и всего, что облегает рельеф (дороги)
+var height_texture: ImageTexture
+
 func _ground_material() -> ShaderMaterial:
 	var m := ShaderMaterial.new()
 	m.shader = load("res://shaders/world/terrain.gdshader")
-	m.set_shader_parameter("height_tex", _height_texture())
+	height_texture = _height_texture()
+	m.set_shader_parameter("height_tex", height_texture)
 	m.set_shader_parameter("dem_half", DEM_HALF)
 	var f := FileAccess.open(ZONES_PATH, FileAccess.READ)
 	if f != null:

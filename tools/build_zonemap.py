@@ -30,6 +30,13 @@ CLASS_ZONE = {
     "residential": 4, "military": 4,
 }
 
+# полоса «дорога+обочины» в карте зон, м (сама лента дороги — уже, мешем)
+ROAD_HALO_M = {
+    "trunk": 16.0, "primary": 14.0, "secondary": 12.0, "tertiary": 10.0,
+    "residential": 9.0, "living_street": 9.0, "unclassified": 9.0,
+    "unknown": 8.0, "pedestrian": 5.0, "standard_gauge": 10.0,
+}
+
 
 def to_px(p):
     # данные: x=восток, y=север; строка 0 растра = северный край
@@ -69,6 +76,16 @@ def main():
         if z["class"] == "wetland":
             draw_layer(d, z, 7)
 
+    # дороги/ж-д ПОВЕРХ зон: полоса «дорога+обочина» — по ней трава не сеется,
+    # террейн красит утоптанную полосу под лентой дороги (сама лента — меш)
+    roads = json.load(open(os.path.join(REAL, "roads.json")))
+    for r in roads:
+        wpx = max(1, round(ROAD_HALO_M.get(r["class"], 8.0) / (SIZE_M / N)))
+        for line in r.get("lines", []):
+            if len(line) < 2:
+                continue
+            d.line([to_px(q) for q in line], fill=8, width=wpx, joint="curve")
+
     water = json.load(open(os.path.join(REAL, "water.json")))
     for w in water:
         draw_layer(d, w, 5)
@@ -78,7 +95,7 @@ def main():
     total = arr.size
     print("зоны:", OUT, f"({os.path.getsize(OUT)/1e6:.1f} МБ)")
     names = {0: "луг", 1: "парк", 2: "лес", 3: "поля", 4: "город", 5: "вода",
-             6: "кустарник", 7: "болото"}
+             6: "кустарник", 7: "болото", 8: "дорога"}
     for zid, nm in names.items():
         share = (arr == zid).sum() / total * 100.0
         print("  %d %-6s %5.1f%%" % (zid, nm, share))
