@@ -13,10 +13,23 @@ uniform sampler2D zone_tex : filter_nearest, repeat_disable;
 uniform float zone_size_m = 12288.0;
 uniform float wet_level = -30.0;         // мировая высота сырых низин, м
 
+// клипмап: уровень кольца этого меша (0 — центр 2 м ... 6 — кольцо 128 м)
+instance uniform float clip_level = 0.0;
+
 varying vec3 v_wpos;
 
 void vertex() {
-	v_wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	// кольцо — плоская сетка, ездит за камерой (в MODEL — снап-позиция);
+	// высота берётся здесь, mip по уровню кольца: дальняя геометрия
+	// сглаживается в самом источнике (чистый горизонт по построению)
+	vec3 w = (MODEL_MATRIX * vec4(VERTEX.x, 0.0, VERTEX.z, 1.0)).xyz;
+	vec2 huv = (w.xz + vec2(dem_half)) / (2.0 * dem_half);
+	float lod = max(0.0, clip_level - 4.0);
+	float h = textureLod(height_tex, huv, lod).r;
+	float cell = 2.0 * exp2(clip_level);
+	bool skirt = VERTEX.y < -500.0;      // маркер вершин-юбок
+	VERTEX.y = h - (skirt ? cell * 2.0 + 2.0 : 0.0);
+	v_wpos = vec3(w.x, h, w.z);
 }
 
 float hh(vec2 wxz) {

@@ -1,46 +1,54 @@
 class_name Terrain
 extends Node3D
-## Земля игры — РЕАЛЬНЫЙ рельеф территории Гатчины (1 юнит = 1 метр).
-## Высоты — из настоящих измерений (SRTM/ASTER, terrarium z13 ≈10 м/пиксель),
-## собраны конвейером tools/fetch_dem_gatchina.py в сетку int16-см
-## (513×513 × 32 м = 16384 м; высоты 62–142 м — Гатчинская равнина).
-## Начало координат мира — центр территории (высота там = 0), сетка даёт
-## height(x,z) билинейно; поверх — микрорельеф-шум ±0.5 м как слой детализации
-## (разрешение DEM ~10 м, вблизи нужна мелкая неровность грунта).
-## Если файла данных нет — честный фолбэк на процедурный рельеф с пометкой.
-
-@export var world_size_m: float = 12288.0       # территория 12.3×12.3 км
-@export var chunks_per_side: int = 12            # чанк 1024 м
-@export var chunk_res: int = 32                  # 32 квада/чанк → шаг 32 м
-@export var tile_m: float = 4.0                  # масштаб тайла материала, м
+## Земля игры — РЕАЛЬНЫЙ рельеф Гатчины, отрисовка КЛИПМАП-КОЛЬЦАМИ
+## (детализация = функция расстояния, как в больших открытых мирах):
+##   центр 128×128 ячеек по 2 м (±128 м вокруг наблюдателя) + 6 колец с
+##   удвоением ячейки (4→128 м) до ±8192 м — вся сетка данных 16.4 км.
+## Кольца следуют за камерой (снап к шагу ячейки), высоты выбираются в
+## ВЕРШИННОМ шейдере из текстуры высот (mip по уровню кольца — дальняя
+## геометрия сглажена «в источнике»), стыки уровней прячут юбки по краям.
+## Треугольников ~70k против 295k у старой равномерной сетки — при детали
+## у ног 2 м вместо 32 м.
+##
+## Данные: tools/fetch_dem_gatchina.py → сетка int16-см 513×513×32 м
+## (SRTM/ASTER, якорь — Гатчинский дворец). CPU height() — та же сетка:
+## по ней физика (heightmap-коллизия), вода и посадка объектов.
 
 const DEM_PATH := "res://assets/dem/gatchina_cm.bin"
 const DEM_N := 513
 const DEM_STEP := 32.0
 const DEM_HALF := (DEM_N - 1) * DEM_STEP * 0.5   # 8192 м
 
+# клипмап
+const BASE_CELL := 2.0            # ячейка у ног, м
+const LEVELS := 7                 # 0-центр + 6 колец (2,4,8,16,32,64,128 м)
+const GRID_N := 128               # ячеек по стороне уровня (кольца — с дырой)
+const SKIRT_MARK := -1000.0       # маркер вершин-юбок (в локальном y)
+
+@export var world_size_m: float = 12288.0        # зона карт землепользования
+@export var collision_res: int = 384             # сетка физики (шаг 32 м)
+
 var real_dem: bool = false
 var _dem: PackedByteArray
-var _h_ref: float = 0.0                          # высота центра (дворец) — ноль мира
-var abs_min: float = 0.0                         # реальные высоты территории, м
+var _h_ref: float = 0.0                          # высота дворца — ноль мира
+var abs_min: float = 0.0
 var abs_max: float = 0.0
-
-var _noise: FastNoiseLite
-var _ridge: FastNoiseLite
 var tri_count: int = 0
 var min_h: float = INF
 var max_h: float = -INF
+
+var _noise: FastNoiseLite
+var _ridge: FastNoiseLite
+var _rings: Array[MeshInstance3D] = []
 
 func _init() -> void:
 	_noise = FastNoiseLite.new()
 	_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
 	_noise.frequency = 0.0016
 	_noise.fractal_octaves = 5
-	_noise.fractal_lacunarity = 2.1
-	_noise.fractal_gain = 0.5
 	_ridge = FastNoiseLite.new()
 	_ridge.noise_type = FastNoiseLite.TYPE_SIMPLEX
-	_ridge.frequency = 0.02                        # мелкая неровность грунта
+	_ridge.frequency = 0.02
 	_ridge.fractal_octaves = 3
 	_load_dem()
 
@@ -56,17 +64,18 @@ func _load_dem() -> void:
 	real_dem = true
 	_h_ref = _dem_at(DEM_N / 2, DEM_N / 2)
 	abs_min = INF; abs_max = -INF
-	for k in range(0, DEM_N * DEM_N, 7):          # быстрая выборка статистики
+	for k in range(0, DEM_N * DEM_N, 7):
 		var v := float(_dem.decode_s16(k * 2)) / 100.0
 		abs_min = minf(abs_min, v)
 		abs_max = maxf(abs_max, v)
+	min_h = abs_min - _h_ref
+	max_h = abs_max - _h_ref
 
 func _dem_at(i: int, j: int) -> float:
 	i = clampi(i, 0, DEM_N - 1)
 	j = clampi(j, 0, DEM_N - 1)
 	return float(_dem.decode_s16((j * DEM_N + i) * 2)) / 100.0
 
-## реальная высота из сетки (билинейно). x=восток, z=юг (строка 0 — север).
 func _dem_height(x: float, z: float) -> float:
 	var u := (x + DEM_HALF) / DEM_STEP
 	var v := (z + DEM_HALF) / DEM_STEP
@@ -74,97 +83,152 @@ func _dem_height(x: float, z: float) -> float:
 	var j := int(floor(v))
 	var fx := u - float(i)
 	var fy := v - float(j)
-	var h00 := _dem_at(i, j)
-	var h10 := _dem_at(i + 1, j)
-	var h01 := _dem_at(i, j + 1)
-	var h11 := _dem_at(i + 1, j + 1)
-	return lerp(lerp(h00, h10, fx), lerp(h01, h11, fx), fy)
+	return lerpf(lerpf(_dem_at(i, j), _dem_at(i + 1, j), fx),
+		lerpf(_dem_at(i, j + 1), _dem_at(i + 1, j + 1), fx), fy)
 
-## высота поверхности мира (м); 0 — уровень центра территории.
-## Гладкий DEM без шума: видимая поверхность, коллизия и вода согласованы;
-## мелкая неровность грунта — пиксельными нормалями в шейдере (без смещения).
+## высота мира (м); 0 — уровень дворца. По ней — физика, вода, объекты.
 func height(x: float, z: float) -> float:
 	if real_dem:
 		return _dem_height(x, z) - _h_ref
-	# фолбэк: процедурная равнина (ИМИТАЦИЯ, помечено)
 	var hp := _noise.get_noise_2d(x, z) * 14.0
 	hp += _noise.get_noise_2d(x * 3.7 + 100.0, z * 3.7) * 4.0
 	return hp
 
 func normal_at(x: float, z: float) -> Vector3:
-	var e := 8.0 if real_dem else 1.0              # шаг производной ~ разрешению данных
-	var hl := height(x - e, z)
-	var hr := height(x + e, z)
-	var hd := height(x, z - e)
-	var hu := height(x, z + e)
-	return Vector3(hl - hr, 2.0 * e, hd - hu).normalized()
+	var e := 8.0
+	return Vector3(height(x - e, z) - height(x + e, z), 2.0 * e,
+		height(x, z - e) - height(x, z + e)).normalized()
 
+# ------------------------------------------------------------------ построение
 func build() -> void:
 	var mat := _ground_material()
-	var half := world_size_m * 0.5
-	var chunk := world_size_m / float(chunks_per_side)
 	tri_count = 0
-	for cj in range(chunks_per_side):
-		for ci in range(chunks_per_side):
-			var ox := -half + ci * chunk
-			var oz := -half + cj * chunk
-			var mi := MeshInstance3D.new()
-			mi.mesh = _build_chunk_mesh(ox, oz, chunk, chunk_res)
-			mi.material_override = mat
-			add_child(mi)
-	print("[terrain] %.0f×%.0f м, рельеф=%s, абс. высоты %.0f..%.0f м, перепад %.1f м, △=%d" % [
-		world_size_m, world_size_m,
-		"РЕАЛЬНЫЙ (Гатчина, DEM)" if real_dem else "процедурный (фолбэк!)",
-		abs_min, abs_max, max_h - min_h, tri_count])
+	for lv in range(LEVELS):
+		var mi := MeshInstance3D.new()
+		mi.mesh = _build_level_mesh(lv)
+		mi.material_override = mat
+		# меш смещается за камерой — граница отсечения должна быть широкой
+		mi.custom_aabb = AABB(Vector3(-DEM_HALF, -200, -DEM_HALF),
+			Vector3(DEM_HALF * 2, 600, DEM_HALF * 2))
+		mi.set_instance_shader_parameter("clip_level", float(lv))
+		add_child(mi)
+		_rings.append(mi)
+	print("[terrain] клипмап: %d уровней, ячейка %s..%s м, охват ±%.0f м, △=%d, рельеф=%s %.0f..%.0f м" % [
+		LEVELS, str(BASE_CELL), str(BASE_CELL * pow(2, LEVELS - 1)), DEM_HALF,
+		tri_count, "РЕАЛЬНЫЙ (Гатчина)" if real_dem else "процедурный(фолбэк!)",
+		abs_min, abs_max])
 
-func _build_chunk_mesh(ox: float, oz: float, size: float, res: int) -> ArrayMesh:
+## уровень lv: сетка GRID_N×GRID_N ячеек размером cell(lv); у колец — дыра
+## GRID_N/2 в центре; по внешнему И внутреннему краю — юбки (маркер y).
+func _build_level_mesh(lv: int) -> ArrayMesh:
+	var cell := BASE_CELL * pow(2.0, lv)
+	var n := GRID_N
+	var half := n / 2
+	var hole_half := n / 4                     # дыра под более мелкий уровень
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var step := size / float(res)
-	for j in range(res + 1):
-		for i in range(res + 1):
-			var x := ox + i * step
-			var z := oz + j * step
-			var y := height(x, z)
-			min_h = minf(min_h, y)
-			max_h = maxf(max_h, y)
-			st.add_vertex(Vector3(x, y, z))   # нормали/цвет считает шейдер на пиксель
-	var row := res + 1
-	for j in range(res):
-		for i in range(res):
-			var a := j * row + i
-			var b := a + 1
-			var c := a + row
-			var d := c + 1
-			# порядок обхода: лицо грани — ВВЕРХ (Godot front = по часовой сверху)
-			st.add_index(a); st.add_index(b); st.add_index(c)
-			st.add_index(b); st.add_index(d); st.add_index(c)
-			tri_count += 2
+	var idx: Dictionary = {}
+
+	var add_v := func(i: int, j: int, skirt: bool) -> int:
+		var key := i * 10000 + j + (100000000 if skirt else 0)
+		if idx.has(key):
+			return idx[key]
+		var x := float(i - half) * cell
+		var z := float(j - half) * cell
+		st.set_uv(Vector2(x, z))               # локальный XZ (мир добавит шейдер)
+		st.add_vertex(Vector3(x, SKIRT_MARK if skirt else 0.0, z))
+		var id: int = idx.size()
+		idx[key] = id
+		return id
+
+	var quad := func(a: int, b: int, c: int, d: int) -> void:
+		# a—b (север), c—d (юг): лицо вверх
+		st.add_index(a); st.add_index(b); st.add_index(c)
+		st.add_index(b); st.add_index(d); st.add_index(c)
+		tri_count += 2
+
+	for j in range(n):
+		for i in range(n):
+			if lv > 0:
+				var in_hole := (i >= half - hole_half and i < half + hole_half
+					and j >= half - hole_half and j < half + hole_half)
+				if in_hole:
+					continue
+			var a: int = add_v.call(i, j, false)
+			var b: int = add_v.call(i + 1, j, false)
+			var c: int = add_v.call(i, j + 1, false)
+			var d: int = add_v.call(i + 1, j + 1, false)
+			quad.call(a, b, c, d)
+
+	# юбки: внешний периметр всех уровней + внутренний периметр колец
+	var edges: Array = [[0, n, 0, n, true]]
+	if lv > 0:
+		edges.append([half - hole_half, half + hole_half,
+			half - hole_half, half + hole_half, false])
+	for e in edges:
+		var i0: int = e[0]; var i1: int = e[1]
+		var j0: int = e[2]; var j1: int = e[3]
+		var outward: bool = e[4]
+		for i in range(i0, i1):
+			var a1: int = add_v.call(i, j0, false)
+			var b1: int = add_v.call(i + 1, j0, false)
+			var a2: int = add_v.call(i, j0, true)
+			var b2: int = add_v.call(i + 1, j0, true)
+			if outward: quad.call(a2, b2, a1, b1)
+			else: quad.call(a1, b1, a2, b2)
+			var c1: int = add_v.call(i, j1, false)
+			var d1: int = add_v.call(i + 1, j1, false)
+			var c2: int = add_v.call(i, j1, true)
+			var d2: int = add_v.call(i + 1, j1, true)
+			if outward: quad.call(c1, d1, c2, d2)
+			else: quad.call(c2, d2, c1, d1)
+		for j in range(j0, j1):
+			var a1: int = add_v.call(i0, j, false)
+			var b1: int = add_v.call(i0, j + 1, false)
+			var a2: int = add_v.call(i0, j, true)
+			var b2: int = add_v.call(i0, j + 1, true)
+			if outward: quad.call(a1, b1, a2, b2)
+			else: quad.call(a2, b2, a1, b1)
+			var c1: int = add_v.call(i1, j, false)
+			var d1: int = add_v.call(i1, j + 1, false)
+			var c2: int = add_v.call(i1, j, true)
+			var d2: int = add_v.call(i1, j + 1, true)
+			if outward: quad.call(c2, d2, c1, d1)
+			else: quad.call(c1, d1, c2, d2)
+
 	return st.commit()
 
+## кольца следуют за камерой: снап к удвоенной ячейке уровня (сохраняет
+## совпадение сеток соседних уровней)
+func _process(_delta: float) -> void:
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	var cx := cam.global_position.x
+	var cz := cam.global_position.z
+	for lv in range(LEVELS):
+		var s := BASE_CELL * pow(2.0, lv + 1)
+		_rings[lv].position = Vector3(floorf(cx / s) * s, 0.0, floorf(cz / s) * s)
+
+# ------------------------------------------------------------------ материал
 const ZONES_PATH := "res://assets/dem/zones_1024.bin"
 const ZONES_N := 1024
 
-## текстура высот для шейдера (RF, с мип-уровнями): пиксельные нормали и
-## гладкое освещение дали — из неё
 func _height_texture() -> ImageTexture:
 	var floats := PackedFloat32Array()
 	floats.resize(DEM_N * DEM_N)
-	var half := DEM_HALF
 	for j in range(DEM_N):
-		var z := -half + DEM_STEP * float(j)
+		var z := -DEM_HALF + DEM_STEP * float(j)
 		for i in range(DEM_N):
-			floats[j * DEM_N + i] = height(-half + DEM_STEP * float(i), z)
+			floats[j * DEM_N + i] = height(-DEM_HALF + DEM_STEP * float(i), z)
 	var img := Image.create_from_data(DEM_N, DEM_N, false, Image.FORMAT_RF,
 		floats.to_byte_array())
-	# R32F не фильтруется линейно на Apple GPU и llvmpipe → half-float (RH):
-	# фильтруется везде, точность ~2 см на наших высотах
+	# R32F не фильтруется на Apple GPU/llvmpipe → half-float (точность ~2 см)
 	img.convert(Image.FORMAT_RH)
 	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
 
 func _ground_material() -> ShaderMaterial:
-	# террейн-шейдер: пиксельные нормали из высот + зоны землепользования
 	var m := ShaderMaterial.new()
 	m.shader = load("res://shaders/world/terrain.gdshader")
 	m.set_shader_parameter("height_tex", _height_texture())
@@ -175,18 +239,18 @@ func _ground_material() -> ShaderMaterial:
 		var img := Image.create_from_data(ZONES_N, ZONES_N, false, Image.FORMAT_R8, bytes)
 		m.set_shader_parameter("zone_tex", ImageTexture.create_from_image(img))
 	else:
-		push_warning("[terrain] нет карты зон (%s) — вся земля будет лугом" % ZONES_PATH)
+		push_warning("[terrain] нет карты зон (%s) — вся земля лугом" % ZONES_PATH)
 		var img1 := Image.create(4, 4, false, Image.FORMAT_R8)
 		m.set_shader_parameter("zone_tex", ImageTexture.create_from_image(img1))
 	m.set_shader_parameter("zone_size_m", world_size_m)
 	m.set_shader_parameter("wet_level", (abs_min + 6.0) - _h_ref if real_dem else -3.0)
 	return m
 
-## ФИЗИКА: рельеф — твёрдое тело (HeightMapShape по той же height()).
-## С этого момента мир не декорация: по нему ходят тела, на него падают предметы.
+# ------------------------------------------------------------------ физика
+## рельеф — твёрдое тело: heightmap по той же height()
 func build_collision() -> void:
-	var n := chunks_per_side * chunk_res + 1        # 385 — как сетка рендера
-	var cell := world_size_m / float(n - 1)
+	var n := collision_res + 1
+	var cell := world_size_m / float(collision_res)
 	var heights := PackedFloat32Array()
 	heights.resize(n * n)
 	var half := world_size_m * 0.5
@@ -199,13 +263,14 @@ func build_collision() -> void:
 	shape.map_data = heights
 	var cs := CollisionShape3D.new()
 	cs.shape = shape
-	cs.scale = Vector3(cell, 1.0, cell)             # ячейка сетки → метры
+	cs.scale = Vector3(cell, 1.0, cell)
 	var body := StaticBody3D.new()
 	body.add_child(cs)
 	add_child(body)
-	print("[terrain] коллизия: heightmap %d² (ячейка %.0f м) — рельеф стал твёрдым" % [n, cell])
+	print("[terrain] коллизия: heightmap %d² (ячейка %.0f м) — рельеф твёрдый" % [n, cell])
 
 func report() -> Dictionary:
-	return {"size_m": world_size_m, "relief_m": max_h - min_h,
+	return {"size_m": DEM_HALF * 2.0, "relief_m": max_h - min_h,
 		"min_h": min_h, "max_h": max_h, "tris": tri_count,
-		"real": real_dem, "abs_min": abs_min, "abs_max": abs_max}
+		"real": real_dem, "abs_min": abs_min, "abs_max": abs_max,
+		"clip_levels": LEVELS, "base_cell": BASE_CELL}
