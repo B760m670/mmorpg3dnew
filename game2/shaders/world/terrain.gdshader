@@ -13,6 +13,15 @@ uniform sampler2D zone_tex : filter_nearest, repeat_disable;
 uniform float zone_size_m = 12288.0;
 uniform float wet_level = -30.0;         // мировая высота сырых низин, м
 
+// PBR-детали вблизи (синтез tools/make_materials.py): дернина и грунт.
+// Цвет несёт зона (albedo нормирован к 0.5 и умножается), текстура несёт
+// фактуру: рельеф покрова (RG-нормаль) и шероховатость (A).
+uniform sampler2D sod_alb : filter_linear_mipmap, repeat_enable;
+uniform sampler2D sod_nr : filter_linear_mipmap, repeat_enable;
+uniform sampler2D dirt_alb : filter_linear_mipmap, repeat_enable;
+uniform sampler2D dirt_nr : filter_linear_mipmap, repeat_enable;
+uniform float detail_tile_m = 2.0;
+
 // клипмап: уровень кольца этого меша (0 — центр 2 м ... 6 — кольцо 128 м)
 instance uniform float clip_level = 0.0;
 
@@ -82,20 +91,6 @@ void fragment() {
 	// солнцу лентами; прижимаем дальнюю нормаль к вертикали (рельеф дали — LOD)
 	gn = normalize(mix(gn, vec3(0.0, 1.0, 0.0), smoothstep(700.0, 2200.0, dist)));
 
-	// --- микронормали грунта вблизи (сантиметровая неровность) ---
-	float nearf = 1.0 - smoothstep(15.0, 90.0, dist);
-	vec3 n = gn;
-	if (nearf > 0.001) {
-		float me = 0.35;
-		float amp = 0.075 * nearf;
-		float mL = vnoise((v_wpos.xz + vec2(-me, 0.0)) * 2.1) + 0.5 * vnoise((v_wpos.xz + vec2(-me, 0.0)) * 7.3);
-		float mR = vnoise((v_wpos.xz + vec2(me, 0.0)) * 2.1) + 0.5 * vnoise((v_wpos.xz + vec2(me, 0.0)) * 7.3);
-		float mN = vnoise((v_wpos.xz + vec2(0.0, -me)) * 2.1) + 0.5 * vnoise((v_wpos.xz + vec2(0.0, -me)) * 7.3);
-		float mS = vnoise((v_wpos.xz + vec2(0.0, me)) * 2.1) + 0.5 * vnoise((v_wpos.xz + vec2(0.0, me)) * 7.3);
-		vec3 mn = normalize(vec3((mL - mR) * amp, 2.0 * me, (mN - mS) * amp));
-		n = normalize(vec3(gn.x + mn.x, gn.y * mn.y, gn.z + mn.z));
-	}
-
 	// --- зона (реальное землепользование), размытая граница ---
 	vec2 zuv = (v_wpos.xz + vec2(zone_size_m * 0.5)) / zone_size_m;
 	vec2 j = (vec2(hash12(v_wpos.xz * 0.37), hash12(v_wpos.xz * 0.53 + 7.0)) - 0.5)
@@ -103,17 +98,32 @@ void fragment() {
 	int z = int(texture(zone_tex, clamp(zuv + j, 0.0, 1.0)).r * 255.0 + 0.5);
 	vec3 col = zone_tint(z);
 
-	// склоны — грунт; низины — сырость; пятнистость двух масштабов
+	// склоны — грунт; низины — сырость; крупная пятнистость
 	float slope = clamp((1.0 - gn.y) * 3.5, 0.0, 1.0);
 	col = mix(col, vec3(0.32, 0.25, 0.16), slope);
 	float wet = clamp((wet_level - hC) / 6.0, 0.0, 1.0);
 	col = mix(col, vec3(0.15, 0.18, 0.15), wet * 0.8);
 	float broad = vnoise(v_wpos.xz * 0.045);
-	float fine = vnoise(v_wpos.xz * 1.35);
-	col *= 1.0 - 0.16 * broad - 0.12 * fine * nearf;
+	col *= 1.0 - 0.16 * broad;
+
+	// --- PBR-деталь вблизи: дернина / грунт (склоны, город, дорога) ---
+	float detf = 1.0 - smoothstep(45.0, 140.0, dist);
+	vec3 n = gn;
+	float rough = 1.0;
+	if (detf > 0.001) {
+		vec2 duv = v_wpos.xz / detail_tile_m;
+		float dirt_w = clamp(slope * 1.4 + ((z == 4 || z == 8) ? 0.85 : 0.0)
+			+ wet * 0.4, 0.0, 1.0);
+		vec3 da = mix(texture(sod_alb, duv).rgb, texture(dirt_alb, duv).rgb, dirt_w);
+		vec4 dn = mix(texture(sod_nr, duv), texture(dirt_nr, duv), dirt_w);
+		col *= mix(vec3(1.0), da * 2.0, detf * 0.85);
+		vec3 tn = vec3(dn.x * 2.0 - 1.0, 0.0, dn.y * 2.0 - 1.0);
+		n = normalize(vec3(gn.x + tn.x * 0.9 * detf, gn.y, gn.z + tn.z * 0.9 * detf));
+		rough = mix(1.0, dn.a, detf);
+	}
 
 	ALBEDO = col;
-	ROUGHNESS = 1.0;
+	ROUGHNESS = rough;
 	METALLIC = 0.0;
 	SPECULAR = 0.0;
 	NORMAL = normalize((VIEW_MATRIX * vec4(n, 0.0)).xyz);
