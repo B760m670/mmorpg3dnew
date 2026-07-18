@@ -22,6 +22,13 @@ uniform sampler2D dirt_alb : filter_linear_mipmap, repeat_enable;
 uniform sampler2D dirt_nr : filter_linear_mipmap, repeat_enable;
 uniform float detail_tile_m = 2.0;
 
+// ВЕРТИКАЛЬНЫЙ СРЕЗ (Дворцовый парк): детальная карта поверхностей 1 м/пкс.
+// В её границах земля красится богатым набором (газон/роща/лес/аллея/плац/
+// берег/мостовая) поверх грубой зоны — «земля везде разная».
+uniform sampler2D slice_tex : filter_nearest, repeat_disable;
+uniform vec2 slice_center = vec2(0.0, 400.0);   // данные: восток, север
+uniform float slice_half = 0.0;                 // 0 → срез выключен
+
 // клипмап: уровень кольца этого меша (0 — центр 2 м ... 6 — кольцо 128 м)
 instance uniform float clip_level = 0.0;
 
@@ -76,6 +83,20 @@ vec3 zone_tint(int z) {
 	return vec3(0.225, 0.315, 0.120);               // луг
 }
 
+// поверхность среза: цвет, шероховатость, доля «голого грунта» (0 дернина
+// … 1 песок/гравий) для примеси детальной текстуры
+void slice_surface(int s, out vec3 c, out float rough, out float bare) {
+	if (s == 1)      { c = vec3(0.140, 0.300, 0.090); rough = 0.95; bare = 0.05; } // газон стриженый
+	else if (s == 2) { c = vec3(0.115, 0.155, 0.070); rough = 1.00; bare = 0.30; } // роща (подстилка)
+	else if (s == 3) { c = vec3(0.070, 0.110, 0.058); rough = 1.00; bare = 0.20; } // лес плотный
+	else if (s == 4) { c = vec3(0.355, 0.315, 0.230); rough = 0.90; bare = 1.00; } // аллея (гравий)
+	else if (s == 5) { c = vec3(0.435, 0.400, 0.315); rough = 0.85; bare = 1.00; } // плац (песок)
+	else if (s == 6) { c = vec3(0.085, 0.110, 0.105); rough = 0.55; bare = 1.00; } // дно/вода
+	else if (s == 7) { c = vec3(0.220, 0.240, 0.140); rough = 1.00; bare = 0.55; } // берег/камыш
+	else if (s == 8) { c = vec3(0.320, 0.295, 0.265); rough = 0.80; bare = 1.00; } // мостовая
+	else             { c = vec3(0.205, 0.300, 0.110); rough = 1.00; bare = 0.00; } // луг
+}
+
 void fragment() {
 	float dist = length(VERTEX);
 
@@ -106,20 +127,41 @@ void fragment() {
 	float broad = vnoise(v_wpos.xz * 0.045);
 	col *= 1.0 - 0.16 * broad;
 
-	// --- PBR-деталь вблизи: дернина / грунт (склоны, город, дорога) ---
+	// база примеси грунта (склон/город/сырость) — срез её переопределит
+	float dirt_w = clamp(slope * 1.4 + ((z == 4 || z == 8) ? 0.85 : 0.0)
+		+ wet * 0.4, 0.0, 1.0);
+	float rough_target = 1.0;
+
+	// --- ВЕРТИКАЛЬНЫЙ СРЕЗ: детальные поверхности Дворцового парка ---
+	if (slice_half > 1.0) {
+		vec2 dpos = vec2(v_wpos.x, -v_wpos.z);        // данные: восток, север
+		vec2 suv = (dpos - slice_center) / (2.0 * slice_half) + 0.5;
+		suv.y = 1.0 - suv.y;                           // строка 0 = север
+		if (suv.x > 0.0 && suv.x < 1.0 && suv.y > 0.0 && suv.y < 1.0) {
+			vec2 edge = min(suv, vec2(1.0) - suv);
+			float sinf = smoothstep(0.0, 40.0 / (2.0 * slice_half), min(edge.x, edge.y));
+			int s = int(texture(slice_tex, suv).r * 255.0 + 0.5);
+			vec3 sc; float sr; float sb;
+			slice_surface(s, sc, sr, sb);
+			sc *= 1.0 - 0.14 * broad;                 // та же крупная пятнистость
+			col = mix(col, sc, sinf);
+			dirt_w = mix(dirt_w, sb, sinf);
+			rough_target = mix(rough_target, sr, sinf);
+		}
+	}
+
+	// --- PBR-деталь вблизи: дернина / грунт по dirt_w ---
 	float detf = 1.0 - smoothstep(45.0, 140.0, dist);
 	vec3 n = gn;
-	float rough = 1.0;
+	float rough = rough_target;
 	if (detf > 0.001) {
 		vec2 duv = v_wpos.xz / detail_tile_m;
-		float dirt_w = clamp(slope * 1.4 + ((z == 4 || z == 8) ? 0.85 : 0.0)
-			+ wet * 0.4, 0.0, 1.0);
 		vec3 da = mix(texture(sod_alb, duv).rgb, texture(dirt_alb, duv).rgb, dirt_w);
 		vec4 dn = mix(texture(sod_nr, duv), texture(dirt_nr, duv), dirt_w);
 		col *= mix(vec3(1.0), da * 2.0, detf * 0.85);
 		vec3 tn = vec3(dn.x * 2.0 - 1.0, 0.0, dn.y * 2.0 - 1.0);
 		n = normalize(vec3(gn.x + tn.x * 0.9 * detf, gn.y, gn.z + tn.z * 0.9 * detf));
-		rough = mix(1.0, dn.a, detf);
+		rough = mix(rough_target, dn.a, detf);
 	}
 
 	ALBEDO = col;

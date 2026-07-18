@@ -24,12 +24,19 @@ const SLOPE_MIN_NY := 0.82           # круче ~35° — голый грун�
 
 const ZONES_PATH := "res://assets/dem/zones_1024.bin"
 const ZONES_N := 1024
+const SLICE_BIN := "res://assets/dem/slice_palace.bin"
+const SLICE_META := "res://assets/dem/slice_palace.json"
 
 var terrain: Terrain
 var zone_size_m := 12288.0
 var clump_count: int = 0
 
 var _zones: PackedByteArray
+var _slice: PackedByteArray
+var _slice_n := 0
+var _slice_cx := 0.0
+var _slice_cy := 0.0
+var _slice_half := 0.0
 var _mesh: ArrayMesh
 var _mat: ShaderMaterial
 var _tiles: Dictionary = {}          # Vector2i -> {"node":..., "band":int, "n":int}
@@ -50,6 +57,20 @@ func _zone_rule(z: int) -> Array:
 		8: return [0.04, 0.25, Color(0.26, 0.33, 0.13)]   # дорога — утоптано
 		_: return [1.00, 0.55, Color(0.30, 0.41, 0.13)]   # луг
 
+## правила посева среза (детальные поверхности Дворцового парка):
+## [вероятность, высота м, цвет]
+func _slice_rule(s: int) -> Array:
+	match s:
+		1: return [0.90, 0.14, Color(0.20, 0.40, 0.10)]   # газон — густой, СТРИЖЕНЫЙ
+		2: return [0.42, 0.35, Color(0.16, 0.24, 0.10)]   # роща — редкий подлесок
+		3: return [0.24, 0.30, Color(0.12, 0.20, 0.09)]   # лес — тёмный подлесок
+		4: return [0.00, 0.00, Color.BLACK]               # аллея — гравий, пусто
+		5: return [0.00, 0.00, Color.BLACK]               # плац — песок, пусто
+		6: return [0.00, 0.00, Color.BLACK]               # вода
+		7: return [0.75, 0.95, Color(0.34, 0.40, 0.16)]   # берег — высокий камыш
+		8: return [0.00, 0.00, Color.BLACK]               # мостовая
+		_: return [1.00, 0.60, Color(0.28, 0.42, 0.12)]   # луг
+
 func _ready() -> void:
 	var f := FileAccess.open(ZONES_PATH, FileAccess.READ)
 	if f != null:
@@ -57,9 +78,25 @@ func _ready() -> void:
 	if _zones.size() != ZONES_N * ZONES_N:
 		_zones = PackedByteArray()
 		push_warning("[grass] нет карты зон — вся трава по правилу луга")
+	_load_slice()
 	_mesh = _build_clump_mesh()
 	_mat = ShaderMaterial.new()
 	_mat.shader = load("res://shaders/world/grass.gdshader")
+
+func _load_slice() -> void:
+	var fm := FileAccess.open(SLICE_META, FileAccess.READ)
+	var fb := FileAccess.open(SLICE_BIN, FileAccess.READ)
+	if fm == null or fb == null:
+		return
+	var meta: Dictionary = JSON.parse_string(fm.get_as_text())
+	_slice_n = int(meta["n"])
+	_slice_cx = float(meta["cx"])
+	_slice_cy = float(meta["cy"])
+	_slice_half = float(meta["half_m"])
+	_slice = fb.get_buffer(_slice_n * _slice_n)
+	if _slice.size() != _slice_n * _slice_n:
+		_slice = PackedByteArray()
+		_slice_half = 0.0
 
 func _zone_at(x: float, z: float) -> int:
 	if _zones.is_empty():
@@ -69,6 +106,17 @@ func _zone_at(x: float, z: float) -> int:
 	if u < 0 or v < 0 or u >= ZONES_N or v >= ZONES_N:
 		return 0
 	return _zones[v * ZONES_N + u]
+
+## класс поверхности среза в точке (x=восток, z движка=−север), или −1 вне среза
+func _slice_at(x: float, z: float) -> int:
+	if _slice.is_empty():
+		return -1
+	var u := int((x - _slice_cx + _slice_half) / (2.0 * _slice_half) * float(_slice_n))
+	# строка 0 = север; data_y = −z
+	var v := int((_slice_cy + _slice_half - (-z)) / (2.0 * _slice_half) * float(_slice_n))
+	if u < 0 or v < 0 or u >= _slice_n or v >= _slice_n:
+		return -1
+	return _slice[v * _slice_n + u]
 
 # ------------------------------------------------------------------ куст
 ## куст = 7 лезвий чистой геометрией (без альфа-текстур: ни сортировки,
@@ -169,7 +217,8 @@ func _build_tile(key: Vector2i) -> void:
 	for k in range(attempts):
 		var x := (float(key.x) + rng.randf()) * TILE_M
 		var z := (float(key.y) + rng.randf()) * TILE_M
-		var rule := _zone_rule(_zone_at(x, z))
+		var sc := _slice_at(x, z)
+		var rule := _slice_rule(sc) if sc >= 0 else _zone_rule(_zone_at(x, z))
 		if rng.randf() > float(rule[0]):
 			continue
 		if terrain.normal_at(x, z).y < SLOPE_MIN_NY:

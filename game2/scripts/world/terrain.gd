@@ -253,7 +253,31 @@ func _ground_material() -> ShaderMaterial:
 	m.set_shader_parameter("sod_nr", load("res://assets/materials/sod_nr.png"))
 	m.set_shader_parameter("dirt_alb", load("res://assets/materials/dirt_alb.png"))
 	m.set_shader_parameter("dirt_nr", load("res://assets/materials/dirt_nr.png"))
+	_setup_slice(m)
 	return m
+
+# --- ВЕРТИКАЛЬНЫЙ СРЕЗ: детальная карта поверхностей Дворцового парка ---
+const SLICE_BIN := "res://assets/dem/slice_palace.bin"
+const SLICE_META := "res://assets/dem/slice_palace.json"
+
+func _setup_slice(m: ShaderMaterial) -> void:
+	var fm := FileAccess.open(SLICE_META, FileAccess.READ)
+	var fb := FileAccess.open(SLICE_BIN, FileAccess.READ)
+	if fm == null or fb == null:
+		m.set_shader_parameter("slice_half", 0.0)     # срез выключен
+		return
+	var meta: Dictionary = JSON.parse_string(fm.get_as_text())
+	var n := int(meta["n"])
+	var bytes := fb.get_buffer(n * n)
+	if bytes.size() != n * n:
+		m.set_shader_parameter("slice_half", 0.0)
+		return
+	var img := Image.create_from_data(n, n, false, Image.FORMAT_R8, bytes)
+	m.set_shader_parameter("slice_tex", ImageTexture.create_from_image(img))
+	m.set_shader_parameter("slice_center", Vector2(float(meta["cx"]), float(meta["cy"])))
+	m.set_shader_parameter("slice_half", float(meta["half_m"]))
+	print("[terrain] срез «Дворцовый парк»: %d² (%.0f м/пкс), центр (%.0f,%.0f), ±%.0f м" % [
+		n, float(meta["mpp"]), float(meta["cx"]), float(meta["cy"]), float(meta["half_m"])])
 
 # ------------------------------------------------------------------ физика
 ## рельеф — твёрдое тело: heightmap по той же height()
