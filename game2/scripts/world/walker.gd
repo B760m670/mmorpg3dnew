@@ -58,6 +58,9 @@ func deactivate() -> void:
 	set_physics_process(false)
 	set_process_input(false)
 
+func yaw() -> float:
+	return _yaw
+
 func _apply_look() -> void:
 	_pitch = clampf(_pitch, deg_to_rad(-85.0), deg_to_rad(85.0))
 	cam.transform.basis = Basis(Vector3.UP, 0.0)   # yaw несёт тело, pitch — камера

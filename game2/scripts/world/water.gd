@@ -23,6 +23,7 @@ func build() -> void:
 		push_warning("[water] не разобрался JSON")
 		return
 	var mat := _water_material()
+	var skipped := 0
 	for rec_v in arr:
 		var rec: Dictionary = rec_v
 		if not rec.has("polys"):
@@ -31,6 +32,12 @@ func build() -> void:
 			var outer: Array = poly[0]          # внешнее кольцо (дырки позже)
 			if outer.size() < 3:
 				continue
+			# мега-объекты (Финский залив, длинные реки): контур уходит за
+			# пределы сетки высот → уровень по краевым значениям ложится ВЫШЕ
+			# рельефа и лист накрывает мир. Пропускаем; реки — отдельным слоем.
+			if _ring_out_of_bounds(outer):
+				skipped += 1
+				continue
 			var mesh := _build_surface_mesh(outer, rec.get("name"))
 			if mesh != null:
 				var mi := MeshInstance3D.new()
@@ -38,7 +45,21 @@ func build() -> void:
 				mi.material_override = mat
 				add_child(mi)
 				count_built += 1
-	print("[water] зеркал воды построено: %d (по реальным контурам)" % count_built)
+	print("[water] зеркал воды: %d (реальные контуры); пропущено мега/внешних: %d" % [
+		count_built, skipped])
+
+const BOUND_M := 6800.0             # в пределах территории и сетки высот
+const MAX_DIM_M := 3500.0           # крупнее — не озеро Гатчины (залив/река)
+
+func _ring_out_of_bounds(ring: Array) -> bool:
+	var minx := INF; var maxx := -INF
+	var miny := INF; var maxy := -INF
+	for p in ring:
+		minx = minf(minx, p[0]); maxx = maxf(maxx, p[0])
+		miny = minf(miny, p[1]); maxy = maxf(maxy, p[1])
+	if minx < -BOUND_M or maxx > BOUND_M or miny < -BOUND_M or maxy > BOUND_M:
+		return true
+	return (maxx - minx) > MAX_DIM_M or (maxy - miny) > MAX_DIM_M
 
 func _build_surface_mesh(ring: Array, name_v) -> ArrayMesh:
 	# уровень зеркала: медиана рельефа по контуру

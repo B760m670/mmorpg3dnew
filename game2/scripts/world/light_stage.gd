@@ -7,7 +7,10 @@ extends Node3D
 
 const ENABLE_POST := true
 const ENABLE_METALFX := true
-const ENABLE_GI := true          # SDFGI (реальный отскок света)
+# SDFGI ВЫКЛЮЧЕН для открытого мира: его каскады покрывают лишь пузырь у
+# камеры, за ним земля светится полным небом → яркая полоса на дали
+# («зелёные объекты» на горизонте). GI открытых пространств — задача движка.
+const ENABLE_GI := false
 const ENABLE_SSAO := true        # контактные тени
 const ENABLE_GLOW := true        # мягкое свечение в бликах
 
@@ -167,14 +170,15 @@ func _build_environment(gi: bool) -> Environment:
 
 	# воздушная перспектива: дальний рельеф растворяется в ЦВЕТЕ НЕБА (aerial=1),
 	# контраст тёмная-земля/светлое-небо у горизонта падает → уходит алиасинг гряд
+	# воздушная перспектива: мягкая, не «зажигает» дальнюю землю цветом неба
 	env.fog_enabled = true
 	env.fog_mode = Environment.FOG_MODE_DEPTH
-	env.fog_light_color = Color(0.80, 0.84, 0.92)
-	env.fog_density = 0.0016
+	env.fog_light_color = Color(0.58, 0.64, 0.74)
+	env.fog_density = 0.0007
 	env.fog_sky_affect = 0.0
-	env.fog_aerial_perspective = 1.0
-	env.fog_depth_begin = 250.0
-	env.fog_depth_end = 7000.0                    # территория 12.3 км — видим даль
+	env.fog_aerial_perspective = 0.55
+	env.fog_depth_begin = 400.0
+	env.fog_depth_end = 9500.0
 
 	# ОБЪЁМНЫЙ туман: даёт световые шахты (god-rays) — тени в солнце режут
 	# рассеяние, вперёд-рассеяние (anisotropy) тянет свет к солнцу.
@@ -319,7 +323,29 @@ func _build_hud(gi_off: bool) -> void:
 	_hud.position = Vector2(60, 64)
 	_hud.set_meta("gi_off", gi_off)
 	ui.add_child(_hud)
+
+	# КОМПАС: сверху по центру, буквы + азимут; един для полёта и пешехода.
+	# Север мира = −Z (выверено по Солнцу: в полдень оно строго на юге).
+	_compass = Label.new()
+	_compass.add_theme_font_size_override("font_size", 44)
+	_compass.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
+	_compass.add_theme_constant_override("shadow_offset_x", 2)
+	_compass.add_theme_constant_override("shadow_offset_y", 2)
+	ui.add_child(_compass)
 	_update_hud()
+
+var _compass: Label
+const _WINDS := ["С", "СВ", "В", "ЮВ", "Ю", "ЮЗ", "З", "СЗ"]
+
+func _update_compass() -> void:
+	if _compass == null:
+		return
+	var yaw := _walker.yaw() if _walk_active else _cam.yaw()
+	var heading := fposmod(-rad_to_deg(yaw), 360.0)
+	var wind: String = _WINDS[int(round(heading / 45.0)) % 8]
+	_compass.text = "%s · %d°" % [wind, int(round(heading)) % 360]
+	var w := get_viewport().get_visible_rect().size.x
+	_compass.position = Vector2(w * 0.5 - _compass.size.x * 0.5, 22.0)
 
 # --- материалы/текстуры ---
 func _lit_mat(col: Color, rough: float) -> StandardMaterial3D:
@@ -407,3 +433,4 @@ func _process(_delta: float) -> void:
 	if _post_mat != null:
 		_post_mat.set_shader_parameter("t", float(Time.get_ticks_msec()) / 1000.0)
 	_update_hud()
+	_update_compass()

@@ -80,16 +80,15 @@ func _dem_height(x: float, z: float) -> float:
 	var h11 := _dem_at(i + 1, j + 1)
 	return lerp(lerp(h00, h10, fx), lerp(h01, h11, fx), fy)
 
-## высота поверхности мира (м); 0 — уровень центра территории
+## высота поверхности мира (м); 0 — уровень центра территории.
+## Гладкий DEM без шума: видимая поверхность, коллизия и вода согласованы;
+## мелкая неровность грунта — пиксельными нормалями в шейдере (без смещения).
 func height(x: float, z: float) -> float:
 	if real_dem:
-		var h := _dem_height(x, z) - _h_ref
-		h += _ridge.get_noise_2d(x, z) * 0.5       # слой детализации вблизи
-		return h
+		return _dem_height(x, z) - _h_ref
 	# фолбэк: процедурная равнина (ИМИТАЦИЯ, помечено)
 	var hp := _noise.get_noise_2d(x, z) * 14.0
 	hp += _noise.get_noise_2d(x * 3.7 + 100.0, z * 3.7) * 4.0
-	hp += _ridge.get_noise_2d(x, z) * 0.6
 	return hp
 
 func normal_at(x: float, z: float) -> Vector3:
@@ -129,11 +128,7 @@ func _build_chunk_mesh(ox: float, oz: float, size: float, res: int) -> ArrayMesh
 			var y := height(x, z)
 			min_h = minf(min_h, y)
 			max_h = maxf(max_h, y)
-			var n := normal_at(x, z)
-			st.set_normal(n)
-			st.set_color(_ground_color(x, z, y, n))
-			st.set_uv(Vector2(x, z) / tile_m)
-			st.add_vertex(Vector3(x, y, z))
+			st.add_vertex(Vector3(x, y, z))   # нормали/цвет считает шейдер на пиксель
 	var row := res + 1
 	for j in range(res):
 		for i in range(res):
@@ -141,30 +136,39 @@ func _build_chunk_mesh(ox: float, oz: float, size: float, res: int) -> ArrayMesh
 			var b := a + 1
 			var c := a + row
 			var d := c + 1
-			st.add_index(a); st.add_index(c); st.add_index(b)
-			st.add_index(b); st.add_index(c); st.add_index(d)
+			# порядок обхода: лицо грани — ВВЕРХ (Godot front = по часовой сверху)
+			st.add_index(a); st.add_index(b); st.add_index(c)
+			st.add_index(b); st.add_index(d); st.add_index(c)
 			tri_count += 2
 	return st.commit()
-
-## атрибуты рельефа в вершинном COLOR: r=крутизна, g=низина(сырость), b=шум.
-## Итоговый цвет собирает террейн-шейдер: тон зоны (реальное землепользование)
-## + эти атрибуты.
-func _ground_color(x: float, z: float, y: float, n: Vector3) -> Color:
-	var slope := clampf((1.0 - n.y) * 3.5, 0.0, 1.0)
-	var v := _ridge.get_noise_2d(x * 0.7, z * 0.7) * 0.5 + 0.5
-	var lowland := 0.0
-	if real_dem:
-		var habs := y + _h_ref
-		lowland = clampf((abs_min + 6.0 - habs) / 6.0, 0.0, 1.0)
-	return Color(slope, lowland, v)
 
 const ZONES_PATH := "res://assets/dem/zones_1024.bin"
 const ZONES_N := 1024
 
+## текстура высот для шейдера (RF, с мип-уровнями): пиксельные нормали и
+## гладкое освещение дали — из неё
+func _height_texture() -> ImageTexture:
+	var floats := PackedFloat32Array()
+	floats.resize(DEM_N * DEM_N)
+	var half := DEM_HALF
+	for j in range(DEM_N):
+		var z := -half + DEM_STEP * float(j)
+		for i in range(DEM_N):
+			floats[j * DEM_N + i] = height(-half + DEM_STEP * float(i), z)
+	var img := Image.create_from_data(DEM_N, DEM_N, false, Image.FORMAT_RF,
+		floats.to_byte_array())
+	# R32F не фильтруется линейно на Apple GPU и llvmpipe → half-float (RH):
+	# фильтруется везде, точность ~2 см на наших высотах
+	img.convert(Image.FORMAT_RH)
+	img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
+
 func _ground_material() -> ShaderMaterial:
-	# террейн-шейдер: зоны реального землепользования + атрибуты рельефа
+	# террейн-шейдер: пиксельные нормали из высот + зоны землепользования
 	var m := ShaderMaterial.new()
 	m.shader = load("res://shaders/world/terrain.gdshader")
+	m.set_shader_parameter("height_tex", _height_texture())
+	m.set_shader_parameter("dem_half", DEM_HALF)
 	var f := FileAccess.open(ZONES_PATH, FileAccess.READ)
 	if f != null:
 		var bytes := f.get_buffer(ZONES_N * ZONES_N)
@@ -175,6 +179,7 @@ func _ground_material() -> ShaderMaterial:
 		var img1 := Image.create(4, 4, false, Image.FORMAT_R8)
 		m.set_shader_parameter("zone_tex", ImageTexture.create_from_image(img1))
 	m.set_shader_parameter("zone_size_m", world_size_m)
+	m.set_shader_parameter("wet_level", (abs_min + 6.0) - _h_ref if real_dem else -3.0)
 	return m
 
 ## ФИЗИКА: рельеф — твёрдое тело (HeightMapShape по той же height()).
