@@ -49,6 +49,7 @@ func _ready() -> void:
 	_build_sun()
 	_build_ground()
 	_build_water()
+	_build_grass()
 	_build_props()
 	_build_camera()
 
@@ -110,6 +111,7 @@ func _print_state() -> void:
 		"sun_ct_k": int(_clock.sun_color_temp_k),
 		"terrain_relief_m": snappedf(r["relief_m"], 0.1),
 		"tris": r["tris"],
+		"grass_clumps": _grass.clump_count if _grass != null else 0,
 		"adapter": RenderingServer.get_video_adapter_name(),
 	}
 	print("STATE ", JSON.stringify(d))
@@ -226,6 +228,15 @@ func _build_water() -> void:
 	_water.terrain = _terrain
 	add_child(_water)
 	_water.build()
+
+# --- травяной ярус: посев по реальным зонам вокруг наблюдателя ---
+var _grass: GrassField
+
+func _build_grass() -> void:
+	_grass = GrassField.new()
+	_grass.terrain = _terrain
+	_grass.zone_size_m = _terrain.world_size_m
+	add_child(_grass)
 
 # --- объекты-эталоны масштаба: реальные размеры, стоят НА рельефе ---
 func _build_props() -> void:
@@ -413,9 +424,10 @@ func _terrain_line() -> String:
 		return ""
 	var r := _terrain.report()
 	if r["real"]:
-		return "Земля: %.1f×%.1f км · рельеф РЕАЛЬНЫЙ (Гатчина, DEM) %.0f..%.0f м · △ %d · вода: %d\n" % [
+		return "Земля: %.1f×%.1f км · рельеф РЕАЛЬНЫЙ (Гатчина, DEM) %.0f..%.0f м · △ %d · вода: %d · трава: %d\n" % [
 			r["size_m"] / 1000.0, r["size_m"] / 1000.0, r["abs_min"], r["abs_max"], r["tris"],
-			_water.count_built if _water != null else 0]
+			_water.count_built if _water != null else 0,
+			_grass.clump_count if _grass != null else 0]
 	return "Земля: %.0f×%.0f м · рельеф ПРОЦЕДУРНЫЙ (фолбэк!) %.1f м · △ %d\n" % [
 		r["size_m"], r["size_m"], r["relief_m"], r["tris"]]
 
