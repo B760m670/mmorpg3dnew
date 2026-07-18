@@ -9,6 +9,7 @@ on:
   push:
     branches:
       - claude/romanov-game-dev-uurxhs
+      - claude/project-overview-pzci3h
     paths:
       - "game2/**"
       - ".github/workflows/build-ipa2.yml"
