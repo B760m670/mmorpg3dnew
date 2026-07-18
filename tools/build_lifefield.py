@@ -93,6 +93,14 @@ def main():
     forest = rasterize(cover, cx, cy, half, {"forest"})
     light = np.clip((0.35 + 0.65 * expo) * (1.0 - 0.75 * forest), 0, 1)
 
+    # --- почва питает флору (петля geology→soil→flora): плодородие из поля почвы ---
+    soilbin = os.path.join(OUTDIR, "slice_soilfield.bin")
+    if os.path.exists(soilbin):
+        sf = np.frombuffer(open(soilbin, "rb").read(RES * RES * 4), np.uint8).reshape(RES, RES, 4)
+        fert = sf[..., 0].astype(np.float32) / 255.0
+    else:
+        fert = np.full((RES, RES), 0.5, np.float32)     # без поля почвы — нейтрально
+
     # --- вид: класс среза поверх реального покрова ---
     shrub = rasterize(cover, cx, cy, half, {"shrub"})
     # 0 нет,1 газон,2 луг,3 подлесок,4 камыш,5 куст
@@ -118,10 +126,11 @@ def main():
     base_h = trait_h[sp]; base_d = trait_d[sp]
 
     # --- СЛЕДСТВИЕ: рост из влаги и света; сухой крутой склон — голо ---
-    lush = np.clip(0.30 + 0.70 * moist, 0, 1) * np.clip(0.30 + 0.70 * light, 0, 1)
+    lush = (np.clip(0.30 + 0.70 * moist, 0, 1) * np.clip(0.30 + 0.70 * light, 0, 1)
+            * np.clip(0.35 + 0.65 * fert, 0, 1))          # рост требует и плодородия почвы
     bare_steep = ((slope_deg > 30) & (moist < 0.30)).astype(np.float32)
     height = base_h * (0.5 + 0.5 * lush)
-    density = np.clip(base_d * lush * (1 - bare_steep), 0, 1)
+    density = np.clip(base_d * lush * (0.5 + 0.5 * fert) * (1 - bare_steep), 0, 1)
     lushness = np.clip(lush, 0, 1)
 
     # --- запись поля ---
