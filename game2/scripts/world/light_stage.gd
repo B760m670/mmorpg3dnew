@@ -50,6 +50,7 @@ func _ready() -> void:
 	_build_ground()
 	_build_water()
 	_build_roads()
+	_build_city()
 	_build_grass()
 	_build_props()
 	_build_camera()
@@ -239,6 +240,15 @@ func _build_roads() -> void:
 	_roads.terrain = _terrain
 	add_child(_roads)
 	_roads.build()
+
+# --- город: реальные следы зданий Гатчины, поставленные на рельеф ---
+var _city: CityBuildings
+
+func _build_city() -> void:
+	_city = CityBuildings.new()
+	_city.terrain = _terrain
+	add_child(_city)
+	_city.build()
 
 # --- травяной ярус: посев по реальным зонам вокруг наблюдателя ---
 var _grass: GrassField
