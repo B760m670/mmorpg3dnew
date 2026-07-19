@@ -23,8 +23,24 @@ var tri_count := 0
 
 func build() -> void:
 	_add_layer(CITY_PATH, _wall_material(), _roof_material())
-	_add_layer(PALACE_PATH, _stone_material(), _stone_roof_material())
+	_add_palace_model()
 	print("[city] Гатчина: фон+дворец, △=%d (реальные следы, эпоха 1894)" % tri_count)
+
+# HERO-дворец — РЕАЛЬНАЯ модель из Blender (Cycles-проверена), не массинг-коробка:
+# корпус + вальмовые кровли + пятигранные башни. glTF (tools/build_palace_blender.py).
+# Фолбэк на массинг gatchina_palace.bin, если модель не загрузилась.
+const PALACE_GLB := "res://assets/models/palace.glb"
+
+func _add_palace_model() -> void:
+	var ps: Resource = load(PALACE_GLB)
+	if ps == null or not (ps is PackedScene):
+		push_warning("[city] нет модели дворца — фолбэк на массинг")
+		_add_layer(PALACE_PATH, _stone_material(), _stone_roof_material())
+		return
+	var inst: Node3D = (ps as PackedScene).instantiate()
+	var gy: float = terrain.height(19.0, -37.0) if terrain != null else 0.0
+	inst.position = Vector3(19.0, gy, -37.0)      # дворец на рельефе
+	add_child(inst)
 
 ## читает буфер CITY и вешает узел с двумя материалами (стены/кровли)
 func _add_layer(path: String, mat_wall: Material, mat_roof: Material) -> void:
