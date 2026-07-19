@@ -15,8 +15,8 @@ extends Node3D
 const TILE_M := 16.0
 const RADIUS_TILES := 6              # покрытие ±104 м вокруг наблюдателя
 const NEAR_TILES := 2                # ближний пояс (±40 м) — плотнее
-const CLUMPS_M2_NEAR := 1.0          # кустов на м² вблизи
-const CLUMPS_M2_FAR := 0.35
+const CLUMPS_M2_NEAR := 9.0          # кустов на м² вблизи — густой покров у ног
+const CLUMPS_M2_FAR := 2.5
 const BLADES_PER_CLUMP := 7
 const TRIS_PER_BLADE := 3
 const BUILDS_PER_FRAME := 4          # амортизация достройки на ходу (без рывков)
