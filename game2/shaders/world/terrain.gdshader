@@ -13,13 +13,15 @@ uniform sampler2D zone_tex : filter_nearest, repeat_disable;
 uniform float zone_size_m = 12288.0;
 uniform float wet_level = -30.0;         // мировая высота сырых низин, м
 
-// PBR-детали вблизи (синтез tools/make_materials.py): дернина и грунт.
-// Цвет несёт зона (albedo нормирован к 0.5 и умножается), текстура несёт
-// фактуру: рельеф покрова (RG-нормаль) и шероховатость (A).
-uniform sampler2D sod_alb : filter_linear_mipmap, repeat_enable;
-uniform sampler2D sod_nr : filter_linear_mipmap, repeat_enable;
-uniform sampler2D dirt_alb : filter_linear_mipmap, repeat_enable;
-uniform sampler2D dirt_nr : filter_linear_mipmap, repeat_enable;
+// РЕАЛЬНЫЕ материалы поверхности (сканы ambientCG, CC0 — assets/materials/real).
+// Цвет земли — это НАСТОЯЩИЙ альбедо скана (не палитра): трава и гравий,
+// смешиваются по dirt_w. На всех дистанциях (мип усредняет даль сам).
+uniform sampler2D grass_c : filter_linear_mipmap, repeat_enable;
+uniform sampler2D grass_n : filter_linear_mipmap, repeat_enable;
+uniform sampler2D grass_r : filter_linear_mipmap, repeat_enable;
+uniform sampler2D gravel_c : filter_linear_mipmap, repeat_enable;
+uniform sampler2D gravel_n : filter_linear_mipmap, repeat_enable;
+uniform sampler2D gravel_r : filter_linear_mipmap, repeat_enable;
 uniform float detail_tile_m = 2.0;
 
 // ВЕРТИКАЛЬНЫЙ СРЕЗ (Дворцовый парк): детальная карта поверхностей 1 м/пкс.
@@ -150,22 +152,32 @@ void fragment() {
 		}
 	}
 
-	// --- PBR-деталь вблизи: дернина / грунт по dirt_w ---
-	float detf = 1.0 - smoothstep(45.0, 140.0, dist);
-	vec3 n = gn;
-	float rough = rough_target;
-	if (detf > 0.001) {
-		vec2 duv = v_wpos.xz / detail_tile_m;
-		vec3 da = mix(texture(sod_alb, duv).rgb, texture(dirt_alb, duv).rgb, dirt_w);
-		vec4 dn = mix(texture(sod_nr, duv), texture(dirt_nr, duv), dirt_w);
-		col *= mix(vec3(1.0), da * 2.0, detf * 0.85);
-		vec3 tn = vec3(dn.x * 2.0 - 1.0, 0.0, dn.y * 2.0 - 1.0);
-		n = normalize(vec3(gn.x + tn.x * 0.9 * detf, gn.y, gn.z + tn.z * 0.9 * detf));
-		rough = mix(rough_target, dn.a, detf);
-	}
+	// --- РЕАЛЬНЫЙ материал земли: трава/гравий по dirt_w, ЦВЕТ = скан (не
+	// палитра), на ВСЕХ дистанциях (мип усредняет даль). Две частоты тайла —
+	// против явного повтора. ---
+	vec2 duv = v_wpos.xz / detail_tile_m;
+	vec2 duvb = v_wpos.xz / (detail_tile_m * 5.7);
+	vec3 g_alb = mix(texture(grass_c, duv).rgb, texture(grass_c, duvb).rgb, 0.45);
+	vec3 v_alb = mix(texture(gravel_c, duv).rgb, texture(gravel_c, duvb).rgb, 0.45);
+	vec3 mat_alb = mix(g_alb, v_alb, dirt_w);
+	float mat_rough = mix(texture(grass_r, duv).r, texture(gravel_r, duv).r, dirt_w);
+	vec3 g_tn = texture(grass_n, duv).xyz * 2.0 - 1.0;
+	vec3 v_tn = texture(gravel_n, duv).xyz * 2.0 - 1.0;
+	vec3 tn = mix(g_tn, v_tn, dirt_w);
 
-	ALBEDO = col;
-	ROUGHNESS = rough;
+	// зона — лишь лёгкий оттенок (тон, среднее 1) для крупной вариации, не палитра
+	vec3 zt = zone_tint(z);
+	vec3 tint = zt / max(dot(zt, vec3(0.333)), 0.02);
+	vec3 col2 = mat_alb * mix(vec3(1.0), tint, 0.30);
+	col2 *= 1.0 - 0.12 * broad;
+	col2 = mix(col2, col2 * vec3(0.72, 0.66, 0.60), wet * 0.5);   // сырость темнит
+
+	// нормаль материала слабеет с далью (против алиасинга лент к солнцу)
+	float nstr = 0.9 * (1.0 - smoothstep(60.0, 320.0, dist));
+	vec3 n = normalize(vec3(gn.x + tn.x * nstr, gn.y, gn.z + tn.z * nstr));
+
+	ALBEDO = col2;
+	ROUGHNESS = clamp(mix(rough_target, mat_rough, 0.85), 0.25, 1.0);
 	METALLIC = 0.0;
 	SPECULAR = 0.0;
 	NORMAL = normalize((VIEW_MATRIX * vec4(n, 0.0)).xyz);

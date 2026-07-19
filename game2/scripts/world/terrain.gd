@@ -248,11 +248,13 @@ func _ground_material() -> ShaderMaterial:
 		m.set_shader_parameter("zone_tex", ImageTexture.create_from_image(img1))
 	m.set_shader_parameter("zone_size_m", world_size_m)
 	m.set_shader_parameter("wet_level", (abs_min + 6.0) - _h_ref if real_dem else -3.0)
-	# PBR-детали вблизи (синтез tools/make_materials.py)
-	m.set_shader_parameter("sod_alb", load("res://assets/materials/sod_alb.png"))
-	m.set_shader_parameter("sod_nr", load("res://assets/materials/sod_nr.png"))
-	m.set_shader_parameter("dirt_alb", load("res://assets/materials/dirt_alb.png"))
-	m.set_shader_parameter("dirt_nr", load("res://assets/materials/dirt_nr.png"))
+	# РЕАЛЬНЫЕ материалы поверхности (сканы ambientCG, CC0) — трава и гравий
+	m.set_shader_parameter("grass_c", load("res://assets/materials/real/grass004/Color.jpg"))
+	m.set_shader_parameter("grass_n", load("res://assets/materials/real/grass004/Normal.jpg"))
+	m.set_shader_parameter("grass_r", load("res://assets/materials/real/grass004/Roughness.jpg"))
+	m.set_shader_parameter("gravel_c", load("res://assets/materials/real/gravel011/Color.jpg"))
+	m.set_shader_parameter("gravel_n", load("res://assets/materials/real/gravel011/Normal.jpg"))
+	m.set_shader_parameter("gravel_r", load("res://assets/materials/real/gravel011/Roughness.jpg"))
 	_setup_slice(m)
 	return m
 
