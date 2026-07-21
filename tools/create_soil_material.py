@@ -41,15 +41,11 @@ def build_fields():
     crumb = 0.6 * np.clip(1.0 - d1 * 1.8, 0, 1) ** 1.4 \
         + 0.4 * np.clip(1.0 - d1b * 1.5, 0, 1) ** 1.4
     crumb_mask = np.clip((fbm(7, 3) - 0.38) * 2.8, 0, 1)
-    # редкие полузарытые камешки (резче комьев — сглаживаются меньше)
-    pd1, _, ptone, _, _ = voronoi(22)
-    pebble_mask = np.clip((ptone - 0.78) * 8.0, 0, 1)
-    pebble_dome = np.clip(1.0 - pd1 * 2.4, 0, 1) ** 1.2 * pebble_mask
-
-    soft = gaussian_filter(lumps * 0.70 + crumb * crumb_mask * 0.16,
-                           sigma=1.6, mode='wrap')
-    h = soft + gaussian_filter(pebble_dome, sigma=0.7, mode='wrap') * 0.34
-    h = (h - h.min()) / (h.max() - h.min())
+    # ТОЛЬКО почва: комья + крупинки гумуса. Камней здесь НЕТ — камни отдельные
+    # объекты (создаются мешами и накидываются), не запекаются в поверхность.
+    soft = gaussian_filter(lumps * 0.72 + crumb * crumb_mask * 0.18,
+                           sigma=1.5, mode='wrap')
+    h = (soft - soft.min()) / (soft.max() - soft.min())
 
     # альбедо СЛЕДУЕТ из геометрии (не крашеные пятна): гребни комьев (высокое h)
     # суше и светлее, западины держат влагу/органику — темнее. Плюс тонкая
@@ -62,12 +58,9 @@ def build_fields():
     alb = base_dark[None, None, :] * (1 - dryness[..., None]) \
         + base_dry[None, None, :] * dryness[..., None]
     alb *= (0.92 + 0.16 * (fine - 0.5))[..., None]        # зернистость гумуса ±8%
-    grey = np.array([0.44, 0.42, 0.39])
-    alb = alb * (1 - pebble_dome[..., None]) \
-        + grey * (0.7 + 0.3 * ptone)[..., None] * pebble_dome[..., None]
     alb = np.clip(alb, 0, 1)
 
-    rough = 0.96 - 0.20 * pebble_dome + 0.05 * (fine - 0.5)
+    rough = 0.95 + 0.05 * (fine - 0.5)          # почва матовая, чуть варьирует
     return h, np.clip(alb, 0, 1), np.clip(rough, 0, 1)
 
 
