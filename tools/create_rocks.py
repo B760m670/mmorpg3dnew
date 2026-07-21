@@ -19,58 +19,67 @@ import bpy
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 OUTDIR = os.path.join(ROOT, "game2", "assets", "models")
 
-# породы: (имя, базовый цвет, вторичный цвет, шероховатость)
+REF = os.path.join(ROOT, "game2", "assets", "materials", "real", "rock030")
+
+# породы: реальная поверхность камня (скан rock030) × тон породы × множ.шерох.
+# Тон лишь подкрашивает НАСТОЯЩЕЕ зерно/прожилки — не заменяет их.
 ROCK_TYPES = [
-    ("granite_grey", (0.42, 0.41, 0.40), (0.24, 0.23, 0.24), 0.62),
-    ("granite_pink", (0.52, 0.40, 0.37), (0.34, 0.27, 0.26), 0.60),
-    ("limestone", (0.50, 0.46, 0.38), (0.36, 0.33, 0.27), 0.70),
-    ("diabase_dark", (0.20, 0.20, 0.22), (0.11, 0.11, 0.13), 0.55),
-    ("granite_grey", (0.46, 0.45, 0.43), (0.26, 0.25, 0.25), 0.64),
+    ("granite_grey", (0.88, 0.90, 0.92), 1.00),
+    ("granite_pink", (1.08, 0.88, 0.80), 0.95),
+    ("limestone", (1.18, 1.10, 0.94), 1.10),
+    ("diabase_dark", (0.55, 0.56, 0.64), 0.88),
+    ("granite_grey", (0.94, 0.93, 0.90), 1.02),
 ]
 
 
-def rock_material(name, c0, c1, rough):
+def _teximg(nt, fn, noncolor):
+    img = bpy.data.images.load(os.path.join(REF, fn))
+    if noncolor:
+        img.colorspace_settings.name = 'Non-Color'
+    n = nt.nodes.new("ShaderNodeTexImage")
+    n.image = img
+    return n
+
+
+def rock_material(name, tint, rough_mul):
+    """РЕАЛЬНАЯ поверхность камня (скан rock030) на геометрии, подкрашенная тоном
+    породы, + кромочный износ/мох (pointiness). Настоящее зерно/прожилки — из
+    скана, не выдуманы."""
     m = bpy.data.materials.new(name)
     m.use_nodes = True
     nt = m.node_tree
     bsdf = nt.nodes.get("Principled BSDF")
-    # цвет варьирует по шуму: две породы-тона смешиваются пятнами
-    noise = nt.nodes.new("ShaderNodeTexNoise")
-    noise.inputs["Scale"].default_value = 4.5
-    noise.inputs["Detail"].default_value = 8.0
-    ramp = nt.nodes.new("ShaderNodeValToRGB")
-    ramp.color_ramp.elements[0].color = (*c1, 1)
-    ramp.color_ramp.elements[1].color = (*c0, 1)
-    nt.links.new(noise.outputs["Fac"], ramp.inputs["Fac"])
-    # кромочный износ + мох во впадинах через pointiness (стандарт фотореал-камня):
-    # крутые кромки — светлее (обтёрты), впадины — темнее и мшисто-зеленее
+    col = _teximg(nt, "Color.jpg", False)
+    nrm = _teximg(nt, "Normal.jpg", True)
+    rgh = _teximg(nt, "Roughness.jpg", True)
+
+    # тон породы множит РЕАЛЬНЫЙ цвет (зерно сохраняется)
+    tn = nt.nodes.new("ShaderNodeMix"); tn.data_type = 'RGBA'; tn.blend_type = 'MULTIPLY'
+    tn.inputs["Factor"].default_value = 1.0
+    tn.inputs[7].default_value = (*tint, 1.0)
+    nt.links.new(col.outputs["Color"], tn.inputs[6])
+    # кромочный износ + мох во впадинах (pointiness)
     geo = nt.nodes.new("ShaderNodeNewGeometry")
     wear = nt.nodes.new("ShaderNodeValToRGB")
     wear.color_ramp.elements[0].position = 0.44
-    wear.color_ramp.elements[0].color = (0.42, 0.50, 0.36, 1)   # впадины — мшисто
+    wear.color_ramp.elements[0].color = (0.50, 0.55, 0.42, 1)   # впадины — мшисто
     wear.color_ramp.elements[1].position = 0.60
-    wear.color_ramp.elements[1].color = (1.25, 1.22, 1.15, 1)   # кромки — износ
+    wear.color_ramp.elements[1].color = (1.30, 1.28, 1.20, 1)   # кромки — износ
     nt.links.new(geo.outputs["Pointiness"], wear.inputs["Fac"])
-    mixw = nt.nodes.new("ShaderNodeMix")
-    mixw.data_type = 'RGBA'
-    mixw.blend_type = 'MULTIPLY'
-    mixw.inputs["Factor"].default_value = 0.9
-    nt.links.new(ramp.outputs["Color"], mixw.inputs[6])         # A
-    nt.links.new(wear.outputs["Color"], mixw.inputs[7])         # B
-    nt.links.new(mixw.outputs[2], bsdf.inputs["Base Color"])    # Result
-    # шероховатость чуть варьирует (влажные впадины глаже)
-    rr = nt.nodes.new("ShaderNodeTexNoise"); rr.inputs["Scale"].default_value = 9.0
-    rmap = nt.nodes.new("ShaderNodeMapRange")
-    rmap.inputs["To Min"].default_value = rough - 0.1
-    rmap.inputs["To Max"].default_value = rough + 0.12
-    nt.links.new(rr.outputs["Fac"], rmap.inputs["Value"])
-    nt.links.new(rmap.outputs["Result"], bsdf.inputs["Roughness"])
-    # мелкий рельеф камня — бампом (микротрещины), не плоско
-    bump_n = nt.nodes.new("ShaderNodeTexNoise"); bump_n.inputs["Scale"].default_value = 45.0
-    bump_n.inputs["Detail"].default_value = 10.0
-    bump = nt.nodes.new("ShaderNodeBump"); bump.inputs["Strength"].default_value = 0.25
-    nt.links.new(bump_n.outputs["Fac"], bump.inputs["Height"])
-    nt.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+    mixw = nt.nodes.new("ShaderNodeMix"); mixw.data_type = 'RGBA'; mixw.blend_type = 'MULTIPLY'
+    mixw.inputs["Factor"].default_value = 0.85
+    nt.links.new(tn.outputs[2], mixw.inputs[6])
+    nt.links.new(wear.outputs["Color"], mixw.inputs[7])
+    nt.links.new(mixw.outputs[2], bsdf.inputs["Base Color"])
+    # реальная нормаль (микрорельеф зерна)
+    nmap = nt.nodes.new("ShaderNodeNormalMap")
+    nt.links.new(nrm.outputs["Color"], nmap.inputs["Color"])
+    nt.links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
+    # реальная шероховатость × множитель породы
+    rm = nt.nodes.new("ShaderNodeMath"); rm.operation = 'MULTIPLY'
+    rm.inputs[1].default_value = rough_mul
+    nt.links.new(rgh.outputs["Color"], rm.inputs[0])
+    nt.links.new(rm.outputs["Value"], bsdf.inputs["Roughness"])
     return m
 
 
@@ -107,7 +116,12 @@ def make_rock(seed, size, mat):
     # плоские фаски камня читаются — авто-сглаживание по углу
     o.data.polygons.foreach_set("use_smooth", [True] * len(o.data.polygons))
     o.data.update()
-    m_auto = o.modifiers.new("auto", 'WEIGHTED_NORMAL') if False else None
+    # UV-развёртка — чтобы реальная поверхность камня легла на геометрию
+    bpy.context.view_layer.objects.active = o
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.uv.smart_project(angle_limit=1.15, island_margin=0.02)
+    bpy.ops.object.mode_set(mode='OBJECT')
     # сесть на землю: низ в 0
     zs = [(o.matrix_world @ v.co).z for v in o.data.vertices]
     o.location.z -= min(zs)
@@ -124,8 +138,8 @@ def main():
     rocks = []
     x = 0.0
     sizes = [0.9, 0.55, 1.05, 0.35, 0.7]
-    for i, (name, c0, c1, rough) in enumerate(ROCK_TYPES):
-        mat = rock_material(name, c0, c1, rough)
+    for i, (name, tint, rough_mul) in enumerate(ROCK_TYPES):
+        mat = rock_material(name, tint, rough_mul)
         o, tris = make_rock(1894 + i * 7, sizes[i], mat)
         o.location.x = x
         x += sizes[i] * 1.4 + 0.9
