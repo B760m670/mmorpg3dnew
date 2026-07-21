@@ -126,14 +126,16 @@ def main():
                             [1.00, 0.70, 0.50, 0.35, 0.20], default=0.05)
     deform = np.clip(deform_base * (0.40 + 0.60 * wet), 0, 1)
 
-    # --- запись поля почвы (RGBA: fertility, moisture_ret, deformability, type) ---
+    # --- запись поля почвы (RGBA: fertility, ВЛАГА(текущая), deformability, type) ---
+    # канал 1 = текущая влажность wet (для мокрого вида почвы в шейдере: мокрая
+    # темнее и глянцевее); влагоёмкость moisture_ret больше нигде не читается.
     field = np.stack([(fert * 255).astype(np.uint8),
-                      (moisture_ret * 255).astype(np.uint8),
+                      (np.clip(wet, 0, 1) * 255).astype(np.uint8),
                       (deform * 255).astype(np.uint8),
                       soil], -1)
     field.tofile(os.path.join(OUTDIR, "slice_soilfield.bin"))
     json.dump({"n": RES, "cx": cx, "cy": cy, "half_m": half,
-               "channels": ["fertility", "moisture_ret", "deformability", "soil_type"],
+               "channels": ["fertility", "moisture", "deformability", "soil_type"],
                "soil_types": {str(k): v[0] for k, v in SOIL.items()}},
               open(os.path.join(OUTDIR, "slice_soilfield.json"), "w"),
               ensure_ascii=False, indent=1)

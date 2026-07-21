@@ -5,7 +5,7 @@ shader_type spatial;
 // Вблизи добавляются микронормали грунта (сантиметровая неровность) и
 // микровариация цвета. Зоны — реальное землепользование (zone_tex).
 // Видимая поверхность согласована с коллизией (обе — из той же height()).
-render_mode diffuse_burley, specular_disabled, cull_back;
+render_mode diffuse_burley, cull_back;   // спекуляр включён — для влажного блеска почвы
 
 uniform sampler2D height_tex : filter_linear_mipmap, repeat_disable;
 uniform float dem_half = 8192.0;         // текстура высот покрывает ±dem_half
@@ -41,6 +41,12 @@ uniform sampler2D deform_tex : filter_linear, repeat_disable;
 uniform vec2 deform_center = vec2(0.0);
 uniform float deform_half = 0.0;
 uniform float deform_depth = 0.12;
+
+// ВЛАЖНОСТЬ почвы (реальное поле влаги build_soilfield): мокрая земля темнее и
+// глянцевее (влажный блеск). Guarded: moisture_half<=0 → выключено.
+uniform sampler2D moisture_tex : filter_linear, repeat_disable;
+uniform vec2 moisture_center = vec2(0.0, 400.0);
+uniform float moisture_half = 0.0;
 
 varying vec3 v_wpos;
 varying float v_deform;
@@ -196,11 +202,26 @@ void fragment() {
 	float nstr = 0.9 * (1.0 - smoothstep(60.0, 320.0, dist));
 	vec3 n = normalize(vec3(gn.x + tn.x * nstr, gn.y, gn.z + tn.z * nstr));
 
-	// спрессованная почва в следе темнее и влажнее (глаже)
+	float rough = mix(rough_target, mat_rough, 0.85);
+	float spec = 0.15;
+	// ВЛАЖНОСТЬ: мокрая почва темнее, глаже, с влажным блеском (реальное поле)
+	if (moisture_half > 1.0) {
+		vec2 dpos = vec2(v_wpos.x, -v_wpos.z);       // данные: восток, север
+		vec2 muv = (dpos - moisture_center) / (2.0 * moisture_half) + 0.5;
+		muv.y = 1.0 - muv.y;
+		if (muv.x > 0.0 && muv.x < 1.0 && muv.y > 0.0 && muv.y < 1.0) {
+			float wetv = smoothstep(0.35, 0.90, texture(moisture_tex, muv).r);
+			col2 *= mix(1.0, 0.55, wetv);            // мокрая — темнее
+			rough = mix(rough, 0.32, wetv);          // и глаже
+			spec = mix(spec, 0.55, wetv);            // влажный блеск
+		}
+	}
+	// спрессованная почва в следе темнее и глаже (просадка от нагрузки)
 	col2 *= mix(1.0, 0.62, v_deform);
+	rough *= mix(1.0, 0.7, v_deform);
 	ALBEDO = col2;
-	ROUGHNESS = clamp(mix(rough_target, mat_rough, 0.85) * mix(1.0, 0.7, v_deform), 0.22, 1.0);
+	ROUGHNESS = clamp(rough, 0.22, 1.0);
 	METALLIC = 0.0;
-	SPECULAR = 0.0;
+	SPECULAR = spec;
 	NORMAL = normalize((VIEW_MATRIX * vec4(n, 0.0)).xyz);
 }

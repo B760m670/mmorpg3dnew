@@ -5,7 +5,7 @@
  "half_m": 950.0,
  "channels": [
   "fertility",
-  "moisture_ret",
+  "moisture",
   "deformability",
   "soil_type"
  ],

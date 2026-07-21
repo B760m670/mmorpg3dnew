@@ -261,7 +261,35 @@ func _ground_material() -> ShaderMaterial:
 	m.set_shader_parameter("gravel_n", load("res://assets/materials/created/soil_sod/Normal.png"))
 	m.set_shader_parameter("gravel_r", load("res://assets/materials/created/soil_sod/Roughness.png"))
 	_setup_slice(m)
+	_setup_moisture(m)
 	return m
+
+# ВЛАЖНОСТЬ почвы: канал 1 поля почвы (build_soilfield) → R8-текстура для шейдера
+# (мокрая земля темнее/глянцевее). Центр/охват — как у среза.
+const SOILF_BIN := "res://assets/life/slice_soilfield.bin"
+const SOILF_META := "res://assets/life/slice_soilfield.json"
+
+func _setup_moisture(m: ShaderMaterial) -> void:
+	var fm := FileAccess.open(SOILF_META, FileAccess.READ)
+	var fb := FileAccess.open(SOILF_BIN, FileAccess.READ)
+	if fm == null or fb == null:
+		m.set_shader_parameter("moisture_half", 0.0)
+		return
+	var meta: Dictionary = JSON.parse_string(fm.get_as_text())
+	var n := int(meta["n"])
+	var raw := fb.get_buffer(n * n * 4)
+	if raw.size() != n * n * 4:
+		m.set_shader_parameter("moisture_half", 0.0)
+		return
+	var ch := PackedByteArray()
+	ch.resize(n * n)
+	for k in range(n * n):
+		ch[k] = raw[k * 4 + 1]                 # канал 1 = текущая влага
+	var img := Image.create_from_data(n, n, false, Image.FORMAT_R8, ch)
+	m.set_shader_parameter("moisture_tex", ImageTexture.create_from_image(img))
+	m.set_shader_parameter("moisture_center", Vector2(float(meta["cx"]), float(meta["cy"])))
+	m.set_shader_parameter("moisture_half", float(meta["half_m"]))
+	print("[terrain] влажность почвы: поле %d² подключено (мокрая земля темнее)" % n)
 
 # --- ВЕРТИКАЛЬНЫЙ СРЕЗ: детальная карта поверхностей Дворцового парка ---
 const SLICE_BIN := "res://assets/dem/slice_palace.bin"
