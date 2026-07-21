@@ -252,9 +252,11 @@ func _ground_material() -> ShaderMaterial:
 	m.set_shader_parameter("grass_c", load("res://assets/materials/real/grass004/Color.jpg"))
 	m.set_shader_parameter("grass_n", load("res://assets/materials/real/grass004/Normal.jpg"))
 	m.set_shader_parameter("grass_r", load("res://assets/materials/real/grass004/Roughness.jpg"))
-	m.set_shader_parameter("gravel_c", load("res://assets/materials/real/gravel011/Color.jpg"))
-	m.set_shader_parameter("gravel_n", load("res://assets/materials/real/gravel011/Normal.jpg"))
-	m.set_shader_parameter("gravel_r", load("res://assets/materials/real/gravel011/Roughness.jpg"))
+	# «голая земля» (склоны/сырость/утоптано) — СОЗДАННАЯ дерновая почва:
+	# карты запечены с реальной геометрии комьев (tools/create_soil_material.py)
+	m.set_shader_parameter("gravel_c", load("res://assets/materials/created/soil_sod/Color.png"))
+	m.set_shader_parameter("gravel_n", load("res://assets/materials/created/soil_sod/Normal.png"))
+	m.set_shader_parameter("gravel_r", load("res://assets/materials/created/soil_sod/Roughness.png"))
 	_setup_slice(m)
 	return m
 
