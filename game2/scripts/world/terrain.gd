@@ -100,8 +100,11 @@ func normal_at(x: float, z: float) -> Vector3:
 		height(x, z - e) - height(x, z + e)).normalized()
 
 # ------------------------------------------------------------------ построение
+var ground_mat: ShaderMaterial          # общий материал колец (для деформации)
+
 func build() -> void:
 	var mat := _ground_material()
+	ground_mat = mat
 	tri_count = 0
 	for lv in range(LEVELS):
 		var mi := MeshInstance3D.new()

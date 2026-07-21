@@ -54,6 +54,7 @@ func _ready() -> void:
 	_build_grass()
 	_build_props()
 	_build_camera()
+	_build_deform()
 
 	if ENABLE_POST:
 		_build_post_overlay()
@@ -260,6 +261,15 @@ func _build_grass() -> void:
 	add_child(_grass)
 
 # --- объекты-эталоны масштаба: реальные размеры, стоят НА рельефе ---
+# деформация почвы под нагрузкой (следы/проседание) — по полю деформируемости
+var _deform: GroundDeform
+
+func _build_deform() -> void:
+	_deform = GroundDeform.new()
+	_deform.terrain = _terrain
+	_deform.target = _walker            # тело пешехода — точка нагрузки
+	add_child(_deform)
+
 func _build_props() -> void:
 	# человекоростовой столб-эталон (1.8 м) — чувство масштаба земли
 	var post := MeshInstance3D.new()

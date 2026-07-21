@@ -34,7 +34,16 @@ uniform float slice_half = 0.0;                 // 0 → срез выключе
 // клипмап: уровень кольца этого меша (0 — центр 2 м ... 6 — кольцо 128 м)
 instance uniform float clip_level = 0.0;
 
+// ДЕФОРМАЦИЯ почвы (следы/проседание под нагрузкой): imprint-буфер вокруг
+// игрока, глубина ∝ деформируемости почвы (задаётся снаружи ground_deform.gd).
+// Guarded: deform_half<=0 → выключено, террейн не трогается.
+uniform sampler2D deform_tex : filter_linear, repeat_disable;
+uniform vec2 deform_center = vec2(0.0);
+uniform float deform_half = 0.0;
+uniform float deform_depth = 0.12;
+
 varying vec3 v_wpos;
+varying float v_deform;
 
 void vertex() {
 	// кольцо — плоская сетка, ездит за камерой (в MODEL — снап-позиция);
@@ -48,6 +57,17 @@ void vertex() {
 	bool skirt = VERTEX.y < -500.0;      // маркер вершин-юбок
 	VERTEX.y = h - (skirt ? cell * 2.0 + 2.0 : 0.0);
 	v_wpos = vec3(w.x, h, w.z);
+
+	// деформация — только на детальных кольцах у ног, вне юбок
+	v_deform = 0.0;
+	if (deform_half > 0.5 && clip_level < 2.5 && !skirt) {
+		vec2 duv = (w.xz - deform_center) / (2.0 * deform_half) + 0.5;
+		if (duv.x > 0.0 && duv.x < 1.0 && duv.y > 0.0 && duv.y < 1.0) {
+			float d = texture(deform_tex, duv).r * deform_depth;
+			VERTEX.y -= d;
+			v_deform = d / max(deform_depth, 1e-4);
+		}
+	}
 }
 
 float hh(vec2 wxz) {
@@ -176,8 +196,10 @@ void fragment() {
 	float nstr = 0.9 * (1.0 - smoothstep(60.0, 320.0, dist));
 	vec3 n = normalize(vec3(gn.x + tn.x * nstr, gn.y, gn.z + tn.z * nstr));
 
+	// спрессованная почва в следе темнее и влажнее (глаже)
+	col2 *= mix(1.0, 0.62, v_deform);
 	ALBEDO = col2;
-	ROUGHNESS = clamp(mix(rough_target, mat_rough, 0.85), 0.25, 1.0);
+	ROUGHNESS = clamp(mix(rough_target, mat_rough, 0.85) * mix(1.0, 0.7, v_deform), 0.22, 1.0);
 	METALLIC = 0.0;
 	SPECULAR = 0.0;
 	NORMAL = normalize((VIEW_MATRIX * vec4(n, 0.0)).xyz);
