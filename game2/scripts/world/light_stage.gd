@@ -51,10 +51,13 @@ func _ready() -> void:
 	_build_water()
 	_build_roads()
 	_build_city()
-	_build_grass()
+	# СТАРАЯ трава (MultiMesh, разбросанные былинки) УБРАНА — она была
+	# неестественной и «размазанной» по всей карте; траву создадим настоящей
+	# (разной, в Blender) позже. Сейчас работаем над ПОЧВОЙ.
 	_build_props()
 	_build_camera()
 	_build_deform()
+	_build_rain()
 
 	if ENABLE_POST:
 		_build_post_overlay()
@@ -116,6 +119,7 @@ func _print_state() -> void:
 		"tris": r["tris"],
 		"grass_clumps": _grass.clump_count if _grass != null else 0,
 		"roads_km": snappedf(_roads.length_km, 0.1) if _roads != null else 0.0,
+		"rain": _rain.state() if _rain != null else {},
 		"adapter": RenderingServer.get_video_adapter_name(),
 	}
 	print("STATE ", JSON.stringify(d))
@@ -269,6 +273,14 @@ func _build_deform() -> void:
 	_deform.terrain = _terrain
 	_deform.target = _walker            # тело пешехода — точка нагрузки
 	add_child(_deform)
+
+# --- ПОГОДА: настоящий дождь (капли + напитывание почвы + лужи в низинах) ---
+var _rain: RainSystem
+
+func _build_rain() -> void:
+	_rain = RainSystem.new()
+	_rain.terrain = _terrain
+	add_child(_rain)
 
 func _build_props() -> void:
 	# человекоростовой столб-эталон (1.8 м) — чувство масштаба земли
@@ -455,13 +467,21 @@ func _terrain_line() -> String:
 		return ""
 	var r := _terrain.report()
 	if r["real"]:
-		return "Земля: %.1f×%.1f км · рельеф РЕАЛЬНЫЙ (Гатчина, DEM) %.0f..%.0f м · △ %d · вода: %d · дороги: %.0f км · трава: %d\n" % [
+		return "Земля: %.1f×%.1f км · рельеф РЕАЛЬНЫЙ (Гатчина, DEM) %.0f..%.0f м · △ %d · вода: %d · дороги: %.0f км · %s\n" % [
 			r["size_m"] / 1000.0, r["size_m"] / 1000.0, r["abs_min"], r["abs_max"], r["tris"],
 			_water.count_built if _water != null else 0,
 			_roads.length_km if _roads != null else 0.0,
-			_grass.clump_count if _grass != null else 0]
+			_rain_line()]
 	return "Земля: %.0f×%.0f м · рельеф ПРОЦЕДУРНЫЙ (фолбэк!) %.1f м · △ %d\n" % [
 		r["size_m"], r["size_m"], r["relief_m"], r["tris"]]
+
+func _rain_line() -> String:
+	if _rain == null:
+		return "дождь: —"
+	var s := _rain.state()
+	if s["raining"]:
+		return "дождь %.1f мм/ч · почва мокрая %.0f%%" % [s["rate_mmh"], float(s["rain_wet"]) * 100.0]
+	return "ясно · почва мокрая %.0f%%" % [float(s["rain_wet"]) * 100.0]
 
 func _clock_line() -> String:
 	if _clock == null:
