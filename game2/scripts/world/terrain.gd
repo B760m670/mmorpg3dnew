@@ -251,10 +251,8 @@ func _ground_material() -> ShaderMaterial:
 		m.set_shader_parameter("zone_tex", ImageTexture.create_from_image(img1))
 	m.set_shader_parameter("zone_size_m", world_size_m)
 	m.set_shader_parameter("wet_level", (abs_min + 6.0) - _h_ref if real_dem else -3.0)
-	# РЕАЛЬНЫЕ материалы поверхности (сканы ambientCG, CC0) — трава и гравий
-	m.set_shader_parameter("grass_c", load("res://assets/materials/real/grass004/Color.jpg"))
-	m.set_shader_parameter("grass_n", load("res://assets/materials/real/grass004/Normal.jpg"))
-	m.set_shader_parameter("grass_r", load("res://assets/materials/real/grass004/Roughness.jpg"))
+	# ОСНОВА ЗЕМЛИ = РЕАЛЬНАЯ ПОЧВА везде (травы-раскраски больше нет — плоский
+	# скан травы был «обоями»; настоящую траву создадим геометрией отдельным слоем).
 	# «голая почва» — СОЗДАННЫЙ набор из РЕАЛЬНОГО скана (цвет сведён по числам к
 	# дерново-подзолистой почве Гатчины), геометрия комьев запечена в Blender:
 	# Color/Normal/Roughness + AO + Height (tools/build_ground_materials.py)

@@ -13,15 +13,11 @@ uniform sampler2D zone_tex : filter_nearest, repeat_disable;
 uniform float zone_size_m = 12288.0;
 uniform float wet_level = -30.0;         // мировая высота сырых низин, м
 
-// РЕАЛЬНЫЕ материалы поверхности (сканы ambientCG, CC0 — assets/materials/real).
-// Цвет земли — это НАСТОЯЩИЙ альбедо скана (не палитра): трава и гравий,
-// смешиваются по dirt_w. На всех дистанциях (мип усредняет даль сам).
-uniform sampler2D grass_c : filter_linear_mipmap, repeat_enable;
-uniform sampler2D grass_n : filter_linear_mipmap, repeat_enable;
-uniform sampler2D grass_r : filter_linear_mipmap, repeat_enable;
-// «голая почва» — СОЗДАННЫЙ в Blender набор из РЕАЛЬНОГО скана (альбедо сведён
-// по числам к дерново-подзолистой почве Гатчины), с запечённой геометрией комьев:
-// Color/Normal/Roughness + AO + Height (для height-blend слоёв).
+// ОСНОВА ЗЕМЛИ = РЕАЛЬНАЯ ПОЧВА (травы-раскраски больше нет — плоский скан травы
+// был «обоями», не настоящей травой; её создадим геометрией отдельным слоем).
+// СОЗДАННЫЙ в Blender набор из РЕАЛЬНОГО скана (альбедо сведён по числам к дерново-
+// подзолистой почве Гатчины), с запечённой геометрией комьев:
+// Color/Normal/Roughness + AO + Height.
 uniform sampler2D soil_c : filter_linear_mipmap, repeat_enable;
 uniform sampler2D soil_n : filter_linear_mipmap, repeat_enable;
 uniform sampler2D soil_r : filter_linear_mipmap, repeat_enable;
@@ -189,38 +185,25 @@ void fragment() {
 		}
 	}
 
-	// --- РЕАЛЬНЫЙ материал земли — СЛОИ (трава / почва), ЦВЕТ = скан (не палитра).
-	// HEIGHT-BLEND: почва проявляется по СВОЕМУ микрорельефу (комья лезут сквозь
-	// дёрн), а не ровным лерпом. Реальный AO почвы. Две частоты тайла + макро-
-	// девариация — против «плоской заливки» на дали. На всех дистанциях. ---
+	// --- РЕАЛЬНАЯ ПОЧВА как основа земли ВЕЗДЕ, ЦВЕТ = скан (сведён к почве
+	// Гатчины). Реальный AO почвы. Две частоты тайла + макро-девариация —
+	// против «плоской заливки» на дали. На всех дистанциях. ---
 	vec2 duv = v_wpos.xz / detail_tile_m;
 	vec2 duvb = v_wpos.xz / (detail_tile_m * 5.7);
 
-	vec3 g_alb = mix(texture(grass_c, duv).rgb, texture(grass_c, duvb).rgb, 0.45);
-	float g_rough = texture(grass_r, duv).r;
-	vec3 g_tn = texture(grass_n, duv).xyz * 2.0 - 1.0;
-
 	vec3 s_alb = mix(texture(soil_c, duv).rgb, texture(soil_c, duvb).rgb, 0.45);
-	float s_rough = texture(soil_r, duv).r;
-	vec3 s_tn = texture(soil_n, duv).xyz * 2.0 - 1.0;
+	float mat_rough = texture(soil_r, duv).r;
+	vec3 tn = texture(soil_n, duv).xyz * 2.0 - 1.0;
 	float s_ao = texture(soil_ao, duv).r;
-	float s_h = texture(soil_h, duv).r;
+	vec3 mat_alb = s_alb * mix(1.0, s_ao, 0.75);   // реальный AO почвы в западинах
 
-	// height-blend: смещаем порог доли почвы её собственным рельефом
-	float wsoil = clamp((clamp(dirt_w, 0.0, 1.0) * 1.5 - 0.25) + (s_h - 0.5) * 0.6, 0.0, 1.0);
-	vec3 mat_alb = mix(g_alb, s_alb * mix(1.0, s_ao, 0.75), wsoil);
-	float mat_rough = mix(g_rough, s_rough, wsoil);
-	vec3 tn = mix(g_tn, s_tn, wsoil);
-
-	// зона — лишь лёгкий оттенок (тон, среднее 1); на голой почве почти не влияет
-	// (у почвы уже реальный цвет), сильнее на дёрне
-	vec3 zt = zone_tint(z);
-	vec3 tint = zt / max(dot(zt, vec3(0.333)), 0.02);
-	vec3 col2 = mat_alb * mix(vec3(1.0), tint, 0.30 * (1.0 - wsoil * 0.7));
-	// макро-девариация ДВУХ низких частот (тональная, не крашеные пятна) —
-	// разбивает мип-усреднение тайла в ровную заливку на дистанции
+	// без зелёной раскраски — только честная почва + макро-девариация ДВУХ низких
+	// частот (тональная, не крашеные пятна): разбивает мип-усреднение тайла в
+	// ровную заливку на дистанции. Крутые склоны — чуть темнее (грунт в тени комьев).
+	vec3 col2 = mat_alb;
 	float macro = vnoise(v_wpos.xz * 0.05) * 0.6 + vnoise(v_wpos.xz * 0.013) * 0.4;
 	col2 *= 0.82 + 0.36 * macro;
+	col2 = mix(col2, col2 * vec3(0.82, 0.78, 0.72), slope * 0.4);
 	col2 = mix(col2, col2 * vec3(0.72, 0.66, 0.60), wet * 0.5);   // сырость темнит
 
 	// нормаль материала слабеет с далью (против алиасинга лент к солнцу)
