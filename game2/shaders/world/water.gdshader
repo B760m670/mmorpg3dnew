@@ -8,7 +8,7 @@ shader_type spatial;
 //     из BRDF сам даёт «к горизонту зеркало, вниз — прозрачно»).
 //   · ВОЛНЫ: анимированная нормаль из бегущего шума, амплитуда растёт с дождём.
 //   · ПЕНА у берега на малой глубине.
-render_mode blend_mix, cull_back, diffuse_burley;
+render_mode blend_mix, cull_disabled, diffuse_burley;
 
 uniform sampler2D height_tex : filter_linear_mipmap, repeat_disable;
 uniform float dem_half = 8192.0;
@@ -17,6 +17,7 @@ uniform vec3 deep_color : source_color = vec3(0.02, 0.09, 0.14);
 uniform float depth_full = 4.0;      // м: где цвет/плотность выходят на «глубоко»
 uniform float rain_rate = 0.0;       // из weather → сила ряби от капель
 uniform vec2 wind = vec2(1.0, 0.6);
+uniform float flow_speed = 1.4;      // скорость сноса волн по течению рек
 
 varying vec3 v_world;
 
@@ -50,11 +51,17 @@ void fragment() {
 	float depth = max(v_world.y - bed, 0.0);
 	float dn = clamp(depth / depth_full, 0.0, 1.0);
 
+	// ТЕЧЕНИЕ: реки несут вершинный цвет (RG=направление, B=есть течение); озёра
+	// стоят (COLOR=серый, B=0). Волны сносятся по течению вниз.
+	vec2 fdir = COLOR.rg * 2.0 - 1.0;
+	vec2 flow = fdir * COLOR.b * flow_speed;
+	vec2 p = v_world.xz - flow * TIME;
+
 	// нормаль волн из градиента шума
 	float e = 0.5;
-	float h0 = wsum(v_world.xz, TIME);
-	float hx = wsum(v_world.xz + vec2(e, 0.0), TIME);
-	float hy = wsum(v_world.xz + vec2(0.0, e), TIME);
+	float h0 = wsum(p, TIME);
+	float hx = wsum(p + vec2(e, 0.0), TIME);
+	float hy = wsum(p + vec2(0.0, e), TIME);
 	float amp = 0.25 + 0.9 * rain_rate;
 	vec3 wn = normalize(vec3((h0 - hx) * amp, 1.0, (h0 - hy) * amp));
 	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);

@@ -45,8 +45,51 @@ func build() -> void:
 				mi.material_override = mat
 				add_child(mi)
 				count_built += 1
+	_build_rivers(mat)
 	print("[water] зеркал воды: %d (реальные контуры); пропущено мега/внешних: %d" % [
 		count_built, skipped])
+
+# --- РЕКИ: ленты воды по вырезанным руслам, уровень убывает вниз по течению;
+# вершинный цвет несёт направление течения (шейдер сносит волны по нему). ---
+const RIVERS_JSON := "res://assets/dem/rivers_carved.json"
+var rivers_built: int = 0
+
+func _build_rivers(mat: ShaderMaterial) -> void:
+	var f := FileAccess.open(RIVERS_JSON, FileAccess.READ)
+	if f == null:
+		return
+	var arr: Variant = JSON.parse_string(f.get_as_text())
+	if not arr is Array:
+		return
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var base := 0
+	for rv in arr:
+		var pts: Array = rv.get("pts", [])
+		if pts.size() < 2:
+			continue
+		var start := base
+		for k in range(pts.size()):
+			var p: Array = pts[k]
+			var wx: float = p[0]; var wy: float = p[1]; var wz: float = p[2]
+			var hw: float = p[3]; var tnx: float = p[4]; var tnz: float = p[5]
+			var perp := Vector2(-tnz, tnx)           # поперёк оси
+			var col := Color((tnx + 1.0) * 0.5, (tnz + 1.0) * 0.5, 1.0)  # течение
+			for s in [1.0, -1.0]:
+				st.set_color(col)
+				st.set_uv(Vector2(0.0 if s > 0.0 else 1.0, float(k)))
+				st.add_vertex(Vector3(wx + perp.x * hw * s, wy, wz + perp.y * hw * s))
+			base += 2
+		for k in range(pts.size() - 1):
+			var a := start + k * 2
+			st.add_index(a); st.add_index(a + 1); st.add_index(a + 2)
+			st.add_index(a + 1); st.add_index(a + 3); st.add_index(a + 2)
+		rivers_built += 1
+	var mi := MeshInstance3D.new()
+	mi.mesh = st.commit()
+	mi.material_override = mat
+	add_child(mi)
+	print("[water] рек: %d (ленты по руслам, течение вниз)" % rivers_built)
 
 const BOUND_M := 6800.0             # в пределах территории и сетки высот
 const MAX_DIM_M := 3500.0           # крупнее — не озеро Гатчины (залив/река)
@@ -91,6 +134,7 @@ func _build_surface_mesh(ring: Array, name_v) -> ArrayMesh:
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for p in pts2:
 		st.set_normal(Vector3.UP)
+		st.set_color(Color(0.5, 0.5, 0.0))       # озеро стоит (нет течения)
 		st.set_uv(Vector2(p.x, p.y) * 0.05)
 		st.add_vertex(Vector3(p.x, level, p.y))
 	for i in idx:
