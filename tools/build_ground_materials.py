@@ -149,6 +149,21 @@ def main():
     hi.data.update()
     print("hi-геометрия: %d полигонов" % len(hi.data.polygons))
 
+    # 3×3 тайла: центральный тайл получает НАСТОЯЩИХ соседей, чтобы лучи AO/нормали
+    # видели продолжение поверхности. Высота тайлируема (Пуассон/FFT периодичен) →
+    # копии стыкуются без шва. Без этого граница тайла даёт тёмную рамку → «клетки»
+    # (сетка 2 м) при repeat в игре. Соседи — только окклюдеры (общие mesh-данные).
+    neighbors = []
+    for di in (-1, 0, 1):
+        for dj in (-1, 0, 1):
+            if di == 0 and dj == 0:
+                continue
+            dup = hi.copy()
+            dup.location = (di * TILE_M, dj * TILE_M, 0.0)
+            sc.collection.objects.link(dup)
+            neighbors.append(dup)
+    print("соседи для бесшовного запекания: %d копий вокруг центра" % len(neighbors))
+
     bpy.ops.mesh.primitive_plane_add(size=TILE_M)
     lo = bpy.context.object
     mat = bpy.data.materials.new("bake"); mat.use_nodes = True
@@ -159,6 +174,8 @@ def main():
     nt.nodes.active = node; node.select = True
 
     hi.select_set(True); lo.select_set(True)
+    for o in neighbors:
+        o.select_set(True)                 # соседи-окклюдеры в запекание
     bpy.context.view_layer.objects.active = lo
 
     t = time.time()
@@ -179,6 +196,17 @@ def main():
         bake_img.filepath_raw = os.path.abspath(os.path.join(OUTDIR, name, "AmbientOcclusion.png"))
         bake_img.save()
     print("AO трассирован за %.0f с" % (time.time() - t))
+
+    # соседи больше не нужны — убрать перед превью
+    for o in neighbors:
+        bpy.data.objects.remove(o, do_unlink=True)
+
+    # проверка бесшовности числами: край vs противоположный край карт
+    for mname in ("Normal", "AmbientOcclusion"):
+        a = np.asarray(Image.open(os.path.join(OUTDIR, "soil_loam", mname + ".png")).convert("RGB")).astype(np.float32)
+        seam_lr = np.abs(a[:, 0] - a[:, -1]).mean() / 255.0
+        seam_tb = np.abs(a[0, :] - a[-1, :]).mean() / 255.0
+        print("шов %-16s L↔R=%.4f  T↔B=%.4f (≈0 → бесшовно)" % (mname, seam_lr, seam_tb))
 
     # ---------- превью soil_loam: реальный рельеф под низким солнцем ----------
     lo.hide_render = True
