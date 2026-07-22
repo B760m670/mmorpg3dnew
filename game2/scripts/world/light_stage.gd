@@ -51,6 +51,7 @@ func _ready() -> void:
 	_build_water()
 	_build_roads()
 	_build_city()
+	_build_backdrop()
 	# СТАРАЯ трава (MultiMesh, разбросанные былинки) УБРАНА — она была
 	# неестественной и «размазанной» по всей карте; траву создадим настоящей
 	# (разной, в Blender) позже. Сейчас работаем над ПОЧВОЙ.
@@ -254,6 +255,15 @@ func _build_city() -> void:
 	_city.terrain = _terrain
 	add_child(_city)
 	_city.build()
+
+# --- ДАЛЬНИЙ ФОН: реальный рельеф региона за детальной территорией (до горизонта) ---
+var _backdrop: Backdrop
+
+func _build_backdrop() -> void:
+	_backdrop = Backdrop.new()
+	_backdrop.terrain = _terrain
+	add_child(_backdrop)
+	_backdrop.build()
 
 # --- травяной ярус: посев по реальным зонам вокруг наблюдателя ---
 var _grass: GrassField
