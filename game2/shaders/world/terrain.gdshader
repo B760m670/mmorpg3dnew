@@ -68,20 +68,24 @@ void vertex() {
 	vec3 w = (MODEL_MATRIX * vec4(VERTEX.x, 0.0, VERTEX.z, 1.0)).xyz;
 	vec2 huv = (w.xz + vec2(dem_half)) / (2.0 * dem_half);
 	float lod = max(0.0, clip_level - 4.0);
-	float h = textureLod(height_tex, huv, lod).r;
 	float cell = 2.0 * exp2(clip_level);
-	// ЮБКИ прячут щель между кольцами разной детализации (LOD-шов). Раньше юбка
-	// падала на cell*2+2 — на плоской земле это высокая тёмная «штора», видимая с
-	// высоты тонкими вложенными прямоугольниками. Теперь глубина АДАПТИВНА: ровно
-	// сколько нужно закрыть рассинхрон соседнего (грубого) уровня + запас; на
-	// плоском грунте щель ~0 → штора ~1.5 м (шов почти исчезает), на рельефе —
-	// глубже, но не больше прежнего безопасного предела (щели наружу не будет).
+	float h_fine = textureLod(height_tex, huv, lod).r;
+	float h_coarse = textureLod(height_tex, huv, lod + 1.0).r;
+
+	// ГЕОМОРФИНГ границы колец (континуальный LOD, стандарт геоклипмапа): у
+	// ВНЕШНЕГО края кольца (последние 2 ячейки) высота плавно сходится к высоте
+	// СОСЕДНЕГО грубого кольца (mip lod+1). На самом шве обе стороны берут одну
+	// высоту → щели и «вложенных прямоугольников» больше нет. Внутри кольца
+	// (morph=0) — родная детализация. edge_in — расстояние до внешней рамки в м.
+	float edge_in = 64.0 * cell - max(abs(VERTEX.x), abs(VERTEX.z));
+	float morph = 1.0 - clamp(edge_in / (2.0 * cell), 0.0, 1.0);
+	float h = mix(h_fine, h_coarse, morph);
+
+	// юбка теперь лишь страховка: у шва высоты уже совпали → щель ~0 → штора ~1.5 м
 	bool skirt = VERTEX.y < -500.0;
 	float drop = 0.0;
-	if (skirt) {
-		float h_coarse = textureLod(height_tex, huv, lod + 1.0).r;
-		drop = clamp(abs(h - h_coarse) * 4.0 + 1.5, 1.5, cell * 2.0 + 2.0);
-	}
+	if (skirt)
+		drop = clamp(abs(h_fine - h_coarse) * 4.0 + 1.5, 1.5, cell * 2.0 + 2.0);
 	VERTEX.y = h - drop;
 	v_wpos = vec3(w.x, h, w.z);
 
