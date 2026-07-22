@@ -226,8 +226,11 @@ func _height_texture() -> ImageTexture:
 			floats[j * DEM_N + i] = height(-DEM_HALF + DEM_STEP * float(i), z)
 	var img := Image.create_from_data(DEM_N, DEM_N, false, Image.FORMAT_RF,
 		floats.to_byte_array())
-	# R32F не фильтруется на Apple GPU/llvmpipe → half-float (точность ~2 см)
-	img.convert(Image.FORMAT_RH)
+	# ПОЛНАЯ точность высоты (R32F). Прежде понижали до half-float (шаг ~3 см) на
+	# допущении «Apple GPU не фильтрует R32F» — но A18 Pro (Apple9) его фильтрует;
+	# FP16-ступени давали контурные полосы на пологой земле под острым углом.
+	# Если на устройстве вдруг заблочит фильтрацию (блочный рельеф) — вернуть RH
+	# и вместо этого дизерить высоту перед квантованием.
 	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
 
