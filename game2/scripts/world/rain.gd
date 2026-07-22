@@ -17,6 +17,7 @@ extends Node3D
 ## числами (rain_state в HUD/inspect): rate мм/ч, rain_wet 0..1.
 
 @export var terrain: Terrain                 # источник rain_wet-уравения и материал земли
+@export var water: WaterBodies               # рябь дождя на воде
 
 const FALL_SPEED := 9.0                       # терминальная скорость капли, м/с
 const COVER_HALF := 26.0                      # полуширина столба дождя вокруг камеры, м
@@ -109,9 +110,12 @@ func _process(delta: float) -> void:
 		pm.initial_velocity_max = v
 
 	# --- отдать погоду шейдеру земли (мокро/лужи/рябь) ---
+	var rr := clampf(rate_mmh / RAIN_MAX_MMH, 0.0, 1.0)
 	if terrain != null and terrain.ground_mat != null:
 		terrain.ground_mat.set_shader_parameter("rain_wet", rain_wet)
-		terrain.ground_mat.set_shader_parameter("rain_rate", clampf(rate_mmh / RAIN_MAX_MMH, 0.0, 1.0))
+		terrain.ground_mat.set_shader_parameter("rain_rate", rr)
+	if water != null:
+		water.set_rain_rate(rr)
 
 ## строка состояния погоды числами (для HUD / --inspect)
 func state() -> Dictionary:

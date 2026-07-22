@@ -9,3 +9,4 @@ game/.godot/
 # Python
 __pycache__/
 *.pyc
+game2/assets/dem/*.prebed

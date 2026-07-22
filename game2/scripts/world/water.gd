@@ -97,10 +97,20 @@ func _build_surface_mesh(ring: Array, name_v) -> ArrayMesh:
 		st.add_index(i)
 	return st.commit()
 
-func _water_material() -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(0.04, 0.10, 0.12)    # тёмная северная вода
-	m.roughness = 0.04                           # зеркальное отражение неба
-	m.metallic = 0.0
-	m.metallic_specular = 0.7
+# НАСТОЯЩАЯ вода: физический шейдер (глубина/отражение/волны/пена), дно — из той
+# же текстуры высот, что у террейна (с вырезанными котловинами).
+var water_mat: ShaderMaterial
+
+func _water_material() -> ShaderMaterial:
+	var m := ShaderMaterial.new()
+	m.shader = load("res://shaders/world/water.gdshader")
+	if terrain != null and terrain.height_texture != null:
+		m.set_shader_parameter("height_tex", terrain.height_texture)
+		m.set_shader_parameter("dem_half", Terrain.DEM_HALF)
+	water_mat = m
 	return m
+
+## погода → рябь на воде (вызывается из RainSystem)
+func set_rain_rate(r: float) -> void:
+	if water_mat != null:
+		water_mat.set_shader_parameter("rain_rate", r)

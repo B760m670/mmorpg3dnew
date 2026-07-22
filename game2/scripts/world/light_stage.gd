@@ -290,6 +290,7 @@ var _rain: RainSystem
 func _build_rain() -> void:
 	_rain = RainSystem.new()
 	_rain.terrain = _terrain
+	_rain.water = _water
 	add_child(_rain)
 
 func _build_props() -> void:
