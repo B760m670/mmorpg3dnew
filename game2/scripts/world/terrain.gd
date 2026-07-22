@@ -261,6 +261,8 @@ func _ground_material() -> ShaderMaterial:
 	m.set_shader_parameter("soil_r", load("res://assets/materials/created/soil_loam/Roughness.png"))
 	m.set_shader_parameter("soil_ao", load("res://assets/materials/created/soil_loam/AmbientOcclusion.png"))
 	m.set_shader_parameter("soil_h", load("res://assets/materials/created/soil_loam/Height.png"))
+	# влажный гумус в низины/дно (тот же скан, цвет сведён к мокрой земле)
+	m.set_shader_parameter("humus_c", load("res://assets/materials/created/soil_humus/Color.png"))
 	_setup_slice(m)
 	_setup_moisture(m)
 	return m

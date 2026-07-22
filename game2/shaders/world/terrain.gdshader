@@ -23,6 +23,9 @@ uniform sampler2D soil_n : filter_linear_mipmap, repeat_enable;
 uniform sampler2D soil_r : filter_linear_mipmap, repeat_enable;
 uniform sampler2D soil_ao : filter_linear_mipmap, repeat_enable;
 uniform sampler2D soil_h : filter_linear_mipmap, repeat_enable;
+// влажный тёмный гумус (низины, дно водоёмов) — тот же скан, цвет сведён по числам
+// к мокрой земле; Normal/AO/Height ОБЩИЕ с суглинком (одна геометрия комьев).
+uniform sampler2D humus_c : filter_linear_mipmap, repeat_enable;
 uniform float detail_tile_m = 2.0;
 
 // ВЕРТИКАЛЬНЫЙ СРЕЗ (Дворцовый парк): детальная карта поверхностей 1 м/пкс.
@@ -191,9 +194,17 @@ void fragment() {
 	vec2 duv = v_wpos.xz / detail_tile_m;
 	vec2 duvb = v_wpos.xz / (detail_tile_m * 5.7);
 
-	vec3 s_alb = mix(texture(soil_c, duv).rgb, texture(soil_c, duvb).rgb, 0.45);
-	float mat_rough = texture(soil_r, duv).r;
-	vec3 tn = texture(soil_n, duv).xyz * 2.0 - 1.0;
+	// сухой суглинок ⊕ влажный гумус ПО ДАННЫМ: низины/сырость → тёмная мокрая
+	// земля, возвышения — сухая. Реальное разнообразие почвы + подготовка дна.
+	float damp = clamp(wet * 1.2, 0.0, 1.0);
+	vec3 loam = mix(texture(soil_c, duv).rgb, texture(soil_c, duvb).rgb, 0.45);
+	vec3 hum = mix(texture(humus_c, duv).rgb, texture(humus_c, duvb).rgb, 0.45);
+	vec3 s_alb = mix(loam, hum, damp);
+	float mat_rough = texture(soil_r, duv).r * mix(1.0, 0.72, damp);  // мокрое глаже
+	// мезо-рельеф: нормаль в ДВЕ частоты (мелкие крупинки + крупные комья)
+	vec3 tn1 = texture(soil_n, duv).xyz * 2.0 - 1.0;
+	vec3 tn2 = texture(soil_n, duvb).xyz * 2.0 - 1.0;
+	vec3 tn = normalize(vec3(tn1.xy + tn2.xy, tn1.z));
 	float s_ao = texture(soil_ao, duv).r;
 	vec3 mat_alb = s_alb * mix(1.0, s_ao, 0.75);   // реальный AO почвы в западинах
 
@@ -204,10 +215,13 @@ void fragment() {
 	float macro = vnoise(v_wpos.xz * 0.05) * 0.6 + vnoise(v_wpos.xz * 0.013) * 0.4;
 	col2 *= 0.82 + 0.36 * macro;
 	col2 = mix(col2, col2 * vec3(0.82, 0.78, 0.72), slope * 0.4);
-	col2 = mix(col2, col2 * vec3(0.72, 0.66, 0.60), wet * 0.5);   // сырость темнит
+	// (влажный цвет низин уже даёт слой гумуса; динамический блеск от дождя/поля
+	// влаги добавляется ниже — статичное затемнение здесь убрано, чтобы не пере-
+	// темнять низины трижды)
 
-	// нормаль материала слабеет с далью (против алиасинга лент к солнцу)
-	float nstr = 0.9 * (1.0 - smoothstep(60.0, 320.0, dist));
+	// нормаль почвы держится дольше у ног (объём комьев вблизи), гаснет лишь на
+	// дали (против алиасинга лент к солнцу на горизонте)
+	float nstr = 1.0 - smoothstep(120.0, 520.0, dist);
 	vec3 n = normalize(vec3(gn.x + tn.x * nstr, gn.y, gn.z + tn.z * nstr));
 
 	float rough = mix(rough_target, mat_rough, 0.85);
