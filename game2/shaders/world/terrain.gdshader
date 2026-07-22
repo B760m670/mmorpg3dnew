@@ -23,9 +23,6 @@ uniform sampler2D soil_n : filter_linear_mipmap, repeat_enable;
 uniform sampler2D soil_r : filter_linear_mipmap, repeat_enable;
 uniform sampler2D soil_ao : filter_linear_mipmap, repeat_enable;
 uniform sampler2D soil_h : filter_linear_mipmap, repeat_enable;
-// влажный тёмный гумус (низины, дно водоёмов) — тот же скан, цвет сведён по числам
-// к мокрой земле; Normal/AO/Height ОБЩИЕ с суглинком (одна геометрия комьев).
-uniform sampler2D humus_c : filter_linear_mipmap, repeat_enable;
 uniform float detail_tile_m = 2.0;
 
 // ВЕРТИКАЛЬНЫЙ СРЕЗ (Дворцовый парк): детальная карта поверхностей 1 м/пкс.
@@ -68,33 +65,11 @@ void vertex() {
 	vec3 w = (MODEL_MATRIX * vec4(VERTEX.x, 0.0, VERTEX.z, 1.0)).xyz;
 	vec2 huv = (w.xz + vec2(dem_half)) / (2.0 * dem_half);
 	float lod = max(0.0, clip_level - 4.0);
+	float h = textureLod(height_tex, huv, lod).r;
 	float cell = 2.0 * exp2(clip_level);
-	float h_fine = textureLod(height_tex, huv, lod).r;
-	float h_coarse = textureLod(height_tex, huv, lod + 1.0).r;
-
-	// ГЕОМОРФИНГ границы колец (континуальный LOD, стандарт геоклипмапа): у
-	// ВНЕШНЕГО края кольца (последние 2 ячейки) высота плавно сходится к высоте
-	// СОСЕДНЕГО грубого кольца (mip lod+1). На самом шве обе стороны берут одну
-	// высоту → щели и «вложенных прямоугольников» больше нет. Внутри кольца
-	// (morph=0) — родная детализация. edge_in — расстояние до внешней рамки в м.
-	float edge_in = 64.0 * cell - max(abs(VERTEX.x), abs(VERTEX.z));
-	float morph = 1.0 - clamp(edge_in / (2.0 * cell), 0.0, 1.0);
-	float h = mix(h_fine, h_coarse, morph);
-
-	// юбка теперь лишь страховка: у шва высоты уже совпали → щель ~0 → штора ~1.5 м
-	bool skirt = VERTEX.y < -500.0;
-	float drop = 0.0;
-	if (skirt)
-		drop = clamp(abs(h_fine - h_coarse) * 4.0 + 1.5, 1.5, cell * 2.0 + 2.0);
-	VERTEX.y = h - drop;
+	bool skirt = VERTEX.y < -500.0;      // маркер вершин-юбок
+	VERTEX.y = h - (skirt ? cell * 2.0 + 2.0 : 0.0);
 	v_wpos = vec3(w.x, h, w.z);
-
-	// ГРАНИЦА ТЕРРИТОРИИ: за краем реального DEM (~7.4 км от центра) земля НЕ
-	// тянется плоской «залипшей» (clamp) плитой в бесконечность — она плавно
-	// уходит вниз и тонет в дымке. У мира есть край (территория игры ~16 км).
-	// Внутри данных (r<7400) высота не трогается.
-	float redge = max(abs(w.x), abs(w.z));
-	VERTEX.y -= min(pow(max(0.0, redge - 7400.0), 2.0) * 0.00018, 900.0);
 
 	// деформация — только на детальных кольцах у ног, вне юбок
 	v_deform = 0.0;
@@ -161,9 +136,7 @@ void fragment() {
 	float dist = length(VERTEX);
 
 	// --- нормаль рельефа НА ПИКСЕЛЬ из текстуры высот ---
-	// шаг производной растёт с далью: на дистанции сглаживает ступени квантования
-	// высоты (FP16) → уходят «контурные полосы» на пологой дальней земле
-	float e = mix(12.0, 64.0, smoothstep(150.0, 1800.0, dist));
+	float e = 12.0;
 	float hL = hh(v_wpos.xz + vec2(-e, 0.0));
 	float hR = hh(v_wpos.xz + vec2(e, 0.0));
 	float hN = hh(v_wpos.xz + vec2(0.0, -e));
@@ -218,17 +191,9 @@ void fragment() {
 	vec2 duv = v_wpos.xz / detail_tile_m;
 	vec2 duvb = v_wpos.xz / (detail_tile_m * 5.7);
 
-	// сухой суглинок ⊕ влажный гумус ПО ДАННЫМ: низины/сырость → тёмная мокрая
-	// земля, возвышения — сухая. Реальное разнообразие почвы + подготовка дна.
-	float damp = clamp(wet * 1.2, 0.0, 1.0);
-	vec3 loam = mix(texture(soil_c, duv).rgb, texture(soil_c, duvb).rgb, 0.45);
-	vec3 hum = mix(texture(humus_c, duv).rgb, texture(humus_c, duvb).rgb, 0.45);
-	vec3 s_alb = mix(loam, hum, damp);
-	float mat_rough = texture(soil_r, duv).r * mix(1.0, 0.72, damp);  // мокрое глаже
-	// мезо-рельеф: нормаль в ДВЕ частоты (мелкие крупинки + крупные комья)
-	vec3 tn1 = texture(soil_n, duv).xyz * 2.0 - 1.0;
-	vec3 tn2 = texture(soil_n, duvb).xyz * 2.0 - 1.0;
-	vec3 tn = normalize(vec3(tn1.xy + tn2.xy, tn1.z));
+	vec3 s_alb = mix(texture(soil_c, duv).rgb, texture(soil_c, duvb).rgb, 0.45);
+	float mat_rough = texture(soil_r, duv).r;
+	vec3 tn = texture(soil_n, duv).xyz * 2.0 - 1.0;
 	float s_ao = texture(soil_ao, duv).r;
 	vec3 mat_alb = s_alb * mix(1.0, s_ao, 0.75);   // реальный AO почвы в западинах
 
@@ -239,13 +204,10 @@ void fragment() {
 	float macro = vnoise(v_wpos.xz * 0.05) * 0.6 + vnoise(v_wpos.xz * 0.013) * 0.4;
 	col2 *= 0.82 + 0.36 * macro;
 	col2 = mix(col2, col2 * vec3(0.82, 0.78, 0.72), slope * 0.4);
-	// (влажный цвет низин уже даёт слой гумуса; динамический блеск от дождя/поля
-	// влаги добавляется ниже — статичное затемнение здесь убрано, чтобы не пере-
-	// темнять низины трижды)
+	col2 = mix(col2, col2 * vec3(0.72, 0.66, 0.60), wet * 0.5);   // сырость темнит
 
-	// нормаль почвы держится дольше у ног (объём комьев вблизи), гаснет лишь на
-	// дали (против алиасинга лент к солнцу на горизонте)
-	float nstr = 1.0 - smoothstep(120.0, 520.0, dist);
+	// нормаль материала слабеет с далью (против алиасинга лент к солнцу)
+	float nstr = 0.9 * (1.0 - smoothstep(60.0, 320.0, dist));
 	vec3 n = normalize(vec3(gn.x + tn.x * nstr, gn.y, gn.z + tn.z * nstr));
 
 	float rough = mix(rough_target, mat_rough, 0.85);
