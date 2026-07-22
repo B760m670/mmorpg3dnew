@@ -255,11 +255,14 @@ func _ground_material() -> ShaderMaterial:
 	m.set_shader_parameter("grass_c", load("res://assets/materials/real/grass004/Color.jpg"))
 	m.set_shader_parameter("grass_n", load("res://assets/materials/real/grass004/Normal.jpg"))
 	m.set_shader_parameter("grass_r", load("res://assets/materials/real/grass004/Roughness.jpg"))
-	# «голая земля» (склоны/сырость/утоптано) — СОЗДАННАЯ дерновая почва:
-	# карты запечены с реальной геометрии комьев (tools/create_soil_material.py)
-	m.set_shader_parameter("gravel_c", load("res://assets/materials/created/soil_sod/Color.png"))
-	m.set_shader_parameter("gravel_n", load("res://assets/materials/created/soil_sod/Normal.png"))
-	m.set_shader_parameter("gravel_r", load("res://assets/materials/created/soil_sod/Roughness.png"))
+	# «голая почва» — СОЗДАННЫЙ набор из РЕАЛЬНОГО скана (цвет сведён по числам к
+	# дерново-подзолистой почве Гатчины), геометрия комьев запечена в Blender:
+	# Color/Normal/Roughness + AO + Height (tools/build_ground_materials.py)
+	m.set_shader_parameter("soil_c", load("res://assets/materials/created/soil_loam/Color.png"))
+	m.set_shader_parameter("soil_n", load("res://assets/materials/created/soil_loam/Normal.png"))
+	m.set_shader_parameter("soil_r", load("res://assets/materials/created/soil_loam/Roughness.png"))
+	m.set_shader_parameter("soil_ao", load("res://assets/materials/created/soil_loam/AmbientOcclusion.png"))
+	m.set_shader_parameter("soil_h", load("res://assets/materials/created/soil_loam/Height.png"))
 	_setup_slice(m)
 	_setup_moisture(m)
 	return m
