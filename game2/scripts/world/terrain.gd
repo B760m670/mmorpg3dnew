@@ -256,14 +256,16 @@ func _ground_material() -> ShaderMaterial:
 	m.set_shader_parameter("wet_level", (abs_min + 6.0) - _h_ref if real_dem else -3.0)
 	# ОСНОВА ЗЕМЛИ = РЕАЛЬНАЯ ПОЧВА везде (травы-раскраски больше нет — плоский
 	# скан травы был «обоями»; настоящую траву создадим геометрией отдельным слоем).
-	# «голая почва» — НАСТОЯЩАЯ, из РЕАЛЬНОГО фото местной почвы Гатчины (сухой
-	# растрескавшийся суглинок): фото→бесшовный PBR (tools/soil_from_photo.py).
-	# Разные типы (плодородная/комья) добавятся структурно по полю почвы дальше.
-	m.set_shader_parameter("soil_c", load("res://assets/materials/created/soil_gatchina/Color.png"))
-	m.set_shader_parameter("soil_n", load("res://assets/materials/created/soil_gatchina/Normal.png"))
-	m.set_shader_parameter("soil_r", load("res://assets/materials/created/soil_gatchina/Roughness.png"))
-	m.set_shader_parameter("soil_ao", load("res://assets/materials/created/soil_gatchina/AmbientOcclusion.png"))
-	m.set_shader_parameter("soil_h", load("res://assets/materials/created/soil_gatchina/Height.png"))
+	# НАСТОЯЩАЯ почва из ФОТО местной почвы Гатчины, СТРУКТУРНО (набор по полю):
+	# база — влажный серо-бурый суглинок (комья), низины — плодородный тёмный гумус,
+	# сухие пятна — растрескавшаяся светлая. Рельеф общий (loam). Не песок.
+	m.set_shader_parameter("soil_c", load("res://assets/materials/created/soil_loam_clods/Color.png"))
+	m.set_shader_parameter("soil_dry_c", load("res://assets/materials/created/soil_gatchina/Color.png"))
+	m.set_shader_parameter("soil_wet_c", load("res://assets/materials/created/soil_fertile/Color.png"))
+	m.set_shader_parameter("soil_n", load("res://assets/materials/created/soil_loam_clods/Normal.png"))
+	m.set_shader_parameter("soil_r", load("res://assets/materials/created/soil_loam_clods/Roughness.png"))
+	m.set_shader_parameter("soil_ao", load("res://assets/materials/created/soil_loam_clods/AmbientOcclusion.png"))
+	m.set_shader_parameter("soil_h", load("res://assets/materials/created/soil_loam_clods/Height.png"))
 	_setup_slice(m)
 	_setup_moisture(m)
 	return m

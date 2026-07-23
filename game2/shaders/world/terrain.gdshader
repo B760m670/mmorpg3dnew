@@ -13,12 +13,14 @@ uniform sampler2D zone_tex : filter_nearest, repeat_disable;
 uniform float zone_size_m = 12288.0;
 uniform float wet_level = -30.0;         // мировая высота сырых низин, м
 
-// ОСНОВА ЗЕМЛИ = РЕАЛЬНАЯ ПОЧВА (травы-раскраски больше нет — плоский скан травы
-// был «обоями», не настоящей травой; её создадим геометрией отдельным слоем).
-// СОЗДАННЫЙ в Blender набор из РЕАЛЬНОГО скана (альбедо сведён по числам к дерново-
-// подзолистой почве Гатчины), с запечённой геометрией комьев:
-// Color/Normal/Roughness + AO + Height.
-uniform sampler2D soil_c : filter_linear_mipmap, repeat_enable;
+// ОСНОВА ЗЕМЛИ = РЕАЛЬНАЯ ПОЧВА из ФОТО местной почвы Гатчины, СТРУКТУРНО (набор
+// по полю): база — влажный серо-бурый суглинок (soil_c=loam), в низинах —
+// плодородный тёмный гумус (soil_wet_c=fertile), на сухих пятнах — растрескавшаяся
+// светлая (soil_dry_c=gatchina). Рельеф (Normal/Rough/AO) — общий (loam). Повтор
+// разбивается де-тайлингом (две повёрнутые копии) в шейдере.
+uniform sampler2D soil_c : filter_linear_mipmap, repeat_enable;      // база (суглинок)
+uniform sampler2D soil_dry_c : filter_linear_mipmap, repeat_enable;  // сухая (трещины)
+uniform sampler2D soil_wet_c : filter_linear_mipmap, repeat_enable;  // плодородная (гумус)
 uniform sampler2D soil_n : filter_linear_mipmap, repeat_enable;
 uniform sampler2D soil_r : filter_linear_mipmap, repeat_enable;
 uniform sampler2D soil_ao : filter_linear_mipmap, repeat_enable;
@@ -182,23 +184,37 @@ void fragment() {
 	// --- РЕАЛЬНАЯ ПОЧВА как основа земли ВЕЗДЕ, ЦВЕТ = скан (сведён к почве
 	// Гатчины). Реальный AO почвы. Две частоты тайла + макро-девариация —
 	// против «плоской заливки» на дали. На всех дистанциях. ---
-	vec2 duv = v_wpos.xz / detail_tile_m;
-	vec2 duvb = v_wpos.xz / (detail_tile_m * 5.7);
+	// ДЕ-ТАЙЛИНГ: две повёрнутые/сдвинутые копии тайла, мягко смешанные по низкой
+	// частоте — разбивает узнаваемый повтор (камешки) без ячеек-швов.
+	vec2 uv0 = v_wpos.xz / detail_tile_m;
+	float ca = 0.878, sa = 0.479;                 // cos/sin(0.5)
+	float cb = 0.622, sb = -0.783;                // cos/sin(-0.9)
+	vec2 uvA = vec2(uv0.x * ca - uv0.y * sa, uv0.x * sa + uv0.y * ca) + vec2(13.2, 7.4);
+	vec2 uvB = vec2(uv0.x * cb - uv0.y * sb, uv0.x * sb + uv0.y * cb) + vec2(51.7, 29.1);
+	float kmix = smoothstep(0.4, 0.6, vnoise(v_wpos.xz * 0.06));
+	vec3 c_base = mix(texture(soil_c, uvA).rgb, texture(soil_c, uvB).rgb, kmix);
+	vec3 c_dry = mix(texture(soil_dry_c, uvA).rgb, texture(soil_dry_c, uvB).rgb, kmix);
+	vec3 c_wet = mix(texture(soil_wet_c, uvA).rgb, texture(soil_wet_c, uvB).rgb, kmix);
 
-	vec3 s_alb = mix(texture(soil_c, duv).rgb, texture(soil_c, duvb).rgb, 0.45);
-	float mat_rough = texture(soil_r, duv).r;
-	vec3 tn = texture(soil_n, duv).xyz * 2.0 - 1.0;
-	float s_ao = texture(soil_ao, duv).r;
+	// СТРУКТУРНО ПО ПОЛЮ: низины (wet) → плодородный тёмный; сухие пятна (шум,
+	// не в низине, не на склоне) → растрескавшаяся светлая; иначе — суглинок-база.
+	float wetf = clamp(wet * 1.4, 0.0, 1.0);
+	float dryf = clamp(smoothstep(0.58, 0.85, vnoise(v_wpos.xz * 0.03))
+		* (1.0 - wetf) - slope * 0.5, 0.0, 1.0) * 0.45;
+	vec3 s_alb = mix(c_base, c_wet, wetf);
+	s_alb = mix(s_alb, c_dry, dryf);
+
+	float mat_rough = texture(soil_r, uv0).r;
+	vec3 tn = texture(soil_n, uv0).xyz * 2.0 - 1.0;
+	float s_ao = texture(soil_ao, uv0).r;
 	vec3 mat_alb = s_alb * mix(1.0, s_ao, 0.75);   // реальный AO почвы в западинах
 
-	// без зелёной раскраски — только честная почва + макро-девариация ДВУХ низких
-	// частот (тональная, не крашеные пятна): разбивает мип-усреднение тайла в
-	// ровную заливку на дистанции. Крутые склоны — чуть темнее (грунт в тени комьев).
+	// макро-девариация ДВУХ низких частот (тональная) — против «плоской заливки»;
+	// крутые склоны чуть темнее (грунт в тени комьев).
 	vec3 col2 = mat_alb;
 	float macro = vnoise(v_wpos.xz * 0.05) * 0.6 + vnoise(v_wpos.xz * 0.013) * 0.4;
-	col2 *= 0.82 + 0.36 * macro;
+	col2 *= 0.85 + 0.30 * macro;
 	col2 = mix(col2, col2 * vec3(0.82, 0.78, 0.72), slope * 0.4);
-	col2 = mix(col2, col2 * vec3(0.72, 0.66, 0.60), wet * 0.5);   // сырость темнит
 
 	// нормаль материала слабеет с далью (против алиасинга лент к солнцу)
 	float nstr = 0.9 * (1.0 - smoothstep(60.0, 320.0, dist));
