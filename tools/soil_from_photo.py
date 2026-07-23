@@ -21,7 +21,7 @@ from PIL import Image
 from scipy.ndimage import gaussian_filter, sobel
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
-OUT = os.path.join(ROOT, "game2", "assets", "materials", "created", "soil_gatchina")
+CREATED = os.path.join(ROOT, "game2", "assets", "materials", "created")
 RES = 2048
 
 
@@ -55,6 +55,8 @@ def make_tileable(img):
 def main():
     photo = sys.argv[1] if len(sys.argv) > 1 else \
         "/root/.claude/uploads/283ce6a4-bcad-5286-9fb2-0f049fba2e1d/64161fe0-IMG_3454.jpeg"
+    name = sys.argv[2] if len(sys.argv) > 2 else "soil_gatchina"
+    OUT = os.path.join(CREATED, name)
     os.makedirs(OUT, exist_ok=True)
     im = Image.open(photo).convert("RGB")
     # центральный квадрат (без виньетки/краёв), в рабочее разрешение
@@ -116,8 +118,8 @@ def main():
     prev = (np.clip(lit, 0, 1) * 255).astype(np.uint8)
     # 2×2 тайл — проверить бесшовность
     tile = np.concatenate([np.concatenate([prev, prev], 1), np.concatenate([prev, prev], 1)], 0)
-    Image.fromarray(tile).resize((900, 900)).save("/tmp/soil_gatchina_preview.png")
-    print("  превью 2×2 (relight, проверка бесшовности) → /tmp/soil_gatchina_preview.png")
+    Image.fromarray(tile).resize((900, 900)).save("/tmp/%s_preview.png" % name)
+    print("  превью 2×2 (relight) → /tmp/%s_preview.png [%s]" % (name, name))
 
 
 if __name__ == "__main__":
