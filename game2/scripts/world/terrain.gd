@@ -256,14 +256,14 @@ func _ground_material() -> ShaderMaterial:
 	m.set_shader_parameter("wet_level", (abs_min + 6.0) - _h_ref if real_dem else -3.0)
 	# ОСНОВА ЗЕМЛИ = РЕАЛЬНАЯ ПОЧВА везде (травы-раскраски больше нет — плоский
 	# скан травы был «обоями»; настоящую траву создадим геометрией отдельным слоем).
-	# «голая почва» — СОЗДАННЫЙ набор из РЕАЛЬНОГО скана (цвет сведён по числам к
-	# дерново-подзолистой почве Гатчины), геометрия комьев запечена в Blender:
-	# Color/Normal/Roughness + AO + Height (tools/build_ground_materials.py)
-	m.set_shader_parameter("soil_c", load("res://assets/materials/created/soil_loam/Color.png"))
-	m.set_shader_parameter("soil_n", load("res://assets/materials/created/soil_loam/Normal.png"))
-	m.set_shader_parameter("soil_r", load("res://assets/materials/created/soil_loam/Roughness.png"))
-	m.set_shader_parameter("soil_ao", load("res://assets/materials/created/soil_loam/AmbientOcclusion.png"))
-	m.set_shader_parameter("soil_h", load("res://assets/materials/created/soil_loam/Height.png"))
+	# «голая почва» — НАСТОЯЩАЯ, из РЕАЛЬНОГО фото местной почвы Гатчины (сухой
+	# растрескавшийся суглинок): фото→бесшовный PBR (tools/soil_from_photo.py).
+	# Разные типы (плодородная/комья) добавятся структурно по полю почвы дальше.
+	m.set_shader_parameter("soil_c", load("res://assets/materials/created/soil_gatchina/Color.png"))
+	m.set_shader_parameter("soil_n", load("res://assets/materials/created/soil_gatchina/Normal.png"))
+	m.set_shader_parameter("soil_r", load("res://assets/materials/created/soil_gatchina/Roughness.png"))
+	m.set_shader_parameter("soil_ao", load("res://assets/materials/created/soil_gatchina/AmbientOcclusion.png"))
+	m.set_shader_parameter("soil_h", load("res://assets/materials/created/soil_gatchina/Height.png"))
 	_setup_slice(m)
 	_setup_moisture(m)
 	return m

@@ -49,12 +49,6 @@ uniform sampler2D moisture_tex : filter_linear, repeat_disable;
 uniform vec2 moisture_center = vec2(0.0, 400.0);
 uniform float moisture_half = 0.0;
 
-// ДОЖДЬ (рантайм, из weather/rain.gd): дождь мочит поверхность ВЕЗДЕ (не только
-// поле среза) — накопленная сырость rain_wet; при ливне на низинах-чашах стоит
-// вода (лужи), по ней рябь ∝ rain_rate. Guarded: rain_wet=0 → сухо, ничего.
-uniform float rain_wet = 0.0;     // 0 сухо .. 1 поверхность насыщена
-uniform float rain_rate = 0.0;    // 0 нет дождя .. 1 ливень (сила ряби на лужах)
-
 varying vec3 v_wpos;
 varying float v_deform;
 
@@ -212,9 +206,9 @@ void fragment() {
 
 	float rough = mix(rough_target, mat_rough, 0.85);
 	float spec = 0.15;
-	// ВЛАЖНОСТЬ: поле почвы (статичная сырость низин) ⊕ ДОЖДЬ (рантайм мочит
-	// поверхность ВЕЗДЕ). Мокрая почва темнее, глаже, с влажным блеском.
-	float wetv = clamp(rain_wet, 0.0, 1.0);
+	// ВЛАЖНОСТЬ почвы — только РЕАЛЬНОЕ поле влаги (геология низин), без дождя:
+	// мокрая почва темнее, глаже, с влажным блеском. Дождь/лужи убраны (были фейк).
+	float wetv = 0.0;
 	if (moisture_half > 1.0) {
 		vec2 dpos = vec2(v_wpos.x, -v_wpos.z);       // данные: восток, север
 		vec2 muv = (dpos - moisture_center) / (2.0 * moisture_half) + 0.5;
@@ -229,23 +223,6 @@ void fragment() {
 	// спрессованная почва в следе темнее и глаже (просадка от нагрузки)
 	col2 *= mix(1.0, 0.62, v_deform);
 	rough *= mix(1.0, 0.7, v_deform);
-
-	// --- ЛУЖИ: вода собирается в вогнутостях рельефа (реальный сток вниз),
-	// только на ровном И когда дождь напитал грунт. Стоячая вода — тёмная,
-	// плоская (нормаль к небу), зеркальная; рябь от капель ∝ силе дождя. ---
-	float lap = (hL + hR + hN + hS - 4.0 * hC);      // >0 — чаша, вода стекает сюда
-	float flatv = smoothstep(0.90, 0.99, gn.y);
-	float pond = clamp(smoothstep(0.12, 0.50, lap), 0.0, 1.0) * flatv
-		* smoothstep(0.30, 0.75, wetv);
-	if (pond > 0.001) {
-		float rip = sin(dot(v_wpos.xz, vec2(7.3, 6.1)) - TIME * 9.0)
-			+ sin(dot(v_wpos.xz, vec2(-5.7, 8.4)) + TIME * 7.0);
-		vec3 rn = normalize(vec3(rip * 0.05 * rain_rate, 1.0, rip * 0.05 * rain_rate));
-		n = normalize(mix(n, rn, pond));             // плоско к небу + рябь
-		col2 = mix(col2, vec3(0.015, 0.022, 0.028), pond * 0.92);
-		rough = mix(rough, 0.03, pond);
-		spec = mix(spec, 1.0, pond);
-	}
 
 	ALBEDO = col2;
 	ROUGHNESS = clamp(rough, 0.02, 1.0);
