@@ -222,9 +222,9 @@ void fragment() {
 	vec3 n = normalize(vec3(gn.x + tn.x * nstr, gn.y, gn.z + tn.z * nstr));
 
 	float rough = mix(rough_target, mat_rough, 0.85);
-	float spec = 0.06;   // почва матовая — низкий спекуляр, без искр под солнцем
-	// ВЛАЖНОСТЬ почвы — только РЕАЛЬНОЕ поле влаги (геология низин), без дождя:
-	// мокрая почва темнее, глаже, с влажным блеском. Дождь/лужи убраны (были фейк).
+	float spec = 0.04;   // почва МАТОВАЯ: диэлектрик с почти нулевым бликом
+	// ВЛАЖНОСТЬ (реальное поле влаги низин): мокрая почва темнее и чуть менее
+	// матовая — но НЕ зеркало (грунт не бликует как мокрый камень).
 	float wetv = 0.0;
 	if (moisture_half > 1.0) {
 		vec2 dpos = vec2(v_wpos.x, -v_wpos.z);       // данные: восток, север
@@ -233,16 +233,16 @@ void fragment() {
 		if (muv.x > 0.0 && muv.x < 1.0 && muv.y > 0.0 && muv.y < 1.0)
 			wetv = max(wetv, smoothstep(0.35, 0.90, texture(moisture_tex, muv).r));
 	}
-	col2 *= mix(1.0, 0.55, wetv);                    // мокрая — темнее
-	rough = mix(rough, 0.32, wetv);                  // и глаже
-	spec = mix(spec, 0.55, wetv);                    // влажный блеск
+	col2 *= mix(1.0, 0.6, wetv);                     // мокрая — темнее
+	rough = mix(rough, 0.7, wetv);                   // мокрая чуть глаже, но матовая
+	spec = mix(spec, 0.12, wetv);                    // слабый влажный отлив, не блик
 
-	// спрессованная почва в следе темнее и глаже (просадка от нагрузки)
-	col2 *= mix(1.0, 0.62, v_deform);
-	rough *= mix(1.0, 0.7, v_deform);
+	// спрессованная почва в следе темнее (просадка от нагрузки)
+	col2 *= mix(1.0, 0.7, v_deform);
 
 	ALBEDO = col2;
-	ROUGHNESS = clamp(rough, 0.02, 1.0);
+	// ЖЁСТКИЙ матовый пол шероховатости — грунт НИКОГДА не бликует как камень/стекло
+	ROUGHNESS = clamp(rough, 0.72, 1.0);
 	METALLIC = 0.0;
 	SPECULAR = spec;
 	NORMAL = normalize((VIEW_MATRIX * vec4(n, 0.0)).xyz);
