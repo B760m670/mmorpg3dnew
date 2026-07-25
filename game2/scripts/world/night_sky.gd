@@ -71,20 +71,32 @@ func _build_stars() -> void:
 	add_child(_stars_mi)
 	print("[stars] купол: %d настоящих звёзд (Yale BSC, RA/Dec J2000, цвет из T)" % n)
 
-# --- Луна как настоящая сфера (фаза = освещение настоящим Солнцем) ---
+# --- Луна как настоящая сфера: реальная поверхность + либрация + фаза ---
+func _mip_tex(path: String) -> Texture2D:
+	var res := load(path)
+	if not (res is Texture2D):
+		return null
+	var img := (res as Texture2D).get_image()
+	if img == null:
+		return res
+	if not img.has_mipmaps():
+		img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
+
 func _build_moon() -> void:
 	var sph := SphereMesh.new()
-	# угловой размер ~0.52° на дистанции R_SKY → радиус сферы
-	sph.radius = R_SKY * tan(0.26 * RAD)
-	sph.height = sph.radius * 2.0
-	sph.radial_segments = 32
-	sph.rings = 16
+	sph.radius = 1.0                         # единичная; масштаб = угловой размер (в _process)
+	sph.height = 2.0
+	sph.radial_segments = 48
+	sph.rings = 24
 	_moon_mat = ShaderMaterial.new()
 	_moon_mat.shader = load("res://shaders/world/moon.gdshader")
+	_moon_mat.set_shader_parameter("albedo_tex", _mip_tex("res://assets/sky/moon_albedo.png"))
 	_moon = MeshInstance3D.new()
 	_moon.mesh = sph
 	_moon.material_override = _moon_mat
 	_moon.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_moon.custom_aabb = AABB(Vector3(-100, -100, -100), Vector3(200, 200, 200))
 	add_child(_moon)
 
 # --- матрица экватор(J2000)→горизонт(движок) по звёздному времени ---
@@ -119,17 +131,33 @@ func _process(_delta: float) -> void:
 	var night := clampf((-elev - 4.0) / 14.0, 0.0, 1.0)
 	_stars_mat.set_shader_parameter("night", night)
 
-	# Луна: настоящее положение → alt/az через ту же матрицу; фаза — освещением
+	# Луна: настоящее положение + НАСТОЯЩАЯ ОРИЕНТАЦИЯ (ось по позиционному углу P,
+	# либрация l/b) + фаза (освещение настоящим Солнцем) + настоящий угловой размер.
 	var m := clock.moon_state(unix)
 	var ra := float(m["ra_deg"]) * RAD; var dec := float(m["dec_deg"]) * RAD
 	var v_eq := Vector3(cos(dec) * cos(ra), cos(dec) * sin(ra), sin(dec))
-	var dir := (basis * v_eq).normalized()
-	if _moon != null:
-		_moon.visible = dir.y > -0.03                    # над горизонтом
-		_moon.position = dir * R_SKY
-		# Луна видна и в поздних сумерках, и ночью; днём приглушена
+	var mdir := (basis * v_eq).normalized()              # мир: направление на Луну
+	if _moon != null and _moon_mat != null:
+		_moon.visible = mdir.y > -0.03                    # над горизонтом
+		_moon.position = mdir * R_SKY
+		# ось Луны на небе: небесный север, повёрнутый на позиционный угол P
+		var ncp := (basis * Vector3(0.0, 0.0, 1.0)).normalized()
+		var north_tan := (ncp - ncp.dot(mdir) * mdir).normalized()
+		var perp := mdir.cross(north_tan).normalized()    # в плоскости диска, ⟂ север
+		var pang := float(m["pos_angle"]) * RAD
+		var axis := (north_tan * cos(pang) + perp * sin(pang)).normalized()
+		# селенографический фрейм: prime = к Земле (−mdir) ⟂ оси; east = ось×prime
+		var to_earth := -mdir
+		var prime := (to_earth - to_earth.dot(axis) * axis).normalized()
+		var east := axis.cross(prime).normalized()
+		_moon_mat.set_shader_parameter("moon_axis", axis)
+		_moon_mat.set_shader_parameter("moon_prime", prime)
+		_moon_mat.set_shader_parameter("moon_east", east)
+		_moon_mat.set_shader_parameter("libration", Vector2(float(m["lib_l"]), float(m["lib_b"])))
+		# настоящий угловой размер (перигей/апогей): радиус на дистанции R_SKY
+		var ang_r := float(m["ang_diam_deg"]) * 0.5 * RAD
+		_moon.scale = Vector3.ONE * (R_SKY * tan(ang_r))
 		var moon_vis := clampf((-elev + 2.0) / 10.0, 0.15, 1.0)
 		_moon_mat.set_shader_parameter("night", moon_vis)
 		if sun != null:
-			var to_sun := sun.global_transform.basis.z.normalized()
-			_moon_mat.set_shader_parameter("sun_dir", to_sun)
+			_moon_mat.set_shader_parameter("sun_dir", sun.global_transform.basis.z.normalized())
