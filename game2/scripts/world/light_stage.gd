@@ -139,15 +139,18 @@ func _build_environment(gi: bool) -> Environment:
 	# светло-серое, ровное; синева Рэлея приглушена; диск Солнца скрыт за облаком;
 	# рассеянный свет неба-купола становится главным источником (мягкие тени).
 	var sm := PhysicalSkyMaterial.new()
-	sm.rayleigh_coefficient = 1.2            # синева приглушена (пасмурно)
-	sm.rayleigh_color = Color(0.42, 0.45, 0.50)
-	sm.mie_coefficient = 0.065               # облачная муть — светло-серый купол
-	sm.mie_eccentricity = 0.75
-	sm.mie_color = Color(0.80, 0.82, 0.85)
-	sm.turbidity = 9.0                        # плотная дымка/облачность
+	# пасмурный купол должен быть СВЕТЛО-СЕРЫМ и РОВНЫМ (не тёмным к зениту):
+	# синева приглушена, но не в темноту; Ми почти изотропно (низкий эксцентриситет)
+	# → равномерная светлая муть по всему небу, а не тёмная «дыра» вверху.
+	sm.rayleigh_coefficient = 0.9
+	sm.rayleigh_color = Color(0.55, 0.58, 0.62)
+	sm.mie_coefficient = 0.09                 # больше облачной мути — ровный серый
+	sm.mie_eccentricity = 0.55                # почти изотропно (нет тёмного зенита)
+	sm.mie_color = Color(0.86, 0.88, 0.90)
+	sm.turbidity = 10.0                       # плотная дымка/облачность
 	sm.sun_disk_scale = 0.0                   # Солнце скрыто за облаком (нет диска)
-	sm.ground_color = Color(0.26, 0.26, 0.27)
-	sm.energy_multiplier = 1.25               # яркий пасмурный купол
+	sm.ground_color = Color(0.30, 0.30, 0.31)
+	sm.energy_multiplier = 1.5                # ярче пасмурный купол (не тёмный)
 	sm.use_debanding = true
 	sky.sky_material = sm
 	sky.process_mode = Sky.PROCESS_MODE_REALTIME   # без чёрного экрана до схождения
@@ -479,8 +482,8 @@ func _update_hud() -> void:
 	_hud.text = "Ф3 · ЗЕМЛЯ+СВЕТ · Godot 4.5.2 (форк) · Metal\n" \
 		+ "GPU: %s\n" % RenderingServer.get_video_adapter_name() \
 		+ _terrain_line() \
-		+ "Небо: физ.атмосфера   Туман(объём/god-rays): %s\n" % (
-			"ВКЛ" if _env.volumetric_fog_enabled else "выкл") \
+		+ "Небо: физ.атмосфера · погода: %s · облака 1.2–3.2 км (ветер)\n" % (
+			_clouds.weather_label() if _clouds != null else "—") \
 		+ "GI(SDFGI): %s   SSAO: %s   Glow: %s   пост: %s\n" % [
 			"ВКЛ" if gi_on else "выкл",
 			"ВКЛ" if ENABLE_SSAO else "выкл",

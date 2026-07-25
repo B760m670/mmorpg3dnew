@@ -11,11 +11,20 @@ extends Node3D
 @export var coverage: float = 0.55
 @export var day_time_scale: float = 288.0     # как у WorldClock (сутки=5 мин)
 
-# купол невелик (R < дальний рельеф): облака выше рельефа, а меньший радиус →
-# слабее равномерная дымка depth-fog на полотне купола (иначе облака сереют).
-const DOME_R := 5000.0
+# купол невелик: полотно облаков — не «горизонт мира», а канва для raymarch;
+# меньший радиус → слабее равномерная дымка depth-fog на нём (иначе облака
+# сереют до невидимости и сливаются с небом). Слой облаков (1200..3200 м)
+# считается аналитически по мировому лучу, от радиуса купола не зависит.
+const DOME_R := 2500.0
 var _mat: ShaderMaterial
 var _t: float = 0.0
+
+# --- НАСТОЯЩАЯ СМЕНА ПОГОДЫ: покрытие медленно дышит (фронты приходят/уходят) ---
+# Не «вечное пасмурное»: coverage плавно гуляет вокруг среднего по времени
+# (в масштабе часов; на 5-мин сутках заметно за десятки секунд). Ветер при этом
+# сносит сами облака (движение). current_coverage — для HUD.
+var _weather_t: float = 0.0
+var current_coverage: float = 0.55
 
 func _make_noise_3d(cellular: bool, freq: float, octaves: int) -> NoiseTexture3D:
 	var n := FastNoiseLite.new()
@@ -56,11 +65,31 @@ func build() -> void:
 	add_child(mi)
 	print("[clouds] объёмный слой: купол R=%.0f, покрытие %.2f (raymarch Перлин-Ворли)" % [DOME_R, coverage])
 
+## текстовая сводка погоды для HUD
+func weather_label() -> String:
+	var c := current_coverage
+	var name := "ясно"
+	if c > 0.8: name = "сплошная облачность"
+	elif c > 0.62: name = "пасмурно"
+	elif c > 0.45: name = "облачно"
+	elif c > 0.28: name = "переменная облачность"
+	else: name = "малооблачно"
+	return "%s (%.0f%%)" % [name, c * 100.0]
+
 func _process(delta: float) -> void:
 	if _mat == null:
 		return
 	_t += delta * day_time_scale * 0.04          # дрейф облаков (быстрее на быстрых сутках)
 	_mat.set_shader_parameter("time_s", _t)
+
+	# смена погоды: медленное «дыхание» покрытия (сумма разнопериодных волн —
+	# натуральнее одиночной синусоиды: фронты то плотнее, то с просветами)
+	_weather_t += delta * day_time_scale         # в сим-секундах (сутки=86400)
+	var w := 0.60 * sin(TAU * _weather_t / 43200.0) \
+		+ 0.30 * sin(TAU * _weather_t / 15300.0 + 1.7) \
+		+ 0.10 * sin(TAU * _weather_t / 6100.0 + 0.5)
+	current_coverage = clampf(coverage + 0.26 * w, 0.18, 0.92)
+	_mat.set_shader_parameter("coverage", current_coverage)
 	# купол едет за камерой; солнце — из направления света
 	var cam := get_viewport().get_camera_3d()
 	if cam != null:

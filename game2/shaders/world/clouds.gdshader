@@ -51,14 +51,21 @@ float cloud_density(vec3 p) {
 void fragment() {
 	vec3 cam = CAMERA_POSITION_WORLD;
 	vec3 rd = normalize(v_world - cam);
-	// смотрим только вверх (нижняя половина купола — прозрачна)
-	if (rd.y < 0.02) { ALBEDO = vec3(0.0); ALPHA = 0.0; return; }
 
-	// пересечение луча со слоем облаков [H0..H1]
-	float t0 = (cloud_h0 - cam.y) / rd.y;
-	float t1 = (cloud_h1 - cam.y) / rd.y;
-	t0 = max(t0, 0.0);
-	float march_len = clamp(t1 - t0, 0.0, 9000.0);
+	// пересечение луча со слоем облаков [H0..H1] — РАБОТАЕТ на любой высоте:
+	// снизу (смотрим вверх), внутри слоя, и СВЕРХУ (смотрим вниз на «палубу»
+	// облаков — вид с высоты полёта). Без этого высокая камера видела пустое небо.
+	float t0, t1;
+	if (abs(rd.y) < 1e-4) {                       // почти горизонтально
+		if (cam.y < cloud_h0 || cam.y > cloud_h1) { ALBEDO = vec3(0.0); ALPHA = 0.0; return; }
+		t0 = 0.0; t1 = 8000.0;
+	} else {
+		float ta = (cloud_h0 - cam.y) / rd.y;
+		float tb = (cloud_h1 - cam.y) / rd.y;
+		t0 = max(min(ta, tb), 0.0);
+		t1 = max(ta, tb);
+	}
+	float march_len = clamp(t1 - t0, 0.0, 8000.0);
 	if (march_len <= 1.0) { ALBEDO = vec3(0.0); ALPHA = 0.0; return; }
 
 	const int STEPS = 24;                 // FPS-безопаснее (raymarch дорогой); поднимем, если тянет
@@ -91,8 +98,8 @@ void fragment() {
 			if (trans < 0.02) break;
 		}
 	}
-	// у горизонта облака тают в дымку
-	float horizon = smoothstep(0.02, 0.18, rd.y);
+	// у самого горизонта (луч почти горизонтален, путь огромен) — тают в дымку
+	float horizon = smoothstep(0.0, 0.08, abs(rd.y));
 	float alpha = (1.0 - trans) * horizon;
 	ALBEDO = col;
 	ALPHA = clamp(alpha, 0.0, 1.0);

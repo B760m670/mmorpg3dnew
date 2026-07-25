@@ -4,7 +4,10 @@ shader_type spatial;
 // направлением на Солнце (sun_dir) — терминатор проходит там, где и должен,
 // для текущей геометрии Солнце-Земля-Луна. Тёмная сторона — пепельный свет
 // (earthshine, отражённый Землёй). Диск чуть тёплый, к краю темнеет (лимб).
-render_mode unshaded, cull_back, depth_draw_opaque;
+// прозрачно: днём тёмная сторона Луны НЕ должна быть чёрным диском в светлом
+// небе — она исчезает (alpha→0), видна лишь освещённая часть бледным диском;
+// ночью проявляется весь диск с пепельным светом.
+render_mode blend_mix, cull_back, depth_draw_never, unshaded;
 
 uniform vec3 sun_dir = vec3(0.0, 1.0, 0.0);        // к Солнцу, мир
 uniform float night = 1.0;                          // приглушение днём
@@ -28,6 +31,9 @@ void fragment() {
 	vec3 daySide = moon_tint * (0.06 + 1.05 * max(lam, 0.0)) * limb;
 	vec3 earthshine = vec3(0.045, 0.052, 0.075);    // пепельный свет Земли
 	vec3 c = mix(earthshine, daySide, lit);
-	ALBEDO = c * clamp(night, 0.15, 1.0);
-	ALPHA = 1.0;
+	ALBEDO = c;
+	// пепельный свет (тёмная сторона) виден только когда небо реально тёмное;
+	// днём тёмная сторона прозрачна → нет чёрной точки, виден лишь бледный серп/диск
+	float earth_a = smoothstep(0.3, 0.8, night);
+	ALPHA = clamp(max(lit, earth_a * 0.85), 0.0, 1.0);
 }
