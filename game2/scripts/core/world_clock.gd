@@ -85,6 +85,45 @@ func solar_position(unix_utc: float) -> Dictionary:
 
 	return {"elevation": elev, "azimuth": az, "declination": decl}
 
+# --- ЗВЁЗДНОЕ ВРЕМЯ: местное среднее (LST) на долготе Гатчины, градусы ---
+# Нужно куполу звёзд: часовой угол звезды H = LST − RA, дальше alt/az.
+# Проверено tools/verify_night_sky.py: J2000 12:00 UT → GMST 280.4606° (0 ошибки).
+func local_sidereal_deg(unix_utc: float) -> float:
+	var jd := unix_utc / 86400.0 + 2440587.5
+	var d := jd - 2451545.0
+	var t := d / 36525.0
+	var gmst := 280.46061837 + 360.98564736629 * d + 0.000387933 * t * t - t * t * t / 38710000.0
+	return fposmod(gmst + longitude_deg, 360.0)
+
+# --- ЛУНА: Meeus (упрощ., гл. 47) → экватор (RA/Dec) + освещённая доля ---
+# Фаза настоящая (из элонгации по долготе Солнце-Луна). Проверено числами:
+# новолуние 2000-01-06 → 0.00, полнолуние 2000-01-21 → 1.00, четверть → 0.50.
+func moon_state(unix_utc: float) -> Dictionary:
+	var jd := unix_utc / 86400.0 + 2440587.5
+	var t := (jd - 2451545.0) / 36525.0
+	var lp := fposmod(218.3164477 + 481267.88123421 * t, 360.0)
+	var dd := fposmod(297.8501921 + 445267.1114034 * t, 360.0)
+	var mm := fposmod(357.5291092 + 35999.0502909 * t, 360.0)
+	var mp := fposmod(134.9633964 + 477198.8675055 * t, 360.0)
+	var ff := fposmod(93.272095 + 483202.0175233 * t, 360.0)
+	var dr := dd * RAD; var mr := mm * RAD; var mpr := mp * RAD; var fr := ff * RAD
+	var lon := lp + (6.288774 * sin(mpr) + 1.274027 * sin(2.0 * dr - mpr) \
+		+ 0.658314 * sin(2.0 * dr) + 0.213618 * sin(2.0 * mpr) \
+		- 0.185116 * sin(mr) - 0.114332 * sin(2.0 * fr))
+	var lat := 5.128122 * sin(fr) + 0.280602 * sin(mpr + fr) \
+		+ 0.277693 * sin(mpr - fr) + 0.173237 * sin(2.0 * dr - fr)
+	var eps := 23.43929 * RAD
+	var ll := lon * RAD; var bb := lat * RAD
+	var ra := atan2(sin(ll) * cos(eps) - tan(bb) * sin(eps), cos(ll))
+	var dec := asin(sin(bb) * cos(eps) + cos(bb) * sin(eps) * sin(ll))
+	var sun_lon := fposmod(280.46646 + 36000.76983 * t, 360.0)
+	var elong := fposmod(lon - sun_lon, 360.0)
+	var illum := (1.0 - cos(elong * RAD)) / 2.0
+	return {
+		"ra_deg": fposmod(ra * DEG, 360.0), "dec_deg": dec * DEG,
+		"illum": illum, "elong_deg": elong,
+	}
+
 func _compute_and_apply() -> void:
 	var s := solar_position(utc_unix)
 	sun_elevation_deg = s["elevation"]

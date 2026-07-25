@@ -50,6 +50,7 @@ func _ready() -> void:
 	add_child(we)
 
 	_build_sun()
+	_build_night_sky()
 	_build_clouds()
 	_build_ground()
 	_build_water()
@@ -229,6 +230,16 @@ func _build_sun() -> void:
 
 # --- ОБЛАКА: объёмный слой (raymarch), движется ветром; покрытие ∝ пасмурности ---
 var _clouds: Clouds
+
+## --- НОЧНОЕ НЕБО: настоящие звёзды (каталог) + Луна (орбита+фаза) ---
+var _night_sky: NightSky
+
+func _build_night_sky() -> void:
+	_night_sky = NightSky.new()
+	_night_sky.sun = _sun
+	_night_sky.clock = _clock
+	add_child(_night_sky)
+	_night_sky.build()
 
 func _build_clouds() -> void:
 	_clouds = Clouds.new()
