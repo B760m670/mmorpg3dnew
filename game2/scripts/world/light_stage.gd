@@ -233,7 +233,9 @@ var _clouds: Clouds
 func _build_clouds() -> void:
 	_clouds = Clouds.new()
 	_clouds.sun = _sun
-	_clouds.coverage = 0.4 + 0.4 * OVERCAST      # пасмурно → плотнее покрытие
+	# ПАСМУРНО, но со СТРУКТУРОЙ: покрытие ~0.55 (не 0.74 — то давало ровный
+	# тёмный потолок без облаков). Видны яркие клубы и просветы серого неба.
+	_clouds.coverage = 0.28 + 0.32 * OVERCAST    # OVERCAST=0.85 → ~0.55
 	add_child(_clouds)
 	_clouds.build()
 

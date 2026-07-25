@@ -16,7 +16,7 @@ uniform sampler3D shape_tex : filter_linear, repeat_enable;   // fBm Перли�
 uniform sampler3D detail_tex : filter_linear, repeat_enable;  // Ворли (эрозия)
 uniform vec3 sun_dir = vec3(0.4, 0.6, -0.3);       // НА солнце (нормирован)
 uniform vec3 sun_color = vec3(1.0, 0.97, 0.9);
-uniform vec3 sky_ambient = vec3(0.55, 0.62, 0.75);
+uniform vec3 sky_ambient = vec3(0.72, 0.78, 0.88);  // ЯРКИЙ пасмурный купол (не тёмный)
 uniform float coverage = 0.5;                       // 0 ясно .. 1 сплошь (погода)
 uniform float wind_x = 0.006;
 uniform float wind_z = 0.003;
@@ -61,7 +61,7 @@ void fragment() {
 	float march_len = clamp(t1 - t0, 0.0, 9000.0);
 	if (march_len <= 1.0) { ALBEDO = vec3(0.0); ALPHA = 0.0; return; }
 
-	const int STEPS = 20;                 // FPS-безопаснее (raymarch дорогой); поднимем, если тянет
+	const int STEPS = 24;                 // FPS-безопаснее (raymarch дорогой); поднимем, если тянет
 	float dt = march_len / float(STEPS);
 	float ct = dot(rd, sun_dir);
 	float phase = 0.65 * hg(ct, 0.6) + 0.35 * hg(ct, -0.15);
@@ -77,11 +77,14 @@ void fragment() {
 			// свет к солнцу: короткий марш → самозатенение (Бир-Ламберт)
 			float lt = 1.0;
 			vec3 lp = p;
-			for (int l = 0; l < 3; l++) {
+			for (int l = 0; l < 4; l++) {
 				lp += sun_dir * 180.0;
 				lt *= exp(-cloud_density(lp) * 180.0 * 0.02);  // мягкое самозатенение
 			}
-			vec3 lit = sun_color * (lt * phase * 2.6 + 0.15) + sky_ambient * 0.7;
+			// ОСВЕЩЕНИЕ облака ЯРКОЕ (пасмурно = облака светлее серого неба, не темнее):
+			// прямой к солнцу (кромка) + купол-неба как основной, глубина затеняет мягко.
+			float ltf = 0.4 + 0.6 * lt;
+			vec3 lit = sun_color * (lt * phase * 4.0 + 0.5) + sky_ambient * 1.6 * ltf;
 			float a = 1.0 - exp(-d * dt * 0.008);
 			col += trans * a * lit;
 			trans *= 1.0 - a;

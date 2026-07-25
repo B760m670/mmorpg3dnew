@@ -11,7 +11,9 @@ extends Node3D
 @export var coverage: float = 0.55
 @export var day_time_scale: float = 288.0     # как у WorldClock (сутки=5 мин)
 
-const DOME_R := 8000.0
+# купол невелик (R < дальний рельеф): облака выше рельефа, а меньший радиус →
+# слабее равномерная дымка depth-fog на полотне купола (иначе облака сереют).
+const DOME_R := 5000.0
 var _mat: ShaderMaterial
 var _t: float = 0.0
 
@@ -37,6 +39,7 @@ func build() -> void:
 	_mat.set_shader_parameter("shape_tex", _make_noise_3d(false, 0.9, 4))   # форма
 	_mat.set_shader_parameter("detail_tex", _make_noise_3d(true, 1.6, 2))   # эрозия
 	_mat.set_shader_parameter("coverage", coverage)
+	_mat.set_shader_parameter("sky_ambient", Vector3(0.72, 0.78, 0.88))  # тон яркого пасмурного неба
 	_mat.set_shader_parameter("wind_x", 0.004)
 	_mat.set_shader_parameter("wind_z", 0.002)
 
