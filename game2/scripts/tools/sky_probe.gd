@@ -24,37 +24,30 @@ func _ready() -> void:
 	var a := OS.get_cmdline_user_args()
 	var clear := "--clear" in a
 
-	# окружение: небо
+	var cov := float(_val(a, "--cov", "0.55"))
+	# пасмурность из покрытия (та же связка, что в игре) — НЕ фейковая крыша
+	var oc: float = 0.0 if clear else WeatherSky.overcast_from_coverage(cov)
+
+	# окружение: небо (когерентно погоде)
 	var env := Environment.new()
 	env.background_mode = Environment.BG_SKY
 	var sky := Sky.new()
 	var sm := PhysicalSkyMaterial.new()
-	if clear:
-		sm.sun_disk_scale = 1.0
-	else:
-		sm.rayleigh_coefficient = 0.9
-		sm.rayleigh_color = Color(0.55, 0.58, 0.62)
-		sm.mie_coefficient = 0.09
-		sm.mie_eccentricity = 0.55
-		sm.mie_color = Color(0.86, 0.88, 0.90)
-		sm.turbidity = 10.0
-		sm.sun_disk_scale = 0.0
-		sm.energy_multiplier = 1.5
+	WeatherSky.apply_sky(sm, oc)
 	sky.sky_material = sm
 	sky.process_mode = Sky.PROCESS_MODE_REALTIME
 	sky.radiance_size = Sky.RADIANCE_SIZE_128
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 1.6
+	env.ambient_light_energy = WeatherSky.ambient_energy(oc)
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.tonemap_exposure = 0.9
+	env.tonemap_exposure = WeatherSky.exposure(oc)
 	var we := WorldEnvironment.new(); we.environment = env; add_child(we)
 
-	# солнце + часы
+	# солнце + часы (пасмурность гасит/сереет прямой свет)
 	_sun = DirectionalLight3D.new(); add_child(_sun)
 	_clock = WorldClock.new(); _clock.sun = _sun
-	if not clear:
-		_clock.overcast = 0.85
+	_clock.overcast = oc
 	var d := _val(a, "--date", "2025-06-21").split("-")
 	var t := _val(a, "--utc", "12:00").split(":")
 	_clock.set_datetime_utc(int(d[0]), int(d[1]), int(d[2]), int(t[0]), int(t[1]) if t.size() > 1 else 0, 0)
@@ -64,7 +57,7 @@ func _ready() -> void:
 
 	# облака + ночное небо (те же классы, что в игре)
 	_clouds = Clouds.new(); _clouds.sun = _sun
-	_clouds.coverage = float(_val(a, "--cov", "0.55"))
+	_clouds.coverage = cov
 	_clouds.weather_enabled = not ("--fixcov" in a)   # стенд: фиксировать покрытие
 	add_child(_clouds); _clouds.build()
 	_night = NightSky.new(); _night.sun = _sun; _night.clock = _clock

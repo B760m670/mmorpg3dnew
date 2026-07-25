@@ -13,9 +13,9 @@ const ENABLE_METALFX := true
 const ENABLE_GI := false
 const ENABLE_SSAO := true        # контактные тени
 const ENABLE_GLOW := true        # мягкое свечение в бликах
-# ПОГОДА Гатчины: обычно пасмурно (не ясный юг). 0 ясно .. 1 сплошная облачность.
-# Глушит прямое солнце, поднимает рассеянный свет неба, сереет небо, мягчит тени.
-const OVERCAST := 0.85
+# ПОГОДА Гатчины теперь КОГЕРЕНТНА и ДИНАМИЧНА: пасмурность рождается из
+# плотности облаков (Clouds.current_coverage) и через WeatherSky ведёт небо
+# (синее↔серое), рассеянный свет и приглушение Солнца — см. _update_weather.
 
 var _post_mat: ShaderMaterial
 var _hud: Label
@@ -138,33 +138,27 @@ func _build_environment(gi: bool) -> Environment:
 	# ПАСМУРНОЕ небо Гатчины (не ясный юг): облака = сильное Ми-рассеяние → небо
 	# светло-серое, ровное; синева Рэлея приглушена; диск Солнца скрыт за облаком;
 	# рассеянный свет неба-купола становится главным источником (мягкие тени).
+	# КОГЕРЕНТНАЯ ПОГОДА (WeatherSky): небо НЕ крашеная серая крыша. Ясно →
+	# синее физ-небо; пасмурно → ровный серый — но пасмурность РОЖДАЕТСЯ из
+	# плотности облаков (обновляется в _update_weather каждый кадр), и этим же
+	# сереет/гаснет прямой свет. Никакой фиктивной серой заливки.
 	var sm := PhysicalSkyMaterial.new()
-	# пасмурный купол должен быть СВЕТЛО-СЕРЫМ и РОВНЫМ (не тёмным к зениту):
-	# синева приглушена, но не в темноту; Ми почти изотропно (низкий эксцентриситет)
-	# → равномерная светлая муть по всему небу, а не тёмная «дыра» вверху.
-	sm.rayleigh_coefficient = 0.9
-	sm.rayleigh_color = Color(0.55, 0.58, 0.62)
-	sm.mie_coefficient = 0.09                 # больше облачной мути — ровный серый
-	sm.mie_eccentricity = 0.55                # почти изотропно (нет тёмного зенита)
-	sm.mie_color = Color(0.86, 0.88, 0.90)
-	sm.turbidity = 10.0                       # плотная дымка/облачность
-	sm.sun_disk_scale = 0.0                   # Солнце скрыто за облаком (нет диска)
-	sm.ground_color = Color(0.30, 0.30, 0.31)
-	sm.energy_multiplier = 1.5                # ярче пасмурный купол (не тёмный)
 	sm.use_debanding = true
+	WeatherSky.apply_sky(sm, 0.6)             # старт — умеренная облачность
+	_sky_mat = sm
 	sky.sky_material = sm
 	sky.process_mode = Sky.PROCESS_MODE_REALTIME   # без чёрного экрана до схождения
 	sky.radiance_size = Sky.RADIANCE_SIZE_256       # realtime-небо требует 256
 	env.sky = sky
 
-	# пасмурно: рассеянный свет неба-купола — главный источник (поднят ambient),
-	# прямое солнце приглушено облаками (в WorldClock). Небо и отражения — с купола.
+	# рассеянный свет неба-купола — главный источник в пасмурность; сила зависит
+	# от погоды (в _update_weather). Небо и отражения — с купола.
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 2.1
+	env.ambient_light_energy = WeatherSky.ambient_energy(0.6)
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.tonemap_exposure = 0.82               # пасмурно — ниже ключ, без выбеливания
+	env.tonemap_exposure = WeatherSky.exposure(0.6)
 	env.tonemap_white = 6.0
 
 	if gi:
@@ -226,13 +220,15 @@ func _build_sun() -> void:
 
 	_clock = WorldClock.new()
 	_clock.sun = _sun
-	_clock.overcast = OVERCAST
+	# overcast теперь ДИНАМИЧЕСКИЙ — из плотности облаков (см. _update_weather)
 	# старт: летнее утро над Гатчиной, ясный фронтальный свет (местное 09:00 → UTC 06:00)
 	_clock.set_datetime_utc(2025, 6, 21, 6, 0, 0)
 	add_child(_clock)
 
 # --- ОБЛАКА: объёмный слой (raymarch), движется ветром; покрытие ∝ пасмурности ---
 var _clouds: Clouds
+var _sky_mat: PhysicalSkyMaterial          # небо, ведомое погодой (WeatherSky)
+var _weather_oc: float = -1.0              # кэш пасмурности (обновляем небо при изменении)
 
 ## --- НОЧНОЕ НЕБО: настоящие звёзды (каталог) + Луна (орбита+фаза) ---
 var _night_sky: NightSky
@@ -247,11 +243,24 @@ func _build_night_sky() -> void:
 func _build_clouds() -> void:
 	_clouds = Clouds.new()
 	_clouds.sun = _sun
-	# ПАСМУРНО, но со СТРУКТУРОЙ: покрытие ~0.55 (не 0.74 — то давало ровный
-	# тёмный потолок без облаков). Видны яркие клубы и просветы серого неба.
-	_clouds.coverage = 0.28 + 0.32 * OVERCAST    # OVERCAST=0.85 → ~0.55
+	# КЛИМАТ Гатчины — облачно; погода «дышит» вокруг среднего (Clouds.weather_enabled),
+	# и это среднее ведёт всю пасмурность неба/света через _update_weather.
+	_clouds.coverage = 0.55                       # среднее покрытие (климат)
 	add_child(_clouds)
 	_clouds.build()
+
+# --- КОГЕРЕНТНАЯ ПОГОДА: плотность облаков ведёт небо И свет каждый кадр ---
+func _update_weather() -> void:
+	if _clouds == null or _clock == null or _env == null:
+		return
+	var oc := WeatherSky.overcast_from_coverage(_clouds.current_coverage)
+	_clock.overcast = oc                          # пасмурность гасит/сереет прямой свет
+	if absf(oc - _weather_oc) > 0.01:             # небо/экспозицию — при заметном изменении
+		_weather_oc = oc
+		if _sky_mat != null:
+			WeatherSky.apply_sky(_sky_mat, oc)
+		_env.ambient_light_energy = WeatherSky.ambient_energy(oc)
+		_env.tonemap_exposure = WeatherSky.exposure(oc)
 
 # --- НАСТОЯЩАЯ земля: рельеф Гатчины в реальном масштабе (метры) ---
 func _build_ground() -> void:
@@ -521,5 +530,6 @@ func _clock_line() -> String:
 func _process(_delta: float) -> void:
 	if _post_mat != null:
 		_post_mat.set_shader_parameter("t", float(Time.get_ticks_msec()) / 1000.0)
+	_update_weather()
 	_update_hud()
 	_update_compass()
