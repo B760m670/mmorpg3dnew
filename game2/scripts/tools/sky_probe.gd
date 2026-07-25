@@ -73,17 +73,35 @@ func _ready() -> void:
 	# камера
 	var cam := Camera3D.new()
 	cam.far = 22000.0
-	cam.position = _v3(_val(a, "--campos", "0,150,0"))
+	cam.fov = float(_val(a, "--fov", "75"))
+	var cpos := _v3(_val(a, "--campos", "0,150,0"))
+	cam.position = cpos
 	add_child(cam)                        # в дереве ДО look_at (иначе ошибка/без поворота)
-	cam.look_at(_v3(_val(a, "--camlook", "200,300,-200")))
+	var target := _v3(_val(a, "--camlook", "200,300,-200"))
+	if "--lookmoon" in a:                 # навести камеру НА Луну (проверка перекрытия облаками)
+		var mo2 := _clock.moon_state(_clock.utc_unix)
+		var lst := _clock.local_sidereal_deg(_clock.utc_unix) * (PI / 180.0)
+		var rar := float(mo2["ra_deg"]) * (PI / 180.0)
+		var decr := float(mo2["dec_deg"]) * (PI / 180.0)
+		var phi := _clock.latitude_deg * (PI / 180.0)
+		var hh := lst - rar
+		var alt := asin(clampf(sin(phi) * sin(decr) + cos(phi) * cos(decr) * cos(hh), -1.0, 1.0))
+		var az := atan2(-cos(decr) * sin(hh), sin(decr) * cos(phi) - cos(decr) * sin(phi) * cos(hh))
+		var mdir := Vector3(cos(alt) * sin(az), sin(alt), -cos(alt) * cos(az))
+		target = cpos + mdir * 1000.0
+		print("[skyprobe] навёл на Луну: alt %.1f° az %.1f°" % [rad_to_deg(alt), rad_to_deg(az)])
+	cam.look_at(target)
 	cam.make_current()
 
 	var out := _val(a, "--out", "/tmp/sky.png")
 	var wait := float(_val(a, "--wait", "2.5"))
 	await get_tree().create_timer(wait).timeout
+	var mo := _clock.moon_state(_clock.utc_unix)
 	print("[skyprobe] Солнце %.1f° аз %.0f · погода %s · %s" % [
 		_clock.sun_elevation_deg, _clock.sun_azimuth_deg,
 		_clouds.weather_label(), "ясно" if clear else "пасмурно"])
+	print("[skyprobe] Луна: RA %.1f° Dec %+.1f° освещ %.2f размер %.2f'" % [
+		mo["ra_deg"], mo["dec_deg"], mo["illum"], mo["ang_diam_deg"] * 60.0])
 	var img := get_viewport().get_texture().get_image()
 	img.save_png(out)
 	print("[skyprobe] shot -> ", out)
