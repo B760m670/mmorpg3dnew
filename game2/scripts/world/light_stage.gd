@@ -50,6 +50,7 @@ func _ready() -> void:
 	add_child(we)
 
 	_build_sun()
+	_build_clouds()
 	_build_ground()
 	_build_water()
 	_build_roads()
@@ -225,6 +226,16 @@ func _build_sun() -> void:
 	# старт: летнее утро над Гатчиной, ясный фронтальный свет (местное 09:00 → UTC 06:00)
 	_clock.set_datetime_utc(2025, 6, 21, 6, 0, 0)
 	add_child(_clock)
+
+# --- ОБЛАКА: объёмный слой (raymarch), движется ветром; покрытие ∝ пасмурности ---
+var _clouds: Clouds
+
+func _build_clouds() -> void:
+	_clouds = Clouds.new()
+	_clouds.sun = _sun
+	_clouds.coverage = 0.4 + 0.4 * OVERCAST      # пасмурно → плотнее покрытие
+	add_child(_clouds)
+	_clouds.build()
 
 # --- НАСТОЯЩАЯ земля: рельеф Гатчины в реальном масштабе (метры) ---
 func _build_ground() -> void:
