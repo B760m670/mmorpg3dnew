@@ -237,6 +237,19 @@ func _height_texture() -> ImageTexture:
 ## текстура высот — общая для клипмапа и всего, что облегает рельеф (дороги)
 var height_texture: ImageTexture
 
+# загрузка текстуры С ГАРАНТИЕЙ мип-карт (иначе на дали алиасинг/«зерно»)
+func _mip_tex(path: String) -> Texture2D:
+	var res := load(path)
+	if not (res is Texture2D):
+		push_warning("[terrain] нет текстуры %s" % path)
+		return null
+	var img := (res as Texture2D).get_image()
+	if img == null:
+		return res
+	if not img.has_mipmaps():
+		img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
+
 func _ground_material() -> ShaderMaterial:
 	var m := ShaderMaterial.new()
 	m.shader = load("res://shaders/world/terrain.gdshader")
@@ -259,13 +272,16 @@ func _ground_material() -> ShaderMaterial:
 	# НАСТОЯЩАЯ почва из ФОТО местной почвы Гатчины, СТРУКТУРНО (набор по полю):
 	# база — влажный серо-бурый суглинок (комья), низины — плодородный тёмный гумус,
 	# сухие пятна — растрескавшаяся светлая. Рельеф общий (loam). Не песок.
-	m.set_shader_parameter("soil_c", load("res://assets/materials/created/soil_loam_clods/Color.png"))
-	m.set_shader_parameter("soil_dry_c", load("res://assets/materials/created/soil_gatchina/Color.png"))
-	m.set_shader_parameter("soil_wet_c", load("res://assets/materials/created/soil_fertile/Color.png"))
-	m.set_shader_parameter("soil_n", load("res://assets/materials/created/soil_loam_clods/Normal.png"))
-	m.set_shader_parameter("soil_r", load("res://assets/materials/created/soil_loam_clods/Roughness.png"))
-	m.set_shader_parameter("soil_ao", load("res://assets/materials/created/soil_loam_clods/AmbientOcclusion.png"))
-	m.set_shader_parameter("soil_h", load("res://assets/materials/created/soil_loam_clods/Height.png"))
+	# ВАЖНО: мип-карты генерим В КОДЕ. Без .import-файлов дефолт может НЕ создать
+	# мип-уровни → на дистанции текстура алиасит («зерно»). _mip_tex гарантирует
+	# мип-карты; анизотропию даёт хинт сэмплера в шейдере.
+	m.set_shader_parameter("soil_c", _mip_tex("res://assets/materials/created/soil_loam_clods/Color.png"))
+	m.set_shader_parameter("soil_dry_c", _mip_tex("res://assets/materials/created/soil_gatchina/Color.png"))
+	m.set_shader_parameter("soil_wet_c", _mip_tex("res://assets/materials/created/soil_fertile/Color.png"))
+	m.set_shader_parameter("soil_n", _mip_tex("res://assets/materials/created/soil_loam_clods/Normal.png"))
+	m.set_shader_parameter("soil_r", _mip_tex("res://assets/materials/created/soil_loam_clods/Roughness.png"))
+	m.set_shader_parameter("soil_ao", _mip_tex("res://assets/materials/created/soil_loam_clods/AmbientOcclusion.png"))
+	m.set_shader_parameter("soil_h", _mip_tex("res://assets/materials/created/soil_loam_clods/Height.png"))
 	_setup_slice(m)
 	_setup_moisture(m)
 	return m

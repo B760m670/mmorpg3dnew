@@ -10,12 +10,12 @@ uniform sampler2D height_tex : filter_linear_mipmap, repeat_disable;
 uniform float dem_half = 8192.0;
 
 // покрытия (синтез tools/make_materials.py): 0 грунт, 1 макадам, 2 булыжник
-uniform sampler2D dirt_alb : filter_linear_mipmap, repeat_enable;
-uniform sampler2D dirt_nr : filter_linear_mipmap, repeat_enable;
-uniform sampler2D mac_alb : filter_linear_mipmap, repeat_enable;
-uniform sampler2D mac_nr : filter_linear_mipmap, repeat_enable;
-uniform sampler2D cob_alb : filter_linear_mipmap, repeat_enable;
-uniform sampler2D cob_nr : filter_linear_mipmap, repeat_enable;
+uniform sampler2D dirt_alb : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D dirt_nr : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D mac_alb : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D mac_nr : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D cob_alb : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D cob_nr : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform float detail_tile_m = 2.0;
 
 varying vec2 v_uv;

@@ -18,12 +18,14 @@ uniform float wet_level = -30.0;         // мировая высота сыры
 // плодородный тёмный гумус (soil_wet_c=fertile), на сухих пятнах — растрескавшаяся
 // светлая (soil_dry_c=gatchina). Рельеф (Normal/Rough/AO) — общий (loam). Повтор
 // разбивается де-тайлингом (две повёрнутые копии) в шейдере.
-uniform sampler2D soil_c : filter_linear_mipmap, repeat_enable;      // база (суглинок)
-uniform sampler2D soil_dry_c : filter_linear_mipmap, repeat_enable;  // сухая (трещины)
-uniform sampler2D soil_wet_c : filter_linear_mipmap, repeat_enable;  // плодородная (гумус)
-uniform sampler2D soil_n : filter_linear_mipmap, repeat_enable;
-uniform sampler2D soil_r : filter_linear_mipmap, repeat_enable;
-uniform sampler2D soil_ao : filter_linear_mipmap, repeat_enable;
+// АНИЗОТРОПНАЯ фильтрация + мип-карты — грунт виден под пологим углом, где обычной
+// мип-фильтрации мало; без этого на дали был сильный алиасинг («зерно»).
+uniform sampler2D soil_c : filter_linear_mipmap_anisotropic, repeat_enable;      // база (суглинок)
+uniform sampler2D soil_dry_c : filter_linear_mipmap_anisotropic, repeat_enable;  // сухая (трещины)
+uniform sampler2D soil_wet_c : filter_linear_mipmap_anisotropic, repeat_enable;  // плодородная (гумус)
+uniform sampler2D soil_n : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D soil_r : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D soil_ao : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D soil_h : filter_linear_mipmap, repeat_enable;
 uniform float detail_tile_m = 2.0;
 
@@ -128,31 +130,6 @@ void slice_surface(int s, out vec3 c, out float rough, out float bare) {
 	else             { c = vec3(0.205, 0.300, 0.110); rough = 1.00; bare = 0.00; } // луг
 }
 
-// POM (Parallax Occlusion Mapping): РЕАЛЬНАЯ ГЛУБИНА грунта. Смещаем UV по карте
-// высот soil_h вдоль взгляда (в касательном пространстве) — комья выпирают,
-// затеняют друг друга, при движении дают параллакс (не плоская картинка).
-// Лёгкий: 16 шагов, применяется только у камеры (гаснет с далью — см. вызов).
-vec2 pom_uv(vec2 uv, vec3 vts, float amp) {
-	const int STEPS = 16;
-	vec2 duv = vts.xy / max(vts.z, 0.35) * amp;    // полный сдвиг на всю высоту
-	vec2 stepuv = duv / float(STEPS);
-	float layer = 1.0 / float(STEPS);
-	vec2 cuv = uv;
-	float ch = 1.0;
-	float th = textureLod(soil_h, cuv, 0.0).r;      // LOD явно: производные в цикле не определены
-	for (int i = 0; i < STEPS; i++) {
-		if (th >= ch) break;                        // луч ушёл под поверхность
-		cuv -= stepuv;
-		ch -= layer;
-		th = textureLod(soil_h, cuv, 0.0).r;
-	}
-	vec2 puv = cuv + stepuv;                         // предыдущий шаг (над поверхностью)
-	float a = th - ch;
-	float b = textureLod(soil_h, puv, 0.0).r - (ch + layer);
-	float w = clamp(a / (a - b + 1e-4), 0.0, 1.0);
-	return mix(cuv, puv, w);
-}
-
 void fragment() {
 	float dist = length(VERTEX);
 
@@ -209,20 +186,13 @@ void fragment() {
 	// --- РЕАЛЬНАЯ ПОЧВА как основа земли ВЕЗДЕ, ЦВЕТ = скан (сведён к почве
 	// Гатчины). Реальный AO почвы. Две частоты тайла + макро-девариация —
 	// против «плоской заливки» на дали. На всех дистанциях. ---
-	// РЕАЛЬНАЯ ГЛУБИНА (POM): у камеры смещаем UV по карте высот вдоль взгляда —
-	// комья выпирают и затеняют друг друга (не плоская текстура). Гаснет с далью
-	// (дорого + на дали не видно) → далёкая земля берёт плоскую выборку.
+	// выборка почвы на ДВУХ частотах тайла — против явного повтора. Зерно на дали
+	// лечится мип-картами + АНИЗОТРОПИЕЙ (в объявлениях сэмплеров), а не шейдером.
 	vec2 uv0 = v_wpos.xz / detail_tile_m;
-	vec3 Vw = normalize(CAMERA_POSITION_WORLD - v_wpos);
-	vec3 vts = vec3(Vw.x, Vw.z, Vw.y);            // касательное: U=+X, V=+Z, N=верх
-	float pom_amp = 0.022 * (1.0 - smoothstep(6.0, 40.0, dist));
-	vec2 uvp = uv0;
-	if (pom_amp > 0.001)
-		uvp = pom_uv(uv0, vts, pom_amp);
-
-	vec3 c_base = texture(soil_c, uvp).rgb;
-	vec3 c_dry = texture(soil_dry_c, uvp).rgb;
-	vec3 c_wet = texture(soil_wet_c, uvp).rgb;
+	vec2 uvb = v_wpos.xz / (detail_tile_m * 5.7);
+	vec3 c_base = mix(texture(soil_c, uv0).rgb, texture(soil_c, uvb).rgb, 0.35);
+	vec3 c_dry = mix(texture(soil_dry_c, uv0).rgb, texture(soil_dry_c, uvb).rgb, 0.35);
+	vec3 c_wet = mix(texture(soil_wet_c, uv0).rgb, texture(soil_wet_c, uvb).rgb, 0.35);
 
 	// СТРУКТУРНО ПО ПОЛЮ: низины (wet) → плодородный тёмный; сухие пятна (шум,
 	// не в низине, не на склоне) → растрескавшаяся светлая; иначе — суглинок-база.
@@ -232,9 +202,9 @@ void fragment() {
 	vec3 s_alb = mix(c_base, c_wet, wetf);
 	s_alb = mix(s_alb, c_dry, dryf);
 
-	float mat_rough = texture(soil_r, uvp).r;
-	vec3 tn = texture(soil_n, uvp).xyz * 2.0 - 1.0;
-	float s_ao = texture(soil_ao, uvp).r;
+	float mat_rough = texture(soil_r, uv0).r;
+	vec3 tn = texture(soil_n, uv0).xyz * 2.0 - 1.0;
+	float s_ao = texture(soil_ao, uv0).r;
 	vec3 mat_alb = s_alb * mix(1.0, s_ao, 0.75);   // реальный AO почвы в западинах
 
 	// макро-девариация ДВУХ низких частот (тональная) — против «плоской заливки»;
