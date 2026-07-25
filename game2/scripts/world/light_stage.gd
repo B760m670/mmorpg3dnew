@@ -173,10 +173,10 @@ func _build_environment(gi: bool) -> Environment:
 
 	if ENABLE_SSAO:
 		env.ssao_enabled = true
-		env.ssao_radius = 0.5
-		env.ssao_intensity = 1.5
-		env.ssao_power = 1.5
-		env.ssao_detail = 0.3
+		env.ssao_radius = 0.6
+		env.ssao_intensity = 0.9              # ниже — меньше шумной мороки контактных теней
+		env.ssao_power = 1.3
+		env.ssao_detail = 0.5
 
 	if ENABLE_GLOW:
 		env.glow_enabled = true
@@ -199,15 +199,10 @@ func _build_environment(gi: bool) -> Environment:
 
 	# ОБЪЁМНЫЙ туман: даёт световые шахты (god-rays) — тени в солнце режут
 	# рассеяние, вперёд-рассеяние (anisotropy) тянет свет к солнцу.
-	env.volumetric_fog_enabled = true
-	env.volumetric_fog_density = 0.003
-	env.volumetric_fog_albedo = Color(0.88, 0.80, 0.68)
-	env.volumetric_fog_emission = Color(0, 0, 0)
-	env.volumetric_fog_anisotropy = 0.72          # вперёд-рассеяние → лучи
-	env.volumetric_fog_gi_inject = 1.0            # GI подсвечивает туман
-	env.volumetric_fog_ambient_inject = 0.4
-	env.volumetric_fog_length = 96.0
-	env.volumetric_fog_detail_spread = 2.0
+	# ОБЪЁМНЫЙ ТУМАН ВЫКЛЮЧЕН: под пасмурным небом god-rays не нужны, а его
+	# фроксель-буфер давал СИЛЬНОЕ зерно (заметно в движении) и ронял FPS до ~16.
+	# Дальнюю дымку/горизонт держит дешёвый depth-fog (aerial perspective) выше.
+	env.volumetric_fog_enabled = false
 	return env
 
 # --- солнце золотого часа с мягкой полутенью ---

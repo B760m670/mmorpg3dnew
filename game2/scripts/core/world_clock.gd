@@ -12,7 +12,7 @@ extends Node
 @export var latitude_deg: float = 59.5648      # Гатчина
 @export var longitude_deg: float = 30.1282     # восток — положительный
 @export var tz_offset_hours: float = 3.0        # для отображения местного времени
-@export var time_scale: float = 60.0            # 1 c реала = 60 c мира (сутки = 24 мин)
+@export var time_scale: float = 288.0           # сутки = 5 мин (для теста погоды/облаков)
 
 var utc_unix: float = 0.0                        # мировое время (UTC), секунды
 var sun: DirectionalLight3D                      # ведомый источник (назначается сценой)
