@@ -109,8 +109,13 @@ func _compute_and_apply() -> void:
 	else:
 		sun.shadow_enabled = true
 		var ce := _physical_sun(sun_elevation_deg)
-		sun.light_color = ce[0]
-		sun.light_energy = ce[1]
+		# ПАСМУРНОСТЬ (облачность Гатчины): облака режут ПРЯМОЕ солнце и холодят/
+		# обесцвечивают его (свет становится рассеянным серым). Положение Солнца —
+		# по-прежнему настоящая астрономия; меняется только КАЧЕСТВО света.
+		var col: Color = ce[0]
+		col = col.lerp(Color(0.82, 0.85, 0.90), overcast * 0.75)
+		sun.light_color = col
+		sun.light_energy = float(ce[1]) * lerpf(1.0, 0.22, overcast)
 		sun_color_temp_k = ce[2]
 
 # --- ПОЛНАЯ СПЕКТРАЛЬНАЯ ФИЗИКА прямого солнечного луча ---
@@ -132,6 +137,7 @@ const LAM0 := 380.0
 const DLAM := 10.0
 
 var sun_color_temp_k: float = 5778.0
+var overcast: float = 0.0            # 0 ясно .. 1 сплошная облачность (Гатчина ~0.85)
 var sun_direct_klx: float = 0.0      # освещённость прямым лучом (клк)
 
 var _lut_ready := false

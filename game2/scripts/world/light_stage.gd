@@ -13,6 +13,9 @@ const ENABLE_METALFX := true
 const ENABLE_GI := false
 const ENABLE_SSAO := true        # контактные тени
 const ENABLE_GLOW := true        # мягкое свечение в бликах
+# ПОГОДА Гатчины: обычно пасмурно (не ясный юг). 0 ясно .. 1 сплошная облачность.
+# Глушит прямое солнце, поднимает рассеянный свет неба, сереет небо, мягчит тени.
+const OVERCAST := 0.85
 
 var _post_mat: ShaderMaterial
 var _hud: Label
@@ -130,28 +133,33 @@ func _build_environment(gi: bool) -> Environment:
 	var sky := Sky.new()
 	# ФИЗИЧЕСКОЕ небо: рэлеевское+ми рассеяние (не градиент). Золотой час
 	# получается сам из низкого солнца — длинный путь через атмосферу краснит.
+	# ПАСМУРНОЕ небо Гатчины (не ясный юг): облака = сильное Ми-рассеяние → небо
+	# светло-серое, ровное; синева Рэлея приглушена; диск Солнца скрыт за облаком;
+	# рассеянный свет неба-купола становится главным источником (мягкие тени).
 	var sm := PhysicalSkyMaterial.new()
-	sm.rayleigh_coefficient = 2.6            # синева зенита
-	sm.rayleigh_color = Color(0.26, 0.41, 0.58)
-	sm.mie_coefficient = 0.005               # меньше мути
-	sm.mie_eccentricity = 0.8
-	sm.mie_color = Color(0.69, 0.71, 0.74)
-	sm.turbidity = 3.2                        # чище воздух → голубой верх
-	sm.sun_disk_scale = 1.6                   # почти реальный угловой размер (не «луна»)
-	sm.ground_color = Color(0.20, 0.16, 0.12)
-	sm.energy_multiplier = 1.1
+	sm.rayleigh_coefficient = 1.2            # синева приглушена (пасмурно)
+	sm.rayleigh_color = Color(0.42, 0.45, 0.50)
+	sm.mie_coefficient = 0.065               # облачная муть — светло-серый купол
+	sm.mie_eccentricity = 0.75
+	sm.mie_color = Color(0.80, 0.82, 0.85)
+	sm.turbidity = 9.0                        # плотная дымка/облачность
+	sm.sun_disk_scale = 0.0                   # Солнце скрыто за облаком (нет диска)
+	sm.ground_color = Color(0.26, 0.26, 0.27)
+	sm.energy_multiplier = 1.25               # яркий пасмурный купол
 	sm.use_debanding = true
 	sky.sky_material = sm
 	sky.process_mode = Sky.PROCESS_MODE_REALTIME   # без чёрного экрана до схождения
 	sky.radiance_size = Sky.RADIANCE_SIZE_256       # realtime-небо требует 256
 	env.sky = sky
 
+	# пасмурно: рассеянный свет неба-купола — главный источник (поднят ambient),
+	# прямое солнце приглушено облаками (в WorldClock). Небо и отражения — с купола.
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 1.0
+	env.ambient_light_energy = 2.1
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.tonemap_exposure = 1.0
+	env.tonemap_exposure = 0.82               # пасмурно — ниже ключ, без выбеливания
 	env.tonemap_white = 6.0
 
 	if gi:
@@ -208,14 +216,17 @@ func _build_sun() -> void:
 	# WorldClock из настоящей астрономии.
 	_sun = DirectionalLight3D.new()
 	_sun.shadow_enabled = true
-	_sun.light_angular_distance = 1.4                   # диаметр диска → полутень
-	_sun.shadow_blur = 1.2
+	# пасмурно — тени МЯГКИЕ и еле заметные (свет рассеян облаками): большой
+	# угловой размер источника + сильное размытие → широкая полутень без резких краёв
+	_sun.light_angular_distance = 5.0
+	_sun.shadow_blur = 2.5
 	_sun.directional_shadow_max_distance = 90.0
 	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	add_child(_sun)
 
 	_clock = WorldClock.new()
 	_clock.sun = _sun
+	_clock.overcast = OVERCAST
 	# старт: летнее утро над Гатчиной, ясный фронтальный свет (местное 09:00 → UTC 06:00)
 	_clock.set_datetime_utc(2025, 6, 21, 6, 0, 0)
 	add_child(_clock)
