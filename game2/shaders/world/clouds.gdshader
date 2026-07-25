@@ -35,17 +35,25 @@ float hg(float ct, float g) {
 	return (1.0 - g2) / (12.566 * pow(1.0 + g2 - 2.0 * g * ct, 1.5));
 }
 
+// дизер шага марша (иначе на облаках видны кольца-ступени от конечного STEPS)
+float hash12(vec2 p) {
+	p = fract(p * vec2(0.1031, 0.1030));
+	p += dot(p, p.yx + 33.33);
+	return fract((p.x + p.y) * p.x);
+}
+
 // плотность облака в мировой точке p
 float cloud_density(vec3 p) {
-	vec3 uv = p * 0.00035 + vec3(time_s * wind_x, 0.0, time_s * wind_z);
+	// крупные КЛУБЫ (низкая частота — не мелкая «крупа»), сносятся ветром
+	vec3 uv = p * 0.00016 + vec3(time_s * wind_x, 0.0, time_s * wind_z);
 	float shape = textureLod(shape_tex, uv, 0.0).r;           // 0..1 fBm
 	// высотный профиль: плотнее в середине слоя, тает у краёв
 	float hh = clamp((p.y - cloud_h0) / (cloud_h1 - cloud_h0), 0.0, 1.0);
 	float grad = pow(hh, 0.6) * pow(1.0 - hh, 0.9) * 3.2;
-	float base = clamp((shape - (1.0 - coverage)) / 0.28, 0.0, 1.0) * grad;
+	float base = clamp((shape - (1.0 - coverage)) / 0.30, 0.0, 1.0) * grad;
 	if (base <= 0.001) return 0.0;
-	float det = textureLod(detail_tex, uv * 3.1, 0.0).r;      // Ворли-эрозия
-	return clamp(base - det * 0.55, 0.0, 1.0);
+	float det = textureLod(detail_tex, uv * 2.3, 0.0).r;      // Ворли-эрозия краёв
+	return clamp(base - det * 0.38, 0.0, 1.0);
 }
 
 void fragment() {
@@ -55,10 +63,14 @@ void fragment() {
 	// пересечение луча со слоем облаков [H0..H1] — РАБОТАЕТ на любой высоте:
 	// снизу (смотрим вверх), внутри слоя, и СВЕРХУ (смотрим вниз на «палубу»
 	// облаков — вид с высоты полёта). Без этого высокая камера видела пустое небо.
-	float t0, t1;
+	// ВАЖНО: в Godot нельзя 'return' в fragment() — ранее это роняло компиляцию
+	// шейдера, и облака НЕ рисовались вообще. Поэтому весь расчёт под флагом.
+	float t0 = 0.0;
+	float t1 = 0.0;
+	bool valid = true;
 	if (abs(rd.y) < 1e-4) {                       // почти горизонтально
-		if (cam.y < cloud_h0 || cam.y > cloud_h1) { ALBEDO = vec3(0.0); ALPHA = 0.0; return; }
-		t0 = 0.0; t1 = 8000.0;
+		if (cam.y < cloud_h0 || cam.y > cloud_h1) { valid = false; }
+		else { t0 = 0.0; t1 = 8000.0; }
 	} else {
 		float ta = (cloud_h0 - cam.y) / rd.y;
 		float tb = (cloud_h1 - cam.y) / rd.y;
@@ -66,36 +78,37 @@ void fragment() {
 		t1 = max(ta, tb);
 	}
 	float march_len = clamp(t1 - t0, 0.0, 8000.0);
-	if (march_len <= 1.0) { ALBEDO = vec3(0.0); ALPHA = 0.0; return; }
-
-	const int STEPS = 24;                 // FPS-безопаснее (raymarch дорогой); поднимем, если тянет
-	float dt = march_len / float(STEPS);
-	float ct = dot(rd, sun_dir);
-	float phase = 0.65 * hg(ct, 0.6) + 0.35 * hg(ct, -0.15);
 
 	vec3 col = vec3(0.0);
 	float trans = 1.0;
-	vec3 p = cam + rd * t0;
-	vec3 dp = rd * dt;
-	for (int i = 0; i < STEPS; i++) {
-		p += dp;
-		float d = cloud_density(p);
-		if (d > 0.001) {
-			// свет к солнцу: короткий марш → самозатенение (Бир-Ламберт)
-			float lt = 1.0;
-			vec3 lp = p;
-			for (int l = 0; l < 4; l++) {
-				lp += sun_dir * 180.0;
-				lt *= exp(-cloud_density(lp) * 180.0 * 0.02);  // мягкое самозатенение
+	if (valid && march_len > 1.0) {
+		const int STEPS = 24;             // FPS-безопаснее (raymarch дорогой)
+		float dt = march_len / float(STEPS);
+		float ct = dot(rd, sun_dir);
+		float phase = 0.65 * hg(ct, 0.6) + 0.35 * hg(ct, -0.15);
+		float jitter = hash12(FRAGCOORD.xy);      // разбить кольца-ступени в шум
+		vec3 p = cam + rd * (t0 + jitter * dt);
+		vec3 dp = rd * dt;
+		for (int i = 0; i < STEPS; i++) {
+			p += dp;
+			float d = cloud_density(p);
+			if (d > 0.001) {
+				// свет к солнцу: короткий марш → самозатенение (Бир-Ламберт)
+				float lt = 1.0;
+				vec3 lp = p;
+				for (int l = 0; l < 4; l++) {
+					lp += sun_dir * 180.0;
+					lt *= exp(-cloud_density(lp) * 180.0 * 0.02);
+				}
+				// облако ЯРКОЕ (пасмурно = облака светлее серого неба): прямой к
+				// Солнцу (кромка) + купол-неба как основной, глубина затеняет мягко.
+				float ltf = 0.4 + 0.6 * lt;
+				vec3 lit = sun_color * (lt * phase * 2.5 + 0.2) + sky_ambient * 0.85 * ltf;
+				float a = 1.0 - exp(-d * dt * 0.008);
+				col += trans * a * lit;
+				trans *= 1.0 - a;
+				if (trans < 0.02) { break; }
 			}
-			// ОСВЕЩЕНИЕ облака ЯРКОЕ (пасмурно = облака светлее серого неба, не темнее):
-			// прямой к солнцу (кромка) + купол-неба как основной, глубина затеняет мягко.
-			float ltf = 0.4 + 0.6 * lt;
-			vec3 lit = sun_color * (lt * phase * 4.0 + 0.5) + sky_ambient * 1.6 * ltf;
-			float a = 1.0 - exp(-d * dt * 0.008);
-			col += trans * a * lit;
-			trans *= 1.0 - a;
-			if (trans < 0.02) break;
 		}
 	}
 	// у самого горизонта (луч почти горизонтален, путь огромен) — тают в дымку

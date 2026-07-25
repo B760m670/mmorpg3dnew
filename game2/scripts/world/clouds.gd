@@ -10,6 +10,7 @@ extends Node3D
 @export var sun: DirectionalLight3D
 @export var coverage: float = 0.55
 @export var day_time_scale: float = 288.0     # как у WorldClock (сутки=5 мин)
+@export var weather_enabled: bool = true      # false → покрытие фиксировано (для стенда)
 
 # купол невелик: полотно облаков — не «горизонт мира», а канва для raymarch;
 # меньший радиус → слабее равномерная дымка depth-fog на нём (иначе облака
@@ -45,8 +46,9 @@ func _make_noise_3d(cellular: bool, freq: float, octaves: int) -> NoiseTexture3D
 func build() -> void:
 	_mat = ShaderMaterial.new()
 	_mat.shader = load("res://shaders/world/clouds.gdshader")
-	_mat.set_shader_parameter("shape_tex", _make_noise_3d(false, 0.9, 4))   # форма
-	_mat.set_shader_parameter("detail_tex", _make_noise_3d(true, 1.6, 2))   # эрозия
+	# НИЗКАЯ частота — крупные связные клубы (высокая давала «крупу»/шум вдоль луча)
+	_mat.set_shader_parameter("shape_tex", _make_noise_3d(false, 0.035, 3))  # форма
+	_mat.set_shader_parameter("detail_tex", _make_noise_3d(true, 0.10, 2))   # эрозия краёв
 	_mat.set_shader_parameter("coverage", coverage)
 	_mat.set_shader_parameter("sky_ambient", Vector3(0.72, 0.78, 0.88))  # тон яркого пасмурного неба
 	_mat.set_shader_parameter("wind_x", 0.004)
@@ -84,11 +86,14 @@ func _process(delta: float) -> void:
 
 	# смена погоды: медленное «дыхание» покрытия (сумма разнопериодных волн —
 	# натуральнее одиночной синусоиды: фронты то плотнее, то с просветами)
-	_weather_t += delta * day_time_scale         # в сим-секундах (сутки=86400)
-	var w := 0.60 * sin(TAU * _weather_t / 43200.0) \
-		+ 0.30 * sin(TAU * _weather_t / 15300.0 + 1.7) \
-		+ 0.10 * sin(TAU * _weather_t / 6100.0 + 0.5)
-	current_coverage = clampf(coverage + 0.26 * w, 0.18, 0.92)
+	if weather_enabled:
+		_weather_t += delta * day_time_scale     # в сим-секундах (сутки=86400)
+		var w := 0.60 * sin(TAU * _weather_t / 43200.0) \
+			+ 0.30 * sin(TAU * _weather_t / 15300.0 + 1.7) \
+			+ 0.10 * sin(TAU * _weather_t / 6100.0 + 0.5)
+		current_coverage = clampf(coverage + 0.26 * w, 0.18, 0.92)
+	else:
+		current_coverage = coverage
 	_mat.set_shader_parameter("coverage", current_coverage)
 	# купол едет за камерой; солнце — из направления света
 	var cam := get_viewport().get_camera_3d()
