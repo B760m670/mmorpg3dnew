@@ -1,1 +1,11 @@
 .godot/
+
+# Артефакты импорта Godot-редактора (генерируются при импорте/сборке, не трекаются;
+# появляются при локальном прогоне редактора — стенд рендера неба)
+*.import
+*.uid
+
+# Текстуры, извлекаемые из .glb при импорте (исходник — сам .glb)
+assets/models/rocks_Color.jpg
+assets/models/rocks_Normal.jpg
+assets/models/rocks_Roughness.png
