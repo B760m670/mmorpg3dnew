@@ -191,7 +191,8 @@ void fragment() {
 	float cb = 0.622, sb = -0.783;                // cos/sin(-0.9)
 	vec2 uvA = vec2(uv0.x * ca - uv0.y * sa, uv0.x * sa + uv0.y * ca) + vec2(13.2, 7.4);
 	vec2 uvB = vec2(uv0.x * cb - uv0.y * sb, uv0.x * sb + uv0.y * cb) + vec2(51.7, 29.1);
-	float kmix = smoothstep(0.4, 0.6, vnoise(v_wpos.xz * 0.06));
+	// крупные пятна одной копии + тонкий шов → без интерференц-зерна
+	float kmix = smoothstep(0.46, 0.54, vnoise(v_wpos.xz * 0.02));
 	vec3 c_base = mix(texture(soil_c, uvA).rgb, texture(soil_c, uvB).rgb, kmix);
 	vec3 c_dry = mix(texture(soil_dry_c, uvA).rgb, texture(soil_dry_c, uvB).rgb, kmix);
 	vec3 c_wet = mix(texture(soil_wet_c, uvA).rgb, texture(soil_wet_c, uvB).rgb, kmix);
@@ -216,12 +217,12 @@ void fragment() {
 	col2 *= 0.85 + 0.30 * macro;
 	col2 = mix(col2, col2 * vec3(0.82, 0.78, 0.72), slope * 0.4);
 
-	// нормаль материала слабеет с далью (против алиасинга лент к солнцу)
-	float nstr = 0.9 * (1.0 - smoothstep(60.0, 320.0, dist));
+	// нормаль материала умеренная и слабеет с далью (сильная = искристое зерно)
+	float nstr = 0.55 * (1.0 - smoothstep(60.0, 320.0, dist));
 	vec3 n = normalize(vec3(gn.x + tn.x * nstr, gn.y, gn.z + tn.z * nstr));
 
 	float rough = mix(rough_target, mat_rough, 0.85);
-	float spec = 0.15;
+	float spec = 0.06;   // почва матовая — низкий спекуляр, без искр под солнцем
 	// ВЛАЖНОСТЬ почвы — только РЕАЛЬНОЕ поле влаги (геология низин), без дождя:
 	// мокрая почва темнее, глаже, с влажным блеском. Дождь/лужи убраны (были фейк).
 	float wetv = 0.0;

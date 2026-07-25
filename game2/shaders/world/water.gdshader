@@ -8,7 +8,9 @@ shader_type spatial;
 //     из BRDF сам даёт «к горизонту зеркало, вниз — прозрачно»).
 //   · ВОЛНЫ: анимированная нормаль из бегущего шума, амплитуда растёт с дождём.
 //   · ПЕНА у берега на малой глубине.
-render_mode blend_mix, cull_disabled, diffuse_burley;
+// depth_draw_always: вода ПИШЕТ глубину → ближняя гладь перекрывает дальнюю,
+// нет двойного смешения там, где река входит в озеро (были «слои поверх друг друга»).
+render_mode blend_mix, cull_disabled, depth_draw_always, diffuse_burley;
 
 uniform sampler2D height_tex : filter_linear_mipmap, repeat_disable;
 uniform float dem_half = 8192.0;
@@ -62,7 +64,8 @@ void fragment() {
 	float h0 = wsum(p, TIME);
 	float hx = wsum(p + vec2(e, 0.0), TIME);
 	float hy = wsum(p + vec2(0.0, e), TIME);
-	float amp = 0.25 + 0.9 * rain_rate;
+	// волна слабеет с далью — на грани у горизонта не даёт полосатых артефактов
+	float amp = (0.22 + 0.9 * rain_rate) * (1.0 - smoothstep(60.0, 700.0, length(VERTEX)));
 	vec3 wn = normalize(vec3((h0 - hx) * amp, 1.0, (h0 - hy) * amp));
 	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 
@@ -74,6 +77,7 @@ void fragment() {
 	ROUGHNESS = mix(0.03, 0.10, dn);     // низкая → отражение неба (PBR/френель)
 	METALLIC = 0.0;
 	SPECULAR = 0.6;
-	// мелко — прозрачнее (дно видно сквозь alpha-blend), глубоко — плотная вода
-	ALPHA = clamp(0.30 + 0.6 * dn + foam, 0.0, 1.0);
+	// плотнее, чем раньше: мелкая вода — вода, а не «песок сквозь плёнку».
+	// Мелко чуть прозрачнее (виден урез дна), глубоко — плотная.
+	ALPHA = clamp(0.62 + 0.35 * dn + foam, 0.0, 1.0);
 }

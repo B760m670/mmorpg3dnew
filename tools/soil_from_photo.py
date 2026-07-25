@@ -86,8 +86,8 @@ def main():
     # трещины — врезать глубже (усилить борозды)
     height = np.clip(height - crack * 0.12, 0, 1)
     height = make_tileable(height)
-    # нормаль (собель по высоте), сила бампа
-    STR = 2.5
+    # нормаль (собель по высоте), сила бампа — умеренная (сильная = искристый шум)
+    STR = 1.2
     gx = sobel(height, axis=1) * STR
     gy = sobel(height, axis=0) * STR
     nz = np.ones_like(height)
