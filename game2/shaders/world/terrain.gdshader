@@ -145,12 +145,20 @@ void fragment() {
 	// солнцу лентами; прижимаем дальнюю нормаль к вертикали (рельеф дали — LOD)
 	gn = normalize(mix(gn, vec3(0.0, 1.0, 0.0), smoothstep(700.0, 2200.0, dist)));
 
-	// --- зона (реальное землепользование), размытая граница ---
+	// --- зона (реальное землепользование) ---
+	// zone_tex — карта ID с фильтром nearest → сверху её квадратные ячейки видны
+	// «полосками». Смягчаем ГРАНИЦЫ: 4 тапа ЦВЕТА зоны со смещением ±zr + джиттер,
+	// усредняем. ID для логики ниже берём из центрального тапа. (ID нельзя
+	// фильтровать билинейно — смешаются номера; поэтому усредняем именно ЦВЕТ.)
 	vec2 zuv = (v_wpos.xz + vec2(zone_size_m * 0.5)) / zone_size_m;
-	vec2 j = (vec2(hash12(v_wpos.xz * 0.37), hash12(v_wpos.xz * 0.53 + 7.0)) - 0.5)
-		* (14.0 / zone_size_m);
+	float zr = 26.0 / zone_size_m;                 // радиус размытия границ зон, ~26 м
+	vec2 j = (vec2(hash12(v_wpos.xz * 0.37), hash12(v_wpos.xz * 0.53 + 7.0)) - 0.5) * zr;
 	int z = int(texture(zone_tex, clamp(zuv + j, 0.0, 1.0)).r * 255.0 + 0.5);
-	vec3 col = zone_tint(z);
+	vec3 col = 0.25 * (
+		zone_tint(int(texture(zone_tex, clamp(zuv + j + vec2(zr, 0.0), 0.0, 1.0)).r * 255.0 + 0.5))
+		+ zone_tint(int(texture(zone_tex, clamp(zuv + j - vec2(zr, 0.0), 0.0, 1.0)).r * 255.0 + 0.5))
+		+ zone_tint(int(texture(zone_tex, clamp(zuv + j + vec2(0.0, zr), 0.0, 1.0)).r * 255.0 + 0.5))
+		+ zone_tint(int(texture(zone_tex, clamp(zuv + j - vec2(0.0, zr), 0.0, 1.0)).r * 255.0 + 0.5)));
 
 	// склоны — грунт; низины — сырость; крупная пятнистость
 	float slope = clamp((1.0 - gn.y) * 3.5, 0.0, 1.0);
