@@ -18,7 +18,8 @@ uniform vec3 sun_dir = vec3(0.4, 0.6, -0.3);       // НА солнце (нор�
 uniform vec3 sun_color = vec3(1.0, 0.97, 0.9);
 uniform vec3 sky_ambient = vec3(0.72, 0.78, 0.88);  // ЯРКИЙ пасмурный купол (не тёмный)
 uniform float coverage = 0.5;                       // 0 ясно .. 1 сплошь (погода)
-uniform float day = 1.0;                            // 1 день .. 0 ночь (гасит дневной свет)
+uniform float day = 1.0;                            // 1 день .. 0 ночь (купол неба/сумерки)
+uniform float sun_up = 1.0;                         // 1 Солнце над горизонтом .. 0 под ним
 uniform vec3 moon_dir = vec3(0.0, 1.0, 0.0);        // НА Луну (мир)
 uniform vec3 moon_light = vec3(0.0);                // свет Луны (цвет×фаза×видимость)
 uniform vec3 night_glow = vec3(0.012, 0.015, 0.028); // тусклый ночной фон (не чёрное)
@@ -109,16 +110,20 @@ void fragment() {
 					lp += sun_dir * 180.0;
 					lt *= exp(-cloud_density(lp) * 180.0 * 0.02);
 				}
-				// ДЕНЬ: облако ЯРКОЕ (пасмурно = облака светлее серого неба): прямой к
-				// Солнцу (кромка) + купол-неба как основной, глубина затеняет мягко.
+				// СЛАГАЕМЫЕ СВЕТА, каждое со своим гейтом времени суток:
 				float ltf = 0.4 + 0.6 * lt;
-				vec3 day_lit = sun_color * (lt * phase * 2.5 + 0.2) + sky_ambient * 0.85 * ltf;
-				// НОЧЬ: облака тёмные — только свет Луны (фаза-рассеяние) + тусклый
-				// ночной фон. Без этого облака СВЕТИЛИСЬ белым ночью (баг).
+				// ПРЯМОЕ Солнце (кромка) — ТОЛЬКО когда оно над горизонтом. Иначе ночью
+				// облака выглядели «подсвечены солнцем» (направленный блик из-за горизонта).
+				vec3 sun_term = sun_color * (lt * phase * 2.5 + 0.2) * sun_up;
+				// купол неба (день/сумерки) — гаснет к ночи
+				vec3 sky_term = sky_ambient * 0.85 * ltf * day;
+				// Луна ночью (moon_light уже гаснет днём)
 				float ct_m = dot(rd, moon_dir);
 				float phase_m = 0.65 * hg(ct_m, 0.6) + 0.35 * hg(ct_m, -0.15);
-				vec3 night_lit = moon_light * (phase_m * 2.5 + 0.35) * ltf + night_glow;
-				vec3 lit = mix(night_lit, day_lit, day);
+				vec3 moon_term = moon_light * (phase_m * 2.5 + 0.35) * ltf;
+				// тусклый ночной фон — только ночью (не чёрное в ноль)
+				vec3 glow_term = night_glow * (1.0 - day);
+				vec3 lit = sun_term + sky_term + moon_term + glow_term;
 				float a = 1.0 - exp(-d * DT * 0.008);
 				col += trans * a * lit;
 				trans *= 1.0 - a;

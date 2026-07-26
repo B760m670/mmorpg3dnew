@@ -534,5 +534,19 @@ func _process(_delta: float) -> void:
 	if _post_mat != null:
 		_post_mat.set_shader_parameter("t", float(Time.get_ticks_msec()) / 1000.0)
 	_update_weather()
+	_update_fog_altitude()
 	_update_hud()
 	_update_compass()
+
+# воздушная перспектива — ПРИЗЕМНЫЙ эффект (даль тает в дымке). С высоты полёта
+# её граница (fog_depth_end) ложилась ДИСКОМ по земле («круг» под облаками).
+# Отодвигаем границу пропорционально высоте камеры → с высоты кольца нет,
+# у земли — прежняя дымка.
+func _update_fog_altitude() -> void:
+	if _env == null:
+		return
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	var h := maxf(cam.global_position.y, 0.0)
+	_env.fog_depth_end = clampf(9500.0 + h * 6.0, 9500.0, 60000.0)

@@ -111,7 +111,8 @@ func _process(delta: float) -> void:
 	# СВЕТИЛИСЬ белым ночью). Ночью их подхватывает настоящая Луна.
 	if clock != null:
 		var el := clock.sun_elevation_deg
-		_mat.set_shader_parameter("day", smoothstep(-12.0, 3.0, el))
+		_mat.set_shader_parameter("day", smoothstep(-12.0, 3.0, el))     # купол неба/сумерки
+		_mat.set_shader_parameter("sun_up", smoothstep(-1.0, 2.0, el))   # прямой луч только над горизонтом
 	if night_sky != null:
 		_mat.set_shader_parameter("moon_dir", night_sky.moon_dir_world)
 		var ml := night_sky.moon_light

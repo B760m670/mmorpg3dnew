@@ -58,13 +58,22 @@ func _ready() -> void:
 	_clock._compute_and_apply()
 
 	# облака + ночное небо (те же классы, что в игре)
-	_night = NightSky.new(); _night.sun = _sun; _night.clock = _clock
-	add_child(_night); _night.build()
-	_clouds = Clouds.new(); _clouds.sun = _sun
-	_clouds.clock = _clock; _clouds.night_sky = _night
-	_clouds.coverage = cov
-	_clouds.weather_enabled = not ("--fixcov" in a)   # стенд: фиксировать покрытие
-	add_child(_clouds); _clouds.build()
+	if not ("--bare" in a):
+		_night = NightSky.new(); _night.sun = _sun; _night.clock = _clock
+		add_child(_night); _night.build()
+		_clouds = Clouds.new(); _clouds.sun = _sun
+		_clouds.clock = _clock; _clouds.night_sky = _night
+		_clouds.coverage = cov
+		_clouds.weather_enabled = not ("--fixcov" in a)   # стенд: фиксировать покрытие
+		add_child(_clouds); _clouds.build()
+
+	# опциональная земля-плоскость (чтобы видеть тинт облачного слоя сверху)
+	if "--ground" in a:
+		var pm := PlaneMesh.new(); pm.size = Vector2(40000, 40000)
+		var gm := StandardMaterial3D.new(); gm.albedo_color = Color(0.55, 0.5, 0.42)
+		var gi := MeshInstance3D.new(); gi.mesh = pm; gi.material_override = gm
+		gi.position = Vector3(0, 90, 0)
+		add_child(gi)
 
 	# камера
 	var cam := Camera3D.new()
@@ -95,7 +104,7 @@ func _ready() -> void:
 	var mo := _clock.moon_state(_clock.utc_unix)
 	print("[skyprobe] Солнце %.1f° аз %.0f · погода %s · %s" % [
 		_clock.sun_elevation_deg, _clock.sun_azimuth_deg,
-		_clouds.weather_label(), "ясно" if clear else "пасмурно"])
+		_clouds.weather_label() if _clouds != null else "нет облаков", "ясно" if clear else "пасмурно"])
 	print("[skyprobe] Луна: RA %.1f° Dec %+.1f° освещ %.2f размер %.2f'" % [
 		mo["ra_deg"], mo["dec_deg"], mo["illum"], mo["ang_diam_deg"] * 60.0])
 	var img := get_viewport().get_texture().get_image()
