@@ -30,9 +30,15 @@ void vertex() {
 	float lv = clamp(ceil(log2(cheb / 128.0)), 0.0, 6.0);
 	float lod = max(0.0, lv - 4.0);
 	float cell = 2.0 * exp2(lv);
-	// подъём растёт с ячейкой уровня: страховка от прорезания сквозь
-	// сглаженный дальний рельеф (вблизи 10 см — стык с землёй плотный)
-	VERTEX.y = textureLod(height_tex, huv, lod).r + 0.10 + cell * 0.03;
+	// ГЕОМОРФИНГ как у террейна (terrain.gdshader): у внешнего края кольца высота
+	// переходит к более грубой. БЕЗ ЭТОГО дорога и рельеф расходятся у границ
+	// колец → «дерутся» за глубину (Z-fighting: бегущие линии по дороге).
+	float ring_out = 128.0 * exp2(lv);
+	float morph = smoothstep(0.72, 0.98, (cheb - ring_out * 0.5) / (ring_out * 0.5));
+	float h = mix(textureLod(height_tex, huv, lod).r,
+		textureLod(height_tex, huv, lod + 1.0).r, morph);
+	// подъём растёт с ячейкой уровня: страховка от прорезания сквозь рельеф
+	VERTEX.y = h + 0.12 + cell * 0.04;
 	v_uv = UV;
 	v_mat = UV2;
 }

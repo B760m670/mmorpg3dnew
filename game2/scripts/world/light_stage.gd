@@ -87,6 +87,14 @@ func _ready() -> void:
 	print("[light] Ф1 свет, gi=", ENABLE_GI and not gi_off,
 		" adapter=", RenderingServer.get_video_adapter_name())
 
+	# --- РЕЖИМ ДИАГНОСТИКИ («спец-возможности»): вскрыть геометрию/оверлап/нормали,
+	# чтобы ВИДЕТЬ корень багов (Z-fighting дорог, швы колец, «круг»), а не гадать.
+	_dbg_arg = _arg_val(args, "--debug")
+	if _dbg_arg != "":
+		RenderingServer.set_debug_generate_wireframes(true)
+		get_viewport().debug_draw = _debug_mode(_dbg_arg)
+		print("[light] ДИАГНОСТИКА: ", _dbg_arg)
+
 	# офлайн-снимок / инспекция: ждём схождения и выгружаем состояние
 	if "--boot-shot" in args or inspect:
 		var out_path := _arg_val(args, "--out")
@@ -104,6 +112,28 @@ func _arg_val(args: PackedStringArray, key: String) -> String:
 		if a.begins_with(key + "="):
 			return a.substr(key.length() + 1)
 	return ""
+
+# --- РЕЖИМ ДИАГНОСТИКИ: встроенные отладочные буферы Godot ---
+var _dbg_arg: String = ""
+const DBG_CYCLE := ["disabled", "wire", "overdraw", "unshaded", "normals", "lighting"]
+var _dbg_idx: int = 0
+
+func _debug_mode(name: String) -> int:
+	match name:
+		"wire": return Viewport.DEBUG_DRAW_WIREFRAME
+		"overdraw": return Viewport.DEBUG_DRAW_OVERDRAW
+		"unshaded": return Viewport.DEBUG_DRAW_UNSHADED
+		"normals": return Viewport.DEBUG_DRAW_NORMAL_BUFFER
+		"lighting": return Viewport.DEBUG_DRAW_LIGHTING
+		_: return Viewport.DEBUG_DRAW_DISABLED
+
+## переключить режим диагностики на устройстве (по кнопке HUD/жесту)
+func cycle_debug() -> void:
+	_dbg_idx = (_dbg_idx + 1) % DBG_CYCLE.size()
+	var m: String = DBG_CYCLE[_dbg_idx]
+	RenderingServer.set_debug_generate_wireframes(true)
+	get_viewport().debug_draw = _debug_mode(m)
+	_dbg_arg = "" if m == "disabled" else m
 
 func _vec3(s: String) -> Vector3:
 	var p := s.split(",")
@@ -431,8 +461,25 @@ func _build_hud(gi_off: bool) -> void:
 	_compass.add_theme_constant_override("shadow_offset_x", 2)
 	_compass.add_theme_constant_override("shadow_offset_y", 2)
 	ui.add_child(_compass)
+
+	# КНОПКА ДИАГНОСТИКИ («спец-возможности»): цикл каркас/overdraw/нормали/свет —
+	# чтобы ВСКРЫТЬ болячки мира (Z-fighting дорог, швы, оверлап «круга») и показать.
+	_dbg_btn = Button.new()
+	_dbg_btn.text = "DBG: выкл"
+	_dbg_btn.add_theme_font_size_override("font_size", 30)
+	_dbg_btn.anchor_left = 1.0; _dbg_btn.anchor_right = 1.0
+	_dbg_btn.position = Vector2(-260, 64)
+	_dbg_btn.size = Vector2(200, 56)
+	_dbg_btn.pressed.connect(_on_debug_pressed)
+	ui.add_child(_dbg_btn)
 	_update_hud()
 
+func _on_debug_pressed() -> void:
+	cycle_debug()
+	var m: String = DBG_CYCLE[_dbg_idx]
+	_dbg_btn.text = "DBG: %s" % m
+
+var _dbg_btn: Button
 var _compass: Label
 const _WINDS := ["С", "СВ", "В", "ЮВ", "Ю", "ЮЗ", "З", "СЗ"]
 
