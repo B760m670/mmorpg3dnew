@@ -244,6 +244,8 @@ func _build_night_sky() -> void:
 func _build_clouds() -> void:
 	_clouds = Clouds.new()
 	_clouds.sun = _sun
+	_clouds.clock = _clock                        # день/ночь → свет облаков
+	_clouds.night_sky = _night_sky                # свет Луны ночью
 	# КЛИМАТ Гатчины — облачно; погода «дышит» вокруг среднего (Clouds.weather_enabled),
 	# и это среднее ведёт всю пасмурность неба/света через _update_weather.
 	_clouds.coverage = 0.55                       # среднее покрытие (климат)

@@ -27,6 +27,10 @@ var _moon: MeshInstance3D
 var _moon_mat: ShaderMaterial
 const RAD := PI / 180.0
 
+# для освещения облаков ночью (читает Clouds): направление на Луну и её свет
+var moon_dir_world: Vector3 = Vector3.UP
+var moon_light: Color = Color.BLACK
+
 func build() -> void:
 	_build_stars()
 	_build_moon()
@@ -137,6 +141,12 @@ func _process(_delta: float) -> void:
 	var ra := float(m["ra_deg"]) * RAD; var dec := float(m["dec_deg"]) * RAD
 	var v_eq := Vector3(cos(dec) * cos(ra), cos(dec) * sin(ra), sin(dec))
 	var mdir := (basis * v_eq).normalized()              # мир: направление на Луну
+	# свет Луны для облаков: цвет × фаза(освещённость) × над горизонтом × темнота неба
+	moon_dir_world = mdir
+	var m_illum := float(m["illum"])
+	var m_above := clampf(mdir.y * 3.0, 0.0, 1.0)
+	var m_night := clampf((-elev - 3.0) / 10.0, 0.0, 1.0)
+	moon_light = Color(0.55, 0.60, 0.75) * (m_illum * m_above * m_night * 0.5)
 	if _moon != null and _moon_mat != null:
 		_moon.visible = mdir.y > -0.03                    # над горизонтом
 		_moon.position = mdir * R_SKY

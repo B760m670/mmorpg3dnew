@@ -18,6 +18,10 @@ uniform vec3 sun_dir = vec3(0.4, 0.6, -0.3);       // НА солнце (нор�
 uniform vec3 sun_color = vec3(1.0, 0.97, 0.9);
 uniform vec3 sky_ambient = vec3(0.72, 0.78, 0.88);  // ЯРКИЙ пасмурный купол (не тёмный)
 uniform float coverage = 0.5;                       // 0 ясно .. 1 сплошь (погода)
+uniform float day = 1.0;                            // 1 день .. 0 ночь (гасит дневной свет)
+uniform vec3 moon_dir = vec3(0.0, 1.0, 0.0);        // НА Луну (мир)
+uniform vec3 moon_light = vec3(0.0);                // свет Луны (цвет×фаза×видимость)
+uniform vec3 night_glow = vec3(0.012, 0.015, 0.028); // тусклый ночной фон (не чёрное)
 uniform float wind_x = 0.006;
 uniform float wind_z = 0.003;
 uniform float cloud_h0 = 1200.0;
@@ -105,10 +109,16 @@ void fragment() {
 					lp += sun_dir * 180.0;
 					lt *= exp(-cloud_density(lp) * 180.0 * 0.02);
 				}
-				// облако ЯРКОЕ (пасмурно = облака светлее серого неба): прямой к
+				// ДЕНЬ: облако ЯРКОЕ (пасмурно = облака светлее серого неба): прямой к
 				// Солнцу (кромка) + купол-неба как основной, глубина затеняет мягко.
 				float ltf = 0.4 + 0.6 * lt;
-				vec3 lit = sun_color * (lt * phase * 2.5 + 0.2) + sky_ambient * 0.85 * ltf;
+				vec3 day_lit = sun_color * (lt * phase * 2.5 + 0.2) + sky_ambient * 0.85 * ltf;
+				// НОЧЬ: облака тёмные — только свет Луны (фаза-рассеяние) + тусклый
+				// ночной фон. Без этого облака СВЕТИЛИСЬ белым ночью (баг).
+				float ct_m = dot(rd, moon_dir);
+				float phase_m = 0.65 * hg(ct_m, 0.6) + 0.35 * hg(ct_m, -0.15);
+				vec3 night_lit = moon_light * (phase_m * 2.5 + 0.35) * ltf + night_glow;
+				vec3 lit = mix(night_lit, day_lit, day);
 				float a = 1.0 - exp(-d * DT * 0.008);
 				col += trans * a * lit;
 				trans *= 1.0 - a;

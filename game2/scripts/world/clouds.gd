@@ -8,6 +8,8 @@ extends Node3D
 ## Погода: coverage (0 ясно .. 1 сплошь) — берётся из пасмурности сцены.
 
 @export var sun: DirectionalLight3D
+@export var clock: WorldClock                 # для дня/ночи (высота Солнца)
+@export var night_sky: NightSky               # для света Луны ночью
 @export var coverage: float = 0.55
 @export var day_time_scale: float = 288.0     # как у WorldClock (сутки=5 мин)
 @export var weather_enabled: bool = true      # false → покрытие фиксировано (для стенда)
@@ -104,3 +106,13 @@ func _process(delta: float) -> void:
 		var to_sun := sun.global_transform.basis.z.normalized()
 		_mat.set_shader_parameter("sun_dir", to_sun)
 		_mat.set_shader_parameter("sun_color", Vector3(sun.light_color.r, sun.light_color.g, sun.light_color.b))
+
+	# ДЕНЬ/НОЧЬ: дневной свет облаков гаснет с заходом Солнца (иначе облака
+	# СВЕТИЛИСЬ белым ночью). Ночью их подхватывает настоящая Луна.
+	if clock != null:
+		var el := clock.sun_elevation_deg
+		_mat.set_shader_parameter("day", smoothstep(-12.0, 3.0, el))
+	if night_sky != null:
+		_mat.set_shader_parameter("moon_dir", night_sky.moon_dir_world)
+		var ml := night_sky.moon_light
+		_mat.set_shader_parameter("moon_light", Vector3(ml.r, ml.g, ml.b))

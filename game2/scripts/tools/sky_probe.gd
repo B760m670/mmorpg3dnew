@@ -58,12 +58,13 @@ func _ready() -> void:
 	_clock._compute_and_apply()
 
 	# облака + ночное небо (те же классы, что в игре)
+	_night = NightSky.new(); _night.sun = _sun; _night.clock = _clock
+	add_child(_night); _night.build()
 	_clouds = Clouds.new(); _clouds.sun = _sun
+	_clouds.clock = _clock; _clouds.night_sky = _night
 	_clouds.coverage = cov
 	_clouds.weather_enabled = not ("--fixcov" in a)   # стенд: фиксировать покрытие
 	add_child(_clouds); _clouds.build()
-	_night = NightSky.new(); _night.sun = _sun; _night.clock = _clock
-	add_child(_night); _night.build()
 
 	# камера
 	var cam := Camera3D.new()
