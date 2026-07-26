@@ -62,9 +62,18 @@ void vertex() {
 	// сглаживается в самом источнике (чистый горизонт по построению)
 	vec3 w = (MODEL_MATRIX * vec4(VERTEX.x, 0.0, VERTEX.z, 1.0)).xyz;
 	vec2 huv = (w.xz + vec2(dem_half)) / (2.0 * dem_half);
-	float lod = max(0.0, clip_level - 4.0);
-	float h = textureLod(height_tex, huv, lod).r;
 	float cell = 2.0 * exp2(clip_level);
+	float lod = max(0.0, clip_level - 4.0);
+	// ГЕОМОРФИНГ колец: у ВНЕШНЕГО края кольца высота плавно переходит к более
+	// грубой (следующий mip) → на стыке совпадает с соседним, более крупным
+	// кольцом. Без этого граница колец видна сверху «вложенными квадратами».
+	// Морф только во внешней ~четверти кольца (dloc/ext), у ног (центр) — не трогает.
+	float ext = float(64.0) * cell;                  // внешний полу-размер кольца, м
+	float dloc = max(abs(VERTEX.x), abs(VERTEX.z));   // расстояние от центра кольца (локально)
+	float morph = smoothstep(0.72, 0.98, dloc / ext);
+	float h_fine = textureLod(height_tex, huv, lod).r;
+	float h_coarse = textureLod(height_tex, huv, lod + 1.0).r;
+	float h = mix(h_fine, h_coarse, morph);
 	bool skirt = VERTEX.y < -500.0;      // маркер вершин-юбок
 	VERTEX.y = h - (skirt ? cell * 2.0 + 2.0 : 0.0);
 	v_wpos = vec3(w.x, h, w.z);
@@ -145,20 +154,12 @@ void fragment() {
 	// солнцу лентами; прижимаем дальнюю нормаль к вертикали (рельеф дали — LOD)
 	gn = normalize(mix(gn, vec3(0.0, 1.0, 0.0), smoothstep(700.0, 2200.0, dist)));
 
-	// --- зона (реальное землепользование) ---
-	// zone_tex — карта ID с фильтром nearest → сверху её квадратные ячейки видны
-	// «полосками». Смягчаем ГРАНИЦЫ: 4 тапа ЦВЕТА зоны со смещением ±zr + джиттер,
-	// усредняем. ID для логики ниже берём из центрального тапа. (ID нельзя
-	// фильтровать билинейно — смешаются номера; поэтому усредняем именно ЦВЕТ.)
+	// --- зона (реальное землепользование), размытая граница ---
 	vec2 zuv = (v_wpos.xz + vec2(zone_size_m * 0.5)) / zone_size_m;
-	float zr = 26.0 / zone_size_m;                 // радиус размытия границ зон, ~26 м
-	vec2 j = (vec2(hash12(v_wpos.xz * 0.37), hash12(v_wpos.xz * 0.53 + 7.0)) - 0.5) * zr;
+	vec2 j = (vec2(hash12(v_wpos.xz * 0.37), hash12(v_wpos.xz * 0.53 + 7.0)) - 0.5)
+		* (14.0 / zone_size_m);
 	int z = int(texture(zone_tex, clamp(zuv + j, 0.0, 1.0)).r * 255.0 + 0.5);
-	vec3 col = 0.25 * (
-		zone_tint(int(texture(zone_tex, clamp(zuv + j + vec2(zr, 0.0), 0.0, 1.0)).r * 255.0 + 0.5))
-		+ zone_tint(int(texture(zone_tex, clamp(zuv + j - vec2(zr, 0.0), 0.0, 1.0)).r * 255.0 + 0.5))
-		+ zone_tint(int(texture(zone_tex, clamp(zuv + j + vec2(0.0, zr), 0.0, 1.0)).r * 255.0 + 0.5))
-		+ zone_tint(int(texture(zone_tex, clamp(zuv + j - vec2(0.0, zr), 0.0, 1.0)).r * 255.0 + 0.5)));
+	vec3 col = zone_tint(z);
 
 	// склоны — грунт; низины — сырость; крупная пятнистость
 	float slope = clamp((1.0 - gn.y) * 3.5, 0.0, 1.0);
