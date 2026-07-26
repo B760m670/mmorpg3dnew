@@ -210,9 +210,10 @@ func _build_sun() -> void:
 	# WorldClock из настоящей астрономии.
 	_sun = DirectionalLight3D.new()
 	_sun.shadow_enabled = true
-	# пасмурно — тени МЯГКИЕ и еле заметные (свет рассеян облаками): большой
-	# угловой размер источника + сильное размытие → широкая полутень без резких краёв
-	_sun.light_angular_distance = 5.0
+	# НАСТОЯЩИЙ угловой размер Солнца — 0.53° (диск в небе не должен быть огромным;
+	# было 5° → диск ~10× больше реального). Мягкость теней в пасмурность даёт
+	# размытие тени, а не гигантский диск.
+	_sun.light_angular_distance = 0.53
 	_sun.shadow_blur = 2.5
 	_sun.directional_shadow_max_distance = 90.0
 	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS

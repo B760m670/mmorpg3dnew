@@ -45,7 +45,9 @@ func _ready() -> void:
 	var we := WorldEnvironment.new(); we.environment = env; add_child(we)
 
 	# солнце + часы (пасмурность гасит/сереет прямой свет)
-	_sun = DirectionalLight3D.new(); add_child(_sun)
+	_sun = DirectionalLight3D.new()
+	_sun.light_angular_distance = 0.53          # реальный угловой размер (как в игре)
+	add_child(_sun)
 	_clock = WorldClock.new(); _clock.sun = _sun
 	_clock.overcast = oc
 	var d := _val(a, "--date", "2025-06-21").split("-")

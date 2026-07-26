@@ -53,7 +53,7 @@ float cloud_density(vec3 p) {
 	float base = clamp((shape - (1.0 - coverage)) / 0.30, 0.0, 1.0) * grad;
 	if (base <= 0.001) return 0.0;
 	float det = textureLod(detail_tex, uv * 2.3, 0.0).r;      // Ворли-эрозия краёв
-	return clamp(base - det * 0.38, 0.0, 1.0);
+	return clamp(base - det * 0.30, 0.0, 1.0);
 }
 
 void fragment() {
@@ -77,20 +77,25 @@ void fragment() {
 		t0 = max(min(ta, tb), 0.0);
 		t1 = max(ta, tb);
 	}
-	float march_len = clamp(t1 - t0, 0.0, 8000.0);
+	float march_len = clamp(t1 - t0, 0.0, 6000.0);
 
 	vec3 col = vec3(0.0);
 	float trans = 1.0;
 	if (valid && march_len > 1.0) {
-		const int STEPS = 24;             // FPS-безопаснее (raymarch дорогой)
-		float dt = march_len / float(STEPS);
+		// ПОСТОЯННЫЙ шаг (не march_len/STEPS): у горизонта путь огромен, а при
+		// фикс. числе шагов dt рос → «веер» ступеней. Constant dt = ровно, без вееров.
+		const float DT = 160.0;           // м на шаг
+		const int MAXSTEPS = 48;          // потолок (грациозные лучи), FPS-безопасно
 		float ct = dot(rd, sun_dir);
 		float phase = 0.65 * hg(ct, 0.6) + 0.35 * hg(ct, -0.15);
-		float jitter = hash12(FRAGCOORD.xy);      // разбить кольца-ступени в шум
-		vec3 p = cam + rd * (t0 + jitter * dt);
-		vec3 dp = rd * dt;
-		for (int i = 0; i < STEPS; i++) {
-			p += dp;
+		// АНИМИРОВАННЫЙ джиттер: смещение шума во времени → MetalFX temporal
+		// усредняет его в гладкое (статичный джиттер давал зернистость).
+		float jitter = hash12(FRAGCOORD.xy + vec2(TIME * 41.0, TIME * 27.0));
+		float traveled = jitter * DT;
+		vec3 p = cam + rd * (t0 + traveled);
+		vec3 dp = rd * DT;
+		for (int i = 0; i < MAXSTEPS; i++) {
+			if (traveled > march_len) { break; }
 			float d = cloud_density(p);
 			if (d > 0.001) {
 				// свет к солнцу: короткий марш → самозатенение (Бир-Ламберт)
@@ -104,15 +109,17 @@ void fragment() {
 				// Солнцу (кромка) + купол-неба как основной, глубина затеняет мягко.
 				float ltf = 0.4 + 0.6 * lt;
 				vec3 lit = sun_color * (lt * phase * 2.5 + 0.2) + sky_ambient * 0.85 * ltf;
-				float a = 1.0 - exp(-d * dt * 0.008);
+				float a = 1.0 - exp(-d * DT * 0.008);
 				col += trans * a * lit;
 				trans *= 1.0 - a;
 				if (trans < 0.02) { break; }
 			}
+			p += dp;
+			traveled += DT;
 		}
 	}
-	// у самого горизонта (луч почти горизонтален, путь огромен) — тают в дымку
-	float horizon = smoothstep(0.0, 0.08, abs(rd.y));
+	// у горизонта (путь огромен, ступени грубее) — шире растворяем в дымку
+	float horizon = smoothstep(0.0, 0.14, abs(rd.y));
 	float alpha = (1.0 - trans) * horizon;
 	ALBEDO = col;
 	ALPHA = clamp(alpha, 0.0, 1.0);
