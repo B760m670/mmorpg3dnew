@@ -64,6 +64,7 @@ func _ready() -> void:
 	# СТАРАЯ трава (MultiMesh, разбросанные былинки) УБРАНА — она была
 	# неестественной и «размазанной» по всей карте; траву создадим настоящей
 	# (разной, в Blender) позже. Сейчас работаем над ПОЧВОЙ.
+	_build_soil_volume()
 	_build_props()
 	_build_camera()
 	_build_deform()
@@ -100,6 +101,19 @@ func _ready() -> void:
 		print("[light] ДИАГНОСТИКА: ", _dbg_arg)
 
 	# офлайн-снимок / инспекция: ждём схождения и выгружаем состояние
+	# ПРОБНАЯ ЯМА (стенд): выкопать в точке камеры, чтобы увидеть настоящие слои
+	if "--dig" in args:
+		await get_tree().process_frame
+		var dp := _cam.global_position
+		# окно копания ставим ТУДА, где сейчас наблюдатель (камера уже на месте)
+		var gy := _terrain.height(dp.x, dp.z) if _terrain != null else 0.0
+		_soil.center_on(dp.x, dp.z, _terrain)
+		_soil.global_position = Vector3(dp.x, gy, dp.z)
+		var vol := dig_soil(dp.x, dp.z, 2.2, 2.4)
+		var r: Dictionary = _soil.report()
+		print("[soil] ВЫКОПАНО: %.2f м3 (с разрыхлением), глубина %.2f м, окно %.0f м, ячейка %.2f м"
+			% [vol, r["deepest_m"], r["window_m"], r["cell_m"]])
+
 	if "--boot-shot" in args or inspect:
 		var out_path := _arg_val(args, "--out")
 		if out_path == "":
@@ -569,6 +583,26 @@ func _terrain_line() -> String:
 			_roads.length_km if _roads != null else 0.0]
 	return "Земля: %.0f×%.0f м · рельеф ПРОЦЕДУРНЫЙ (фолбэк!) %.1f м · △ %d\n" % [
 		r["size_m"], r["size_m"], r["relief_m"], r["tris"]]
+
+## ПОЧВА КАК ОБЪЁМ: локальное окно, где землю можно КОПАТЬ по-настоящему —
+## грунт вынимается, в стенке ямы обнажаются настоящие слои профиля, стенки
+## осыпаются по своим углам естественного откоса.
+var _soil: SoilVolume
+
+func _build_soil_volume() -> void:
+	_soil = SoilVolume.new()
+	add_child(_soil)
+	# окно ставим туда, где стоит наблюдатель
+	var p := _cam.global_position if _cam != null else Vector3.ZERO
+	var y := _terrain.height(p.x, p.z) if _terrain != null else 0.0
+	_soil.center_on(p.x, p.z, _terrain)
+	_soil.global_position = Vector3(p.x, y, p.z)
+
+## КОПАТЬ в точке мира (радиус и глубина — м). Отдаёт объём вынутого грунта.
+func dig_soil(world_x: float, world_z: float, r_m: float, depth_m: float) -> float:
+	if _soil == null:
+		return 0.0
+	return _soil.dig(world_x, world_z, r_m, depth_m)
 
 ## СЧЁТЧИК КООРДИНАТ: где мы сейчас на НАСТОЯЩЕЙ карте. Широта/долгота WGS84
 ## (якорь — Большой Гатчинский дворец), плюс мировые метры и высота над нулём

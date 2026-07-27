@@ -227,11 +227,27 @@ void fragment() {
 	// и в городе — бурый иллювий, на размывах — белёсый подзол.
 	float hz_rough_v = 1.0;
 	if (soil_hz_on > 0.5) {
-		vec2 hzuv = (v_wpos.xz + vec2(dem_half)) / (2.0 * dem_half);
-		int hi = int(texture(soil_hz_tex, clamp(hzuv, 0.0, 1.0)).r * 255.0 + 0.5);
-		hi = clamp(hi, 0, 6);
-		vec3 hcol = mix(hz_dry[hi].rgb, hz_wet[hi].rgb, wetf);
-		hz_rough_v = hz_rough[hi];
+		// Карта горизонтов хранит НОМЕРА слоёв — их нельзя фильтровать (между
+		// 1 и 3 получится чужой слой 2), поэтому берём 4 соседние клетки, у
+		// каждой свой НАСТОЯЩИЙ цвет, и смешиваем ЦВЕТА билинейно. Иначе на
+		// границах клеток DEM земля выглядит шахматной доской 32 м.
+		float texel = 1.0 / 513.0;
+		vec2 hzuv = clamp((v_wpos.xz + vec2(dem_half)) / (2.0 * dem_half), 0.0, 1.0);
+		vec2 tc = hzuv / texel - 0.5;
+		vec2 base = (floor(tc) + 0.5) * texel;
+		vec2 fr = fract(tc);
+		vec3 hcol = vec3(0.0);
+		float rsum = 0.0;
+		for (int oy = 0; oy < 2; oy++) {
+			for (int ox = 0; ox < 2; ox++) {
+				vec2 uv = clamp(base + vec2(float(ox), float(oy)) * texel, 0.0, 1.0);
+				int k = clamp(int(texture(soil_hz_tex, uv).r * 255.0 + 0.5), 0, 6);
+				float w = (ox == 0 ? 1.0 - fr.x : fr.x) * (oy == 0 ? 1.0 - fr.y : fr.y);
+				hcol += mix(hz_dry[k].rgb, hz_wet[k].rgb, wetf) * w;
+				rsum += hz_rough[k] * w;
+			}
+		}
+		hz_rough_v = rsum;
 		// Берём от снимка почвы ТОЛЬКО СТРУКТУРУ (яркостные вариации: комья,
 		// зерно, трещины), а ЦВЕТ — от горизонта. Структура обязана быть
 		// БЕСЦВЕТНОЙ: если оставить её цветной, оттенок снимка перемножится с

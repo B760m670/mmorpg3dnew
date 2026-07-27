@@ -286,6 +286,27 @@ func _setup_soil_horizons(m: ShaderMaterial) -> void:
 	print("[terrain] горизонты почвы: %d слоёв, карта %d² (катена+покров)" % [
 		dry.size(), SOIL_HZ_N])
 
+## СРЕЗ ПРОФИЛЯ (катена) в точке мира, м: сколько верха почвы сорвано смывом
+## (+) или намыто (−). Нужен объёму почвы, чтобы знать, какой слой лежит сверху
+## именно здесь. Данные — soil_cut_cm.bin (tools/build_soil_horizons.py).
+const SOIL_CUT_PATH := "res://assets/dem/soil_cut_cm.bin"
+var _soil_cut: PackedByteArray = PackedByteArray()
+
+func soil_cut_at(wx: float, wz: float) -> float:
+	if _soil_cut.is_empty():
+		var f := FileAccess.open(SOIL_CUT_PATH, FileAccess.READ)
+		if f == null:
+			return 0.0
+		_soil_cut = f.get_buffer(SOIL_HZ_N * SOIL_HZ_N * 2)
+		if _soil_cut.size() != SOIL_HZ_N * SOIL_HZ_N * 2:
+			_soil_cut = PackedByteArray()
+			return 0.0
+	var i := int(round((wx + DEM_HALF) / DEM_STEP))
+	var j := int(round((wz + DEM_HALF) / DEM_STEP))
+	if i < 0 or i >= SOIL_HZ_N or j < 0 or j >= SOIL_HZ_N:
+		return 0.0
+	return float(_soil_cut.decode_s16((j * SOIL_HZ_N + i) * 2)) / 100.0
+
 func _mip_tex(path: String) -> Texture2D:
 	var res := load(path)
 	if not (res is Texture2D):
