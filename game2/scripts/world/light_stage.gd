@@ -554,6 +554,7 @@ func _update_hud() -> void:
 			"ВКЛ" if ENABLE_POST else "выкл"] \
 		+ "MetalFX: %s (%s)  3D %d×%d → %d×%d\n" % [mfx, mode, inr.x, inr.y, int(out.x), int(out.y)] \
 		+ _clock_line() \
+		+ _coords_line() \
 		+ "FPS: %d / лимит %s · режим: %s (двойной тап — сменить)" % [
 			Engine.get_frames_per_second(), Core.frame_rate_label(),
 			"ПЕШЕХОД·физика" if _walk_active else "ПОЛЁТ"]
@@ -568,6 +569,20 @@ func _terrain_line() -> String:
 			_roads.length_km if _roads != null else 0.0]
 	return "Земля: %.0f×%.0f м · рельеф ПРОЦЕДУРНЫЙ (фолбэк!) %.1f м · △ %d\n" % [
 		r["size_m"], r["size_m"], r["relief_m"], r["tris"]]
+
+## СЧЁТЧИК КООРДИНАТ: где мы сейчас на НАСТОЯЩЕЙ карте. Широта/долгота WGS84
+## (якорь — Большой Гатчинский дворец), плюс мировые метры и высота над нулём
+## мира. По этим числам можно точно указать место для работ.
+func _coords_line() -> String:
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return ""
+	var p := cam.global_position
+	if _walk_active and _walker != null:
+		p = _walker.global_position
+	var g: Vector2 = WorldGeo.world_to_geo(p.x, p.z)
+	return "📍 %.6f, %.6f · %s · X%+.0f Z%+.0f м · выс %.0f м\n" % [
+		g.x, g.y, WorldGeo.to_dms(g.x, g.y), p.x, p.z, p.y]
 
 func _clock_line() -> String:
 	if _clock == null:
