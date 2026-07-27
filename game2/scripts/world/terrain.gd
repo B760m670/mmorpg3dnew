@@ -238,6 +238,54 @@ func _height_texture() -> ImageTexture:
 var height_texture: ImageTexture
 
 # загрузка текстуры С ГАРАНТИЕЙ мип-карт (иначе на дали алиасинг/«зерно»)
+## ГОРИЗОНТЫ ПОЧВЫ: какой слой обнажён в каждой точке (tools/build_soil_horizons.py).
+## Земля разная не «по шуму», а по настоящей педологии: катена (смыв на склонах,
+## намыв в ложбинах) + покров (лес защищает, город/дорога вскрыты).
+## В шейдер идут: карта индекса горизонта + палитра цветов слоёв (сухой/мокрый).
+const SOIL_HZ_PATH := "res://assets/dem/soil_horizons.bin"
+const SOIL_PROFILE_PATH := "res://data/real/soil_profile.json"
+const SOIL_HZ_N := 513
+
+func _setup_soil_horizons(m: ShaderMaterial) -> void:
+	var f := FileAccess.open(SOIL_HZ_PATH, FileAccess.READ)
+	if f == null:
+		push_warning("[terrain] нет карты горизонтов (%s) — почва однородная" % SOIL_HZ_PATH)
+		m.set_shader_parameter("soil_hz_on", 0.0)
+		return
+	var bytes := f.get_buffer(SOIL_HZ_N * SOIL_HZ_N)
+	if bytes.size() != SOIL_HZ_N * SOIL_HZ_N:
+		push_warning("[terrain] карта горизонтов неполная — почва однородная")
+		m.set_shader_parameter("soil_hz_on", 0.0)
+		return
+	var img := Image.create_from_data(SOIL_HZ_N, SOIL_HZ_N, false, Image.FORMAT_R8, bytes)
+	m.set_shader_parameter("soil_hz_tex", ImageTexture.create_from_image(img))
+
+	# палитра: настоящие цвета горизонтов (сухой/мокрый) из профиля
+	var pf := FileAccess.open(SOIL_PROFILE_PATH, FileAccess.READ)
+	var dry := PackedColorArray()
+	var wet := PackedColorArray()
+	var rough := PackedFloat32Array()
+	if pf != null:
+		var prof: Variant = JSON.parse_string(pf.get_as_text())
+		if prof is Dictionary and prof.has("horizons"):
+			for h in prof["horizons"]:
+				var cd: Array = h["color_dry"]
+				var cw: Array = h["color_wet"]
+				dry.append(Color(cd[0], cd[1], cd[2]))
+				wet.append(Color(cw[0], cw[1], cw[2]))
+				# плотные глинистые слои глаже, рыхлый гумус матовее
+				rough.append(clampf(1.0 - float(h["clay"]) * 0.5, 0.55, 1.0))
+	if dry.size() < 7:
+		push_warning("[terrain] профиль почвы не прочитан — почва однородная")
+		m.set_shader_parameter("soil_hz_on", 0.0)
+		return
+	m.set_shader_parameter("hz_dry", dry)
+	m.set_shader_parameter("hz_wet", wet)
+	m.set_shader_parameter("hz_rough", rough)
+	m.set_shader_parameter("soil_hz_on", 1.0)
+	print("[terrain] горизонты почвы: %d слоёв, карта %d² (катена+покров)" % [
+		dry.size(), SOIL_HZ_N])
+
 func _mip_tex(path: String) -> Texture2D:
 	var res := load(path)
 	if not (res is Texture2D):
@@ -267,6 +315,7 @@ func _ground_material() -> ShaderMaterial:
 		m.set_shader_parameter("zone_tex", ImageTexture.create_from_image(img1))
 	m.set_shader_parameter("zone_size_m", world_size_m)
 	m.set_shader_parameter("wet_level", (abs_min + 6.0) - _h_ref if real_dem else -3.0)
+	_setup_soil_horizons(m)
 	# ОСНОВА ЗЕМЛИ = РЕАЛЬНАЯ ПОЧВА везде (травы-раскраски больше нет — плоский
 	# скан травы был «обоями»; настоящую траву создадим геометрией отдельным слоем).
 	# НАСТОЯЩАЯ почва из ФОТО местной почвы Гатчины, СТРУКТУРНО (набор по полю):

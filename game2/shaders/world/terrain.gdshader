@@ -13,6 +13,15 @@ uniform sampler2D zone_tex : filter_nearest, repeat_disable;
 uniform float zone_size_m = 12288.0;
 uniform float wet_level = -30.0;         // мировая высота сырых низин, м
 
+// ГОРИЗОНТЫ ПОЧВЫ: какой слой профиля обнажён здесь (tools/build_soil_horizons.py).
+// Земля разная не от шума, а от настоящей педологии: катена (смыв/намыв) + покров.
+// hz_dry/hz_wet — НАСТОЯЩИЕ цвета слоёв (сухой/мокрый), hz_rough — шероховатость.
+uniform sampler2D soil_hz_tex : filter_nearest, repeat_disable;
+uniform float soil_hz_on = 0.0;
+uniform vec4 hz_dry[7];
+uniform vec4 hz_wet[7];
+uniform float hz_rough[7];
+
 // ОСНОВА ЗЕМЛИ = РЕАЛЬНАЯ ПОЧВА из ФОТО местной почвы Гатчины, СТРУКТУРНО (набор
 // по полю): база — влажный серо-бурый суглинок (soil_c=loam), в низинах —
 // плодородный тёмный гумус (soil_wet_c=fertile), на сухих пятнах — растрескавшаяся
@@ -211,6 +220,27 @@ void fragment() {
 	vec3 s_alb = mix(c_base, c_wet, wetf);
 	s_alb = mix(s_alb, c_dry, dryf);
 
+	// --- ГОРИЗОНТ ПОЧВЫ: чем земля ЯВЛЯЕТСЯ здесь (не шум, а педология) ---
+	// Индекс обнажённого слоя из карты; его настоящий цвет (сухой/мокрый)
+	// ПЕРЕКРАШИВАЕТ фотоснимок почвы, сохраняя его структуру (комья/зерно).
+	// Так под лесом сверху тёмная подстилка, в поле — гумус, на срезе склона
+	// и в городе — бурый иллювий, на размывах — белёсый подзол.
+	float hz_rough_v = 1.0;
+	if (soil_hz_on > 0.5) {
+		vec2 hzuv = (v_wpos.xz + vec2(dem_half)) / (2.0 * dem_half);
+		int hi = int(texture(soil_hz_tex, clamp(hzuv, 0.0, 1.0)).r * 255.0 + 0.5);
+		hi = clamp(hi, 0, 6);
+		vec3 hcol = mix(hz_dry[hi].rgb, hz_wet[hi].rgb, wetf);
+		hz_rough_v = hz_rough[hi];
+		// Берём от снимка почвы ТОЛЬКО СТРУКТУРУ (яркостные вариации: комья,
+		// зерно, трещины), а ЦВЕТ — от горизонта. Структура обязана быть
+		// БЕСЦВЕТНОЙ: если оставить её цветной, оттенок снимка перемножится с
+		// оттенком горизонта и земля уйдёт в неестественный пересвеченный тон.
+		float lum = dot(s_alb, vec3(0.299, 0.587, 0.114));
+		float structure = clamp(lum / 0.34, 0.55, 1.6);   // 0.34 — средняя яркость снимка
+		s_alb = clamp(hcol * structure, vec3(0.0), vec3(1.0));
+	}
+
 	float mat_rough = texture(soil_r, uv0).r;
 	vec3 tn = texture(soil_n, uv0).xyz * 2.0 - 1.0;
 	float s_ao = texture(soil_ao, uv0).r;
@@ -227,7 +257,7 @@ void fragment() {
 	float nstr = 0.55 * (1.0 - smoothstep(60.0, 320.0, dist));
 	vec3 n = normalize(vec3(gn.x + tn.x * nstr, gn.y, gn.z + tn.z * nstr));
 
-	float rough = mix(rough_target, mat_rough, 0.85);
+	float rough = mix(rough_target, mat_rough, 0.85) * hz_rough_v;
 	float spec = 0.04;   // почва МАТОВАЯ: диэлектрик с почти нулевым бликом
 	// ВЛАЖНОСТЬ (реальное поле влаги низин): мокрая почва темнее и чуть менее
 	// матовая — но НЕ зеркало (грунт не бликует как мокрый камень).
