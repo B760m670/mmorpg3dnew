@@ -53,7 +53,11 @@ func _ready() -> void:
 	_build_night_sky()
 	_build_clouds()
 	_build_ground()
-	_build_water()
+	# ВОДА УБРАНА с поверхности (осознанно): прежние озёра/реки стояли не на месте
+	# (реки шли сквозь городскую застройку) и не работали физически. Вернём воду
+	# ПОЗЖЕ и по-настоящему: сначала почва и рельеф дадут настоящие впадины, русла
+	# и омуты, и уже в них вода потечёт по физике. См. docs/roadmap.md.
+	# _build_water()
 	_build_roads()
 	_build_city()
 	_build_backdrop()
@@ -559,11 +563,9 @@ func _terrain_line() -> String:
 		return ""
 	var r := _terrain.report()
 	if r["real"]:
-		return "Земля: %.1f×%.1f км · рельеф РЕАЛЬНЫЙ (Гатчина, DEM) %.0f..%.0f м · △ %d · вода: %d · дороги: %.0f км · реки: %d\n" % [
+		return "Земля: %.1f×%.1f км · рельеф РЕАЛЬНЫЙ (Гатчина, DEM) %.0f..%.0f м · △ %d · дороги: %.0f км\n" % [
 			r["size_m"] / 1000.0, r["size_m"] / 1000.0, r["abs_min"], r["abs_max"], r["tris"],
-			_water.count_built if _water != null else 0,
-			_roads.length_km if _roads != null else 0.0,
-			_water.rivers_built if _water != null else 0]
+			_roads.length_km if _roads != null else 0.0]
 	return "Земля: %.0f×%.0f м · рельеф ПРОЦЕДУРНЫЙ (фолбэк!) %.1f м · △ %d\n" % [
 		r["size_m"], r["size_m"], r["relief_m"], r["tris"]]
 
