@@ -212,5 +212,131 @@
    "diggability": 0.03769140164899882,
    "mud_threshold": 0.0606
   }
- ]
+ ],
+ "subaqueous": {
+  "lake": [
+   {
+    "id": 100,
+    "code": "Sa",
+    "name": "сапропель (озёрный ил)",
+    "thick_m": 0.6,
+    "rho_d": 180.0,
+    "poros": 0.9,
+    "clay": 0.3,
+    "silt": 0.55,
+    "sand": 0.15,
+    "cohesion_kpa": 1.5,
+    "phi_deg": 8.0,
+    "k_sat": 1e-08,
+    "wilt": 0.6,
+    "fc": 0.88,
+    "color_dry": [
+     0.2,
+     0.18,
+     0.13
+    ],
+    "color_wet": [
+     0.09,
+     0.09,
+     0.07
+    ],
+    "organic": 0.55,
+    "repose_deg": 8.0,
+    "diggability": 1.0,
+    "mud_threshold": 0.95
+   },
+   {
+    "id": 101,
+    "code": "Gr",
+    "name": "глей озёрный (сизый, без кислорода)",
+    "thick_m": 1.2,
+    "rho_d": 1500.0,
+    "poros": 0.45,
+    "clay": 0.48,
+    "silt": 0.4,
+    "sand": 0.12,
+    "cohesion_kpa": 30.0,
+    "phi_deg": 14.0,
+    "k_sat": 1e-09,
+    "wilt": 0.28,
+    "fc": 0.46,
+    "color_dry": [
+     0.38,
+     0.42,
+     0.42
+    ],
+    "color_wet": [
+     0.22,
+     0.27,
+     0.28
+    ],
+    "organic": 0.03,
+    "repose_deg": 14.0,
+    "diggability": 0.5333333333333333,
+    "mud_threshold": 0.5704
+   }
+  ],
+  "river": [
+   {
+    "id": 110,
+    "code": "Rb",
+    "name": "русловой песок/гравий (промыт течением)",
+    "thick_m": 0.8,
+    "rho_d": 1750.0,
+    "poros": 0.34,
+    "clay": 0.02,
+    "silt": 0.08,
+    "sand": 0.9,
+    "cohesion_kpa": 0.5,
+    "phi_deg": 34.0,
+    "k_sat": 0.0005,
+    "wilt": 0.03,
+    "fc": 0.12,
+    "color_dry": [
+     0.52,
+     0.48,
+     0.4
+    ],
+    "color_wet": [
+     0.31,
+     0.29,
+     0.25
+    ],
+    "organic": 0.005,
+    "repose_deg": 34.0,
+    "diggability": 0.9014084507042255,
+    "mud_threshold": 0.1212
+   },
+   {
+    "id": 111,
+    "code": "Gr",
+    "name": "глей пойменный (под руслом)",
+    "thick_m": 1.5,
+    "rho_d": 1600.0,
+    "poros": 0.42,
+    "clay": 0.4,
+    "silt": 0.42,
+    "sand": 0.18,
+    "cohesion_kpa": 26.0,
+    "phi_deg": 16.0,
+    "k_sat": 1e-08,
+    "wilt": 0.25,
+    "fc": 0.44,
+    "color_dry": [
+     0.4,
+     0.43,
+     0.41
+    ],
+    "color_wet": [
+     0.24,
+     0.28,
+     0.27
+    ],
+    "organic": 0.02,
+    "repose_deg": 16.0,
+    "diggability": 0.5517241379310345,
+    "mud_threshold": 0.528
+   }
+  ]
+ }
 }
