@@ -7,11 +7,15 @@ extends Node3D
 
 const ENABLE_POST := true
 const ENABLE_METALFX := true
-# SDFGI выключен. НАБЛЮДЕНИЕ (видели на устройстве): на дали появлялась яркая
-# полоса. ПРЕДПОЛОЖЕНИЕ о причине (числами НЕ проверено): каскады SDFGI
-# покрывают лишь пузырь у камеры, за ним земля освещается полным небом.
-# Это моя гипотеза, а не установленный факт — при возврате к GI перепроверить.
-const ENABLE_GI := false
+# GI (SDFGI) — ВКЛЮЧЁН и выведен переключателем в HUD (кнопка «GI»).
+# НАБЛЮДЕНИЕ (видели на устройстве раньше): на дали появлялась яркая полоса.
+# ПРЕДПОЛОЖЕНИЕ о причине (числами НЕ проверено): каскады SDFGI покрывают лишь
+# пузырь у камеры, за ним земля светится полным небом.
+# ВАЖНО: локально проверить нельзя — SDFGI работает только в Forward+, а
+# стенд-рендер идёт в GL Compatibility (Vulkan в окружении нет). Поэтому
+# гипотеза проверяется НА УСТРОЙСТВЕ переключателем: смотреть, появляется ли
+# полоса и как проседает FPS.
+const ENABLE_GI := true
 const ENABLE_SSAO := true        # контактные тени
 const ENABLE_SSIL := true        # непрямой свет от соседних поверхностей (GI экрана)
 const ENABLE_GLOW := true        # мягкое свечение в бликах
@@ -512,12 +516,31 @@ func _build_hud(gi_off: bool) -> void:
 	_dbg_btn.size = Vector2(200, 56)
 	_dbg_btn.pressed.connect(_on_debug_pressed)
 	ui.add_child(_dbg_btn)
+
+	# ПЕРЕКЛЮЧАТЕЛЬ GI на устройстве: проверять гипотезу вживую, а не верить
+	# комментарию. Локально (GL Compatibility) SDFGI недоступен — только здесь.
+	_gi_btn = Button.new()
+	_gi_btn.text = "GI: %s" % ("вкл" if _env.sdfgi_enabled else "выкл")
+	_gi_btn.add_theme_font_size_override("font_size", 30)
+	_gi_btn.anchor_left = 1.0; _gi_btn.anchor_right = 1.0
+	_gi_btn.position = Vector2(-260, 130)
+	_gi_btn.size = Vector2(200, 56)
+	_gi_btn.pressed.connect(_on_gi_pressed)
+	ui.add_child(_gi_btn)
 	_update_hud()
 
 func _on_debug_pressed() -> void:
 	cycle_debug()
 	var m: String = DBG_CYCLE[_dbg_idx]
 	_dbg_btn.text = "DBG: %s" % m
+
+var _gi_btn: Button
+
+func _on_gi_pressed() -> void:
+	if _env == null:
+		return
+	_env.sdfgi_enabled = not _env.sdfgi_enabled
+	_gi_btn.text = "GI: %s" % ("вкл" if _env.sdfgi_enabled else "выкл")
 
 var _dbg_btn: Button
 var _compass: Label
