@@ -328,13 +328,29 @@ func soil_cut_at(wx: float, wz: float) -> float:
 	return float(_soil_cut.decode_s16((j * SOIL_HZ_N + i) * 2)) / 100.0
 
 func _mip_tex(path: String) -> Texture2D:
+	var img: Image = null
 	var res := load(path)
-	if not (res is Texture2D):
-		push_warning("[terrain] нет текстуры %s" % path)
-		return null
-	var img := (res as Texture2D).get_image()
+	if res is Texture2D:
+		img = (res as Texture2D).get_image()
+	else:
+		# Скачанные материалы лежат в проекте как обычные PNG без .import —
+		# ResourceLoader их не видит («No loader found for resource»), потому что
+		# редактор их не импортировал. Читаем файл напрямую: для внешних сканов
+		# это единственный способ, не требующий прогона редактора.
+		img = Image.load_from_file(path)
+		if img == null:
+			push_warning("[terrain] нет текстуры %s" % path)
+			return null
 	if img == null:
 		return res
+	# ЗАМЕР, а не вера: пустая картинка грузится «без ошибки» и даёт ровную
+	# заливку — именно так поверхность и стала плоской. Печатаем размер.
+	if img.get_width() < 8 or img.get_height() < 8:
+		push_warning("[terrain] ПУСТАЯ текстура %s (%dx%d)"
+			% [path, img.get_width(), img.get_height()])
+	else:
+		print("[terrain] текстура %s: %dx%d %s"
+			% [path.get_file(), img.get_width(), img.get_height(), img.get_format()])
 	if not img.has_mipmaps():
 		img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
@@ -357,21 +373,34 @@ func _ground_material() -> ShaderMaterial:
 	m.set_shader_parameter("zone_size_m", world_size_m)
 	m.set_shader_parameter("wet_level", (abs_min + 6.0) - h_ref if real_dem else -3.0)
 	_setup_soil_horizons(m)
-	# ОСНОВА ЗЕМЛИ = РЕАЛЬНАЯ ПОЧВА везде (травы-раскраски больше нет — плоский
-	# скан травы был «обоями»; настоящую траву создадим геометрией отдельным слоем).
-	# НАСТОЯЩАЯ почва из ФОТО местной почвы Гатчины, СТРУКТУРНО (набор по полю):
-	# база — влажный серо-бурый суглинок (комья), низины — плодородный тёмный гумус,
-	# сухие пятна — растрескавшаяся светлая. Рельеф общий (loam). Не песок.
+	# ЗЕМЛЯ = НАСТОЯЩИЕ ОТСКАНИРОВАННЫЕ ПОВЕРХНОСТИ (CC0, ambientCG),
+	# а не нарисованные мной. Прошлые created/soil_* были процедурным шумом,
+	# перекрашенным в цвета почвенных горизонтов, — с высоты роста это читалось
+	# как ровная бурая плоскость, потому что никакой настоящей структуры там и
+	# не было. Фотограмметрия даёт то, чего шум дать не может: неоднородность
+	# масштаба сантиметров — веточки, камешки, проплешины, мох.
+	#
+	# ВЫБРАНО ГЛАЗАМИ, а не по названию (первый список я собрал по заголовкам
+	# поиска и ошибся: «гравий» оказался корой-мульчой, «камень дворца» —
+	# полированной плиткой). Инструмент выбора — tools/pick_material.py.
+	#   база     Ground037  трава, растущая из земли: июньский покров, сквозь
+	#                       который видна почва. Земля перестаёт быть пашней.
+	#   низины   Ground024  сырая лесная подстилка со мхом и веточками
+	#   сухое    Ground023  сухая земля с палой листвой
+	# Рельеф (нормаль/шероховатость/затенение/высота) — из базы, чтобы
+	# микрорельеф совпадал с тем, что видно в цвете.
+	#
 	# ВАЖНО: мип-карты генерим В КОДЕ. Без .import-файлов дефолт может НЕ создать
 	# мип-уровни → на дистанции текстура алиасит («зерно»). _mip_tex гарантирует
 	# мип-карты; анизотропию даёт хинт сэмплера в шейдере.
-	m.set_shader_parameter("soil_c", _mip_tex("res://assets/materials/created/soil_loam_clods/Color.png"))
-	m.set_shader_parameter("soil_dry_c", _mip_tex("res://assets/materials/created/soil_gatchina/Color.png"))
-	m.set_shader_parameter("soil_wet_c", _mip_tex("res://assets/materials/created/soil_fertile/Color.png"))
-	m.set_shader_parameter("soil_n", _mip_tex("res://assets/materials/created/soil_loam_clods/Normal.png"))
-	m.set_shader_parameter("soil_r", _mip_tex("res://assets/materials/created/soil_loam_clods/Roughness.png"))
-	m.set_shader_parameter("soil_ao", _mip_tex("res://assets/materials/created/soil_loam_clods/AmbientOcclusion.png"))
-	m.set_shader_parameter("soil_h", _mip_tex("res://assets/materials/created/soil_loam_clods/Height.png"))
+	const M := "res://assets/materials/"
+	m.set_shader_parameter("soil_c", _mip_tex(M + "Ground037/Ground037_2K-PNG_Color.png"))
+	m.set_shader_parameter("soil_dry_c", _mip_tex(M + "Ground023/Ground023_2K-PNG_Color.png"))
+	m.set_shader_parameter("soil_wet_c", _mip_tex(M + "Ground024/Ground024_2K-PNG_Color.png"))
+	m.set_shader_parameter("soil_n", _mip_tex(M + "Ground037/Ground037_2K-PNG_NormalGL.png"))
+	m.set_shader_parameter("soil_r", _mip_tex(M + "Ground037/Ground037_2K-PNG_Roughness.png"))
+	m.set_shader_parameter("soil_ao", _mip_tex(M + "Ground037/Ground037_2K-PNG_AmbientOcclusion.png"))
+	m.set_shader_parameter("soil_h", _mip_tex(M + "Ground037/Ground037_2K-PNG_Displacement.png"))
 	_setup_slice(m)
 	_setup_moisture(m)
 	return m
