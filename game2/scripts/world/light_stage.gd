@@ -60,11 +60,7 @@ func _ready() -> void:
 	_build_night_sky()
 	_build_clouds()
 	_build_ground()
-	# ВОДА УБРАНА с поверхности (осознанно): прежние озёра/реки стояли не на месте
-	# (реки шли сквозь городскую застройку) и не работали физически. Вернём воду
-	# ПОЗЖЕ и по-настоящему: сначала почва и рельеф дадут настоящие впадины, русла
-	# и омуты, и уже в них вода потечёт по физике. См. docs/roadmap.md.
-	# _build_water()
+	_build_water_real()
 	_build_roads()
 	_build_city()
 	_build_backdrop()
@@ -361,6 +357,17 @@ func _build_water() -> void:
 	_water.terrain = _terrain
 	add_child(_water)
 	_water.build()
+
+## ВОДА ВЕРНУЛАСЬ — но как ДВА РАЗНЫХ ВЕЩЕСТВА (озеро и река), на настоящих
+## местах и с физикой: оптика по измеренным коэффициентам поглощения, течение
+## по flow map из настоящего уклона, дно из подводных почв.
+var _water_real: WaterReal
+
+func _build_water_real() -> void:
+	_water_real = WaterReal.new()
+	_water_real.terrain = _terrain
+	add_child(_water_real)
+	_water_real.build()
 
 # --- дороги по реальной сети (эпоха 1894: макадам/грунт, ж/д насыпь) ---
 var _roads: RoadNetwork

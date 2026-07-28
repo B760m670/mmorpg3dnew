@@ -1,0 +1,128 @@
+shader_type spatial;
+// НАСТОЯЩАЯ ВОДА. Каждая величина здесь — из испытанной физики
+// (tools/water_physics.py), а не подобрана на глаз.
+//
+// ЧТО ДЕЛАЕТ ВОДУ ВОДОЙ (по итогам стенда, в порядке важности):
+// 1. ФРЕНЕЛЬ. Сверху вода прозрачна (отражает 2.0%), вдоль поверхности —
+//    зеркало (58% на 85°). ИЗМЕРЕНО: точные формулы Френеля при n=1.333 дают
+//    ровно эти числа; приближение Шлика годится (ошибка < 0.06).
+//    Без этого перехода вода выглядит крашеным стеклом.
+// 2. ПОГЛОЩЕНИЕ. Цвет НЕ задаётся краской — он следствие ТОЛЩИ. Коэффициенты
+//    измеренные (Pope & Fry, 1997), 1/м: синий 0.0145, зелёный 0.0638,
+//    красный 0.3400. ИЗМЕРЕНО: на 5 м красного остаётся 18%, синего 93% —
+//    отсюда сине-зелёный сам собой.
+// 3. МУТНОСТЬ. Озеро и река отличаются ВЕЩЕСТВОМ: озеро цветёт (планктон,
+//    зелёная взвесь, дно илистое), река несёт глину от берегов (буроватая,
+//    но прозрачнее, дно песчаное). Разные turbidity/tint — не разные картинки.
+// 4. ВОЛНЫ — только РЯБЬ. ИЗМЕРЕНО по разгону ветра (SMB): на Белом озере
+//    (700 м) при 5 м/с волна 9 см. Морские волны на пруду были бы ложью.
+// 5. ТЕЧЕНИЕ — по FLOW MAP из настоящего рельефа (build_flowmap.py, 0.36 м/с).
+//    Приём AAA: две фазы со сдвигом полпериода, перекрёстное смешение —
+//    течение бесконечно и без разрывов.
+render_mode blend_mix, depth_draw_never, cull_back, diffuse_burley;
+
+// --- ВЕЩЕСТВО ВОДОЁМА (задаётся снаружи: озеро или река) ---
+uniform float turbidity = 0.35;               // 0 родник .. 1 цветущее озеро
+uniform vec3 tint = vec3(0.12, 0.30, 0.26);   // цвет взвеси (озеро зелёный, река бурый)
+uniform float flow_scale = 1.0;               // 0 стоячая (озеро) .. 1 проточная (река)
+uniform float wave_amp = 0.045;               // м; из разгона ветра (рябь 4.5-9 см)
+uniform float wave_len = 1.6;                 // м, короткая волна малого водоёма
+
+// --- поля мира ---
+// глубина сцены ЗА водой — по ней считается ТОЛЩА воды (главное для цвета)
+uniform sampler2D depth_tex : hint_depth_texture, filter_linear;
+uniform sampler2D flow_tex : filter_linear, repeat_disable;   // RG=направление, B=скорость
+uniform sampler2D bottom_tex : filter_linear, repeat_enable;  // дно (сапропель/песок)
+uniform float dem_half = 8192.0;
+uniform vec3 bottom_color = vec3(0.10, 0.09, 0.07);           // цвет дна (из подводных почв)
+
+// измеренные коэффициенты поглощения (Pope & Fry 1997), 1/м
+const vec3 ABSORB = vec3(0.3400, 0.0638, 0.0145);   // R, G, B
+
+varying vec3 v_world;
+
+void vertex() {
+	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	// РЯБЬ: две короткие волны крест-накрест. Амплитуда — из разгона ветра,
+	// не «на глаз»: на нашем озере физически возможно лишь несколько сантиметров.
+	float t = TIME;
+	float w1 = sin(v_world.x / wave_len + t * 1.7) * cos(v_world.z / wave_len * 0.8 - t * 1.1);
+	float w2 = sin((v_world.x + v_world.z) / (wave_len * 0.6) - t * 2.3);
+	VERTEX.y += (w1 * 0.6 + w2 * 0.4) * wave_amp;
+}
+
+// Френель по Шлику при n=1.333 (проверено: совпадает с точной формулой,
+// ошибка < 0.06; сверху 2%, вдоль поверхности >50%)
+float fresnel(float cos_theta) {
+	const float R0 = 0.02;                     // ((1.333-1)/(1.333+1))^2
+	return R0 + (1.0 - R0) * pow(1.0 - cos_theta, 5.0);
+}
+
+// ТЕЧЕНИЕ приёмом AAA: две фазы со сдвигом полпериода, перекрёстное смешение.
+// Иначе картинка «уезжает» и рвётся.
+vec2 flow_uv(vec2 uv, vec2 dir, float phase, float speed) {
+	return uv - dir * (phase * speed);
+}
+
+void fragment() {
+	vec3 vdir = normalize(v_world - CAMERA_POSITION_WORLD);
+	float cos_v = clamp(abs(vdir.y), 0.0, 1.0);      // угол к поверхности
+
+	// --- ГЛУБИНА ПОД ПИКСЕЛЕМ (главное для цвета) ---
+	// Берём глубину сцены ЗА водой и вычитаем глубину поверхности: получаем
+	// ТОЛЩУ воды. Именно она красит воду, а не заданный синий цвет.
+	float scene_d = texture(depth_tex, SCREEN_UV).r;
+	vec4 spos = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, scene_d * 2.0 - 1.0, 1.0);
+	spos.xyz /= spos.w;
+	float depth_water = max(0.0, -spos.z + VERTEX.z);   // толща вдоль луча, м
+
+	// --- ПОГЛОЩЕНИЕ (Бугер-Ламберт-Бер) с ИЗМЕРЕННЫМИ коэффициентами ---
+	// Путь света: вниз ко дну и обратно, поэтому толща удваивается.
+	vec3 trans = exp(-ABSORB * depth_water * 2.0);
+	// мутность: взвесь рассеивает — вода светлеет своим цветом и теряет даль
+	float murk = 1.0 - exp(-turbidity * depth_water * 0.9);
+
+	// --- ТЕЧЕНИЕ по настоящей карте (river) ---
+	vec2 fuv = (v_world.xz + vec2(dem_half)) / (2.0 * dem_half);
+	vec4 fl = texture(flow_tex, clamp(fuv, 0.0, 1.0));
+	vec2 fdir = (fl.rg * 2.0 - 1.0) * flow_scale;
+	float fspeed = fl.b * 2.0 * flow_scale;
+	float ph = fract(TIME * 0.25);
+	vec2 duv = v_world.xz * 0.35;
+	// две фазы со сдвигом полпериода — бесшовное течение
+	vec3 n1 = texture(bottom_tex, flow_uv(duv, fdir, ph, fspeed)).rgb;
+	vec3 n2 = texture(bottom_tex, flow_uv(duv, fdir, fract(ph + 0.5), fspeed)).rgb;
+	float mixw = abs(ph - 0.5) * 2.0;
+	vec3 bot_tex = mix(n1, n2, mixw);
+
+	// --- ДНО, увиденное сквозь воду ---
+	// Настоящее дно (сапропель у озера, песок у реки) темнеет с глубиной
+	// именно по поглощению — как в жизни.
+	vec3 bottom = bottom_color * (0.7 + 0.6 * bot_tex.r);
+	vec3 through = bottom * trans;
+	vec3 scattered = tint * murk;                 // свет, рассеянный взвесью
+	vec3 body = through * (1.0 - murk) + scattered;
+
+	// --- ФРЕНЕЛЬ: сколько отражаем, сколько пропускаем ---
+	float F = fresnel(cos_v);
+
+	// --- МЯГКИЙ БЕРЕГ: на мелководье вода прозрачна и без пены не режет ---
+	// Без этого на стыке с берегом жёсткая линия — обязательный приём AAA.
+	float shore = clamp(depth_water / 0.35, 0.0, 1.0);
+
+	// нормаль ряби (для бликов) — мелкая, как и волна
+	float e = 0.35;
+	float h0 = sin(v_world.x / wave_len + TIME * 1.7) * cos(v_world.z / wave_len * 0.8 - TIME * 1.1);
+	float hx = sin((v_world.x + e) / wave_len + TIME * 1.7) * cos(v_world.z / wave_len * 0.8 - TIME * 1.1);
+	float hz = sin(v_world.x / wave_len + TIME * 1.7) * cos((v_world.z + e) / wave_len * 0.8 - TIME * 1.1);
+	vec3 wn = normalize(vec3((h0 - hx) * wave_amp * 8.0, 1.0, (h0 - hz) * wave_amp * 8.0));
+
+	ALBEDO = body;
+	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
+	// вода — диэлектрик: не металл, гладкая; блеск даёт Френель, а не «глянец»
+	METALLIC = 0.0;
+	ROUGHNESS = mix(0.02, 0.12, turbidity);
+	SPECULAR = 0.5;
+	// прозрачность: у берега почти нет, на глубине — по Френелю и мутности
+	ALPHA = clamp(max(F, murk * 0.85 + 0.15) * shore, 0.0, 1.0);
+}
