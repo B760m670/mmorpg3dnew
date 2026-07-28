@@ -300,8 +300,18 @@ func _build_sun() -> void:
 	# было 5° → диск ~10× больше реального). Мягкость теней в пасмурность даёт
 	# размытие тени, а не гигантский диск.
 	_sun.light_angular_distance = 0.53
-	_sun.shadow_blur = 2.5
-	_sun.directional_shadow_max_distance = 90.0
+	# ДРОЖАНИЕ ТЕНЕЙ. Было: 4 каскада, втиснутые в 90 м, и размытие 2.5.
+	# Каскад в 22 м при движении наблюдателя переползает почти каждый шаг, а
+	# большое размытие берётся редкими выборками — вместе это даёт мелкую
+	# трясущуюся кромку, которую временное сглаживание MetalFX ещё и растягивает
+	# во времени. Дальность увеличена, размытие уменьшено, добавлено смещение
+	# по нормали (оно убирает мерцающую «сыпь» самозатенения на пологой земле).
+	# ПРЕДПОЛОЖЕНИЕ, а не замер: локальный стенд идёт около кадра в секунду и
+	# дрожание во времени на нём не воспроизводится. Проверять на устройстве.
+	_sun.shadow_blur = 1.0
+	_sun.shadow_normal_bias = 1.5
+	_sun.directional_shadow_max_distance = 220.0
+	_sun.directional_shadow_fade_start = 0.85
 	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	add_child(_sun)
 
@@ -490,6 +500,19 @@ func _build_camera() -> void:
 	_walker.deactivate()
 	_walker.toggle_requested.connect(_toggle_walk)
 
+# КОЛЛИЗИЯ ЕДЕТ ЗА НАБЛЮДАТЕЛЕМ — и делать это надо в ФИЗИЧЕСКОМ шаге.
+# ИЗМЕРЕНО, почему: когда форма менялась в кадре отрисовки, физический сервер
+# подхватывал её только на следующем шаге. В это окно под ногами не было
+# ничего — луч в ту же точку возвращал «твёрдой земли нет», хотя заплатка уже
+# стояла на месте. Тело успевало начать падать и разгонялось до -600 м.
+func _physics_process(_dt: float) -> void:
+	if _terrain == null:
+		return
+	var who := _cam.global_position if _cam != null else Vector3.ZERO
+	if _walk_active and _walker != null:
+		who = _walker.global_position
+	_terrain.update_collision(who)
+
 func _toggle_walk() -> void:
 	_walk_active = not _walk_active
 	if _walk_active:
@@ -497,7 +520,10 @@ func _toggle_walk() -> void:
 		var gp := _cam.position
 		var gy := _terrain.height(gp.x, gp.z)
 		_cam.set_process_input(false)
-		_walker.activate(Vector3(gp.x, gy + 0.3, gp.z), _cam.yaw())
+		# ЗЕМЛЯ ПОД НОГАМИ ДО ТОГО, как тело появится: иначе первый же
+		# физический шаг находит пустоту и роняет пешехода сквозь мир.
+		_terrain.update_collision(Vector3(gp.x, 0.0, gp.z))
+		_walker.activate(Vector3(gp.x, gy + 0.6, gp.z), _cam.yaw())
 	else:
 		_walker.deactivate()
 		_cam.position = _walker.global_position + Vector3(0, 25.0, 0)
@@ -708,12 +734,6 @@ func _process(_delta: float) -> void:
 		_post_mat.set_shader_parameter("t", float(Time.get_ticks_msec()) / 1000.0)
 	_update_weather()
 	_update_fog_altitude()
-	# КОЛЛИЗИЯ ЕДЕТ ЗА НАБЛЮДАТЕЛЕМ. Без этого твёрдая земля остаётся там, где
-	# игрок был при запуске, и он проваливается сквозь видимый рельеф.
-	if _terrain != null:
-		var who := _walker.global_position if _walk_active and _walker != null \
-			else (_cam.global_position if _cam != null else Vector3.ZERO)
-		_terrain.update_collision(who)
 	_update_hud()
 	_update_compass()
 

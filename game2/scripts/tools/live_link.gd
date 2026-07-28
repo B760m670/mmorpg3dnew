@@ -137,6 +137,14 @@ func _exec(line: String) -> void:
 			var g := arg.split("x")
 			_reply(_see(int(g[0]) if g.size() > 0 and g[0] != "" else 9,
 				int(g[1]) if g.size() > 1 else 5))
+		"phys":
+			# ЛУЧ ВНИЗ ПО НАСТОЯЩЕЙ ФИЗИКЕ: есть ли под точкой твёрдая земля и
+			# на какой она высоте. Так «проваливаюсь сквозь поверхность»
+			# перестаёт быть ощущением и становится замером.
+			var pp := arg.split(",")
+			var qx := float(pp[0])
+			var qz := float(pp[1]) if pp.size() > 1 else 0.0
+			_reply(_phys(qx, qz))
 		"state":
 			_reply(_state())
 		"probe":
@@ -227,6 +235,32 @@ func _cast(o: Vector3, d: Vector3) -> Array:
 		# шаг растёт с дальностью: вблизи точно, вдали дёшево
 		t += maxf(2.0, t * 0.02)
 	return ["небо", far]
+
+func _phys(x: float, z: float) -> String:
+	var vis := terrain.height(x, z) if terrain != null else 0.0
+	var space := get_viewport().world_3d.direct_space_state
+	var q := PhysicsRayQueryParameters3D.create(
+		Vector3(x, vis + 200.0, z), Vector3(x, vis - 200.0, z))
+	var hit := space.intersect_ray(q)
+	var cen := "нет"
+	if terrain != null:
+		cen = "центр заплатки X %.0f Z %.0f, край ±%.0f м, до края %.0f м" % [
+			terrain._col_center.x, terrain._col_center.z, terrain.COL_HALF,
+			terrain.COL_HALF - maxf(absf(x - terrain._col_center.x),
+				absf(z - terrain._col_center.z))]
+	if hit.is_empty():
+		return "точка X %.0f Z %.0f: ТВЁРДОЙ ЗЕМЛИ НЕТ (луч 400 м пуст), видно %.2f м | %s" \
+			% [x, z, vis, cen]
+	var hy: float = hit["position"].y
+	var who := "?"
+	var col: Object = hit.get("collider")
+	if col != null and col is Node:
+		who = (col as Node).name + " (" + col.get_class() + ")"
+	var cc := "нет"
+	if terrain != null:
+		cc = "центр заплатки X %.0f Z %.0f" % [terrain._col_center.x, terrain._col_center.z]
+	return "точка X %.0f Z %.0f: упор в %s на %.2f м | видно %.2f м | расхождение %+.2f м | %s" \
+		% [x, z, who, hy, vis, hy - vis, cc]
 
 func _state() -> String:
 	var p := camera.global_position if camera != null else Vector3.ZERO
