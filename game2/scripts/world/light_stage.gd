@@ -12,6 +12,7 @@ const ENABLE_METALFX := true
 # («зелёные объекты» на горизонте). GI открытых пространств — задача движка.
 const ENABLE_GI := false
 const ENABLE_SSAO := true        # контактные тени
+const ENABLE_SSIL := true        # непрямой свет от соседних поверхностей (GI экрана)
 const ENABLE_GLOW := true        # мягкое свечение в бликах
 # ПОГОДА Гатчины теперь КОГЕРЕНТНА и ДИНАМИЧНА: пасмурность рождается из
 # плотности облаков (Clouds.current_coverage) и через WeatherSky ведёт небо
@@ -219,6 +220,17 @@ func _build_environment(gi: bool) -> Environment:
 		env.sdfgi_min_cell_size = 0.06
 		env.sdfgi_energy = 1.6                  # усиленный вклад GI
 		env.sdfgi_y_scale = Environment.SDFGI_Y_SCALE_75_PERCENT
+
+	# НЕПРЯМОЙ СВЕТ (SSIL): свет, отражённый соседними поверхностями — стена
+	# подкрашивает землю рядом, в переулке темнее, под карнизом сумрак. Именно
+	# этого не хватало миру для «объёма». В отличие от SDFGI работает в открытом
+	# мире на любой дальности (нет каскадов и нет яркой полосы на горизонте).
+	if ENABLE_SSIL:
+		env.ssil_enabled = true
+		env.ssil_radius = 4.0            # м: масштаб зданий/стен, не комьев
+		env.ssil_intensity = 1.1
+		env.ssil_sharpness = 0.98
+		env.ssil_normal_rejection = 1.0
 
 	if ENABLE_SSAO:
 		env.ssao_enabled = true

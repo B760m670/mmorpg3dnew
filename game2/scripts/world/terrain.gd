@@ -291,6 +291,17 @@ func _setup_soil_horizons(m: ShaderMaterial) -> void:
 			var dimg := Image.create_from_data(SOIL_HZ_N, SOIL_HZ_N, false, Image.FORMAT_R8, db)
 			m.set_shader_parameter("drain_tex", ImageTexture.create_from_image(dimg))
 			m.set_shader_parameter("drain_on", 1.0)
+	# ВИДИМОСТЬ НЕБА (SVF, tools/build_sky_view.py): какую долю небесного купола
+	# видит точка. В пасмурную погоду небо — главный источник, поэтому там, где
+	# рельеф закрывает небо (овраги, подножия склонов), рассеянного света меньше.
+	# Посчитано заранее — в кадре стоит ноль.
+	var sf := FileAccess.open("res://assets/dem/sky_view.bin", FileAccess.READ)
+	if sf != null:
+		var sb := sf.get_buffer(SOIL_HZ_N * SOIL_HZ_N)
+		if sb.size() == SOIL_HZ_N * SOIL_HZ_N:
+			var simg := Image.create_from_data(SOIL_HZ_N, SOIL_HZ_N, false, Image.FORMAT_R8, sb)
+			m.set_shader_parameter("skyview_tex", ImageTexture.create_from_image(simg))
+			m.set_shader_parameter("skyview_on", 1.0)
 	m.set_shader_parameter("soil_hz_on", 1.0)
 	print("[terrain] горизонты почвы: %d слоёв, карта %d² (катена+покров)" % [
 		dry.size(), SOIL_HZ_N])

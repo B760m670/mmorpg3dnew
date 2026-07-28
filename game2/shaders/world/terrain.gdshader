@@ -29,6 +29,12 @@ uniform sampler2D drain_tex : filter_linear, repeat_disable;
 uniform float drain_on = 0.0;
 uniform float soil_wetness = 0.25;   // 0 сушь .. 1 после ливня
 
+// ВИДИМОСТЬ НЕБА (SVF): доля небесного купола, видимая из точки. Под пасмурным
+// небом это главный множитель рассеянного света: в овраге неба видно меньше —
+// там сумрачнее. Посчитано из настоящего рельефа заранее (Dozier & Frew).
+uniform sampler2D skyview_tex : filter_linear, repeat_disable;
+uniform float skyview_on = 0.0;
+
 // ОСНОВА ЗЕМЛИ = РЕАЛЬНАЯ ПОЧВА из ФОТО местной почвы Гатчины, СТРУКТУРНО (набор
 // по полю): база — влажный серо-бурый суглинок (soil_c=loam), в низинах —
 // плодородный тёмный гумус (soil_wet_c=fertile), на сухих пятнах — растрескавшаяся
@@ -426,6 +432,13 @@ void fragment() {
 	// спрессованная почва в следе темнее (просадка от нагрузки)
 	col2 *= mix(1.0, 0.7, v_deform);
 
+	// SVF гасит рассеянный свет неба (не прямой солнечный) — как в природе
+	if (skyview_on > 0.5) {
+		vec2 svuv = clamp((v_wpos.xz + vec2(dem_half)) / (2.0 * dem_half), 0.0, 1.0);
+		float svf = texture(skyview_tex, svuv).r;
+		AO = mix(1.0, svf, 0.85);
+		AO_LIGHT_AFFECT = 0.0;      // гасим только окружающий свет, не солнце
+	}
 	ALBEDO = col2;
 	// ЖЁСТКИЙ матовый пол шероховатости — грунт НИКОГДА не бликует как камень/стекло
 	ROUGHNESS = clamp(rough, 0.72, 1.0);
