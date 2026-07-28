@@ -35,7 +35,7 @@ import shutil
 
 import numpy as np
 from PIL import Image, ImageDraw
-from scipy.ndimage import distance_transform_edt
+from scipy.ndimage import binary_dilation, distance_transform_edt
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 DEM = os.path.join(ROOT, "game2/assets/dem/gatchina_cm.bin")
@@ -96,12 +96,24 @@ def main():
                 px.append((i, j))
                 ii = int(np.clip(i, 0, N - 1)); jj = int(np.clip(j, 0, N - 1))
                 hs.append(orig[jj, ii])
-            level = float(np.median(hs))       # урез = медиана берега (устойчива к шуму)
             one = Image.new("L", (N, N), 0)
             ImageDraw.Draw(one).polygon(px, fill=1)
             om = np.asarray(one, bool)
             if not om.any():
                 continue                        # мельче клетки DEM — чаши не будет
+            # УРЕЗ. Медиана берега — устойчивая оценка, но её мало: ИЗМЕРЕНО, что
+            # так у 145 водоёмов из 166 гладь вставала ВЫШЕ земли сразу за
+            # контуром (до 11.7 м). Со стороны это плоская плита, парящая над
+            # ландшафтом, — именно её видно с высоты как «воду, накрывшую всё».
+            # Причина в данных: пруд 20-100 м меньше клетки DEM (32 м), и сетка
+            # просто не знает, где у него урез.
+            # Поэтому урез дополнительно ПРИЖИМАЕТСЯ к самой низкой земле в
+            # кольце шириной 2 клетки снаружи контура. Вода тогда не может
+            # оказаться выше берега ни в одной точке — переливаться некуда.
+            ring = binary_dilation(om, iterations=2) & (~om)
+            level = float(np.median(hs))
+            if ring.any():
+                level = min(level, float(orig[ring].min()))
             level_img[om] = level
             dm.polygon(px, fill=1)
             lakes += 1
@@ -124,9 +136,13 @@ def main():
     _, (jy, ix) = distance_transform_edt(~wmask, return_indices=True)
     near_level = level_img[jy, ix]
     dist_land = distance_transform_edt(~wmask)
+    # ТОЛЬКО ПОДНИМАЕМ. Раньше здесь стояло clip(orig - level, 0.3, 3.0), и
+    # берег, который был выше уреза на 10 м, СРЕЗАЛСЯ до +3 м. Это уничтожало
+    # настоящий рельеф и роняло землю ниже уреза СОСЕДНЕГО водоёма — отсюда
+    # часть переливов. Берег теперь либо остаётся как есть, либо подтягивается
+    # до уреза плюс BANK_MIN, если он оказался ниже воды.
     bank = (~wmask) & (dist_land <= 1.5)
-    raised = np.clip(orig - near_level, BANK_MIN, BANK_MAX)
-    out[bank] = (near_level + raised)[bank]
+    out[bank] = np.maximum(orig, near_level + BANK_MIN)[bank]
 
     # --- ПРОВЕРКА ЧИСЛАМИ ---
     thick = (level_img - out)[wmask]            # толща воды в каждой клетке

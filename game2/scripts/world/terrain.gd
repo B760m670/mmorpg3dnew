@@ -15,6 +15,9 @@ extends Node3D
 ## по ней физика (heightmap-коллизия), вода и посадка объектов.
 
 const DEM_PATH := "res://assets/dem/gatchina_cm.bin"
+# Запасная текстура на случай пропажи основной: она процедурная и хуже скана,
+# но она ЕСТЬ в репозитории всегда. Белая земля недопустима.
+const FALLBACK_TEX := "res://assets/materials/created/soil_loam_clods/Color.png"
 const DEM_N := 513
 const DEM_STEP := 32.0
 const DEM_HALF := (DEM_N - 1) * DEM_STEP * 0.5   # 8192 м
@@ -338,16 +341,17 @@ func _mip_tex(path: String) -> Texture2D:
 		# редактор их не импортировал. Читаем файл напрямую: для внешних сканов
 		# это единственный способ, не требующий прогона редактора.
 		img = Image.load_from_file(path)
-		if img == null:
-			push_warning("[terrain] нет текстуры %s" % path)
+	if img == null or img.get_width() < 8:
+		# ЗАПАСНОЙ ПУТЬ. Пропавшая текстура НИКОГДА не должна давать белое:
+		# пустой сэмплер в Godot читается как белый, и вся земля превращается
+		# в засвеченную плоскость — именно это и случилось на телефоне, когда
+		# библиотека не попала в сборку. Лучше старая процедурная текстура,
+		# чем белизна: её видно как «похуже», а не как сломанную игру.
+		push_warning("[terrain] НЕТ ТЕКСТУРЫ %s — беру запасную" % path)
+		var fb := Image.load_from_file(FALLBACK_TEX)
+		if fb == null:
 			return null
-	if img == null:
-		return res
-	# ЗАМЕР, а не вера: пустая картинка грузится «без ошибки» и даёт ровную
-	# заливку — именно так поверхность и стала плоской. Печатаем размер.
-	if img.get_width() < 8 or img.get_height() < 8:
-		push_warning("[terrain] ПУСТАЯ текстура %s (%dx%d)"
-			% [path, img.get_width(), img.get_height()])
+		img = fb
 	else:
 		print("[terrain] текстура %s: %dx%d %s"
 			% [path.get_file(), img.get_width(), img.get_height(), img.get_format()])
@@ -393,14 +397,19 @@ func _ground_material() -> ShaderMaterial:
 	# ВАЖНО: мип-карты генерим В КОДЕ. Без .import-файлов дефолт может НЕ создать
 	# мип-уровни → на дистанции текстура алиасит («зерно»). _mip_tex гарантирует
 	# мип-карты; анизотропию даёт хинт сэмплера в шейдере.
-	const M := "res://assets/materials/"
-	m.set_shader_parameter("soil_c", _mip_tex(M + "Ground037/Ground037_2K-PNG_Color.png"))
-	m.set_shader_parameter("soil_dry_c", _mip_tex(M + "Ground023/Ground023_2K-PNG_Color.png"))
-	m.set_shader_parameter("soil_wet_c", _mip_tex(M + "Ground024/Ground024_2K-PNG_Color.png"))
-	m.set_shader_parameter("soil_n", _mip_tex(M + "Ground037/Ground037_2K-PNG_NormalGL.png"))
-	m.set_shader_parameter("soil_r", _mip_tex(M + "Ground037/Ground037_2K-PNG_Roughness.png"))
-	m.set_shader_parameter("soil_ao", _mip_tex(M + "Ground037/Ground037_2K-PNG_AmbientOcclusion.png"))
-	m.set_shader_parameter("soil_h", _mip_tex(M + "Ground037/Ground037_2K-PNG_Displacement.png"))
+	# ПУТЬ — в materials_game: это сжатая версия, которая ЕДЕТ В СБОРКУ
+	# (tools/pack_materials.py). Исходники 2K-PNG весят 900 МБ и в репозиторий
+	# не кладутся; однажды я их оттуда убрал, и сборка на телефоне осталась
+	# без текстур земли — земля стала БЕЛОЙ. Ассет, нужный игре, обязан лежать
+	# в репозитории.
+	const M := "res://assets/materials_game/"
+	m.set_shader_parameter("soil_c", _mip_tex(M + "Ground037/Color.jpg"))
+	m.set_shader_parameter("soil_dry_c", _mip_tex(M + "Ground023/Color.jpg"))
+	m.set_shader_parameter("soil_wet_c", _mip_tex(M + "Ground024/Color.jpg"))
+	m.set_shader_parameter("soil_n", _mip_tex(M + "Ground037/NormalGL.png"))
+	m.set_shader_parameter("soil_r", _mip_tex(M + "Ground037/Roughness.jpg"))
+	m.set_shader_parameter("soil_ao", _mip_tex(M + "Ground037/AmbientOcclusion.jpg"))
+	m.set_shader_parameter("soil_h", _mip_tex(M + "Ground037/Displacement.jpg"))
 	_setup_slice(m)
 	_setup_moisture(m)
 	return m

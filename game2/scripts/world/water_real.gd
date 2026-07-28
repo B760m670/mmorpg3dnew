@@ -176,9 +176,22 @@ func _build_body(ring: Array, is_river: bool) -> void:
 	var w := pts[0].distance_to(pts[pts.size() / 2])
 	if w > _biggest_w:
 		_biggest_w = w
-		var gh := terrain.height(cen.x, cen.y) if terrain != null else 0.0
-		_biggest = "[water] самый большой: центр (%.0f, %.0f), урез %.2f м, дно %.2f м, ТОЛЩА %.2f м, △=%d, обход %s" \
-			% [cen.x, cen.y, level, gh, level - gh, idx.size() / 3,
+		# ТОЛЩУ меряем не в центре ГАБАРИТА (у извилистого озера там суша и
+		# замер врёт отрицательным числом), а по точкам, которые ТОЧНО в воде:
+		# вершины, сдвинутые внутрь, и только там, где растр подтверждает воду.
+		var th := PackedFloat32Array()
+		for p3 in pts:
+			var q3 := p3.lerp(cen, 0.35)
+			if not is_nan(level_at(q3.x, q3.y)):
+				th.append(level - terrain.height(q3.x, q3.y))
+		var tmin := 0.0
+		var tmax := 0.0
+		if not th.is_empty():
+			th.sort()
+			tmin = th[0]
+			tmax = th[th.size() - 1]
+		_biggest = "[water] самый большой: центр (%.0f, %.0f), урез %.2f м, толща %.2f..%.2f м, △=%d, обход %s" \
+			% [cen.x, cen.y, level, tmin, tmax, idx.size() / 3,
 			"CCW→развёрнут" if area2 > 0.0 else "CW"]
 
 ## РЕКА-линия: узкая лента по настоящей оси, течёт по flow map
