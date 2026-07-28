@@ -55,10 +55,10 @@ uniform float detail_tile_m = 2.0;
 // В её границах земля красится богатым набором (газон/роща/лес/аллея/плац/
 // берег/мостовая) поверх грубой зоны — «земля везде разная».
 // метровые высоты парка (абсолютные метры; park_ref — ноль мира)
-uniform sampler2D park_tex : filter_linear, repeat_disable;
+uniform sampler2D park_tex : filter_linear_mipmap, repeat_disable;
 uniform vec2 park_center = vec2(0.0, 400.0);
 uniform float park_half = 0.0;                   // 0 → метровых высот нет
-uniform float park_ref = 0.0;
+uniform float park_ref = 0.0;   // не используется в высоте: поле уже хранит её от нуля мира
 
 uniform sampler2D slice_tex : filter_nearest, repeat_disable;
 uniform vec2 slice_center = vec2(0.0, 400.0);   // данные: восток, север
@@ -116,7 +116,12 @@ void vertex() {
 		if (puv.x > 0.0 && puv.x < 1.0 && puv.y > 0.0 && puv.y < 1.0) {
 			vec2 e = min(puv, vec2(1.0) - puv);
 			float k = smoothstep(0.0, 60.0 / (2.0 * park_half), min(e.x, e.y));
-			h = mix(h, texture(park_tex, puv).r - park_ref, k);
+			// МИП ПО РАЗМЕРУ ЯЧЕЙКИ КОЛЬЦА. Поле метровое, а ячейка кольца
+			// доходит до 128 м: без выбора мип-уровня дальнее кольцо хватает
+			// случайные отдельные точки и чаши прудов рвутся в зубцы.
+			// Уровень: ячейка = 2*2^clip_level метров, тексел поля = 1 м.
+			float plod = clip_level + 1.0;
+			h = mix(h, textureLod(park_tex, puv, plod).r, k);
 		}
 	}
 	bool skirt = VERTEX.y < -500.0;      // маркер вершин-юбок
@@ -461,7 +466,7 @@ void fragment() {
 	spec = mix(spec, 0.12, wetv);                    // слабый влажный отлив, не блик
 
 	// спрессованная почва в следе темнее (просадка от нагрузки)
-	col2 *= mix(1.0, 0.7, v_deform);
+	col2 *= mix(1.0, 0.88, v_deform);   // след виден, но это след, а не чёрное пятно
 
 	// SVF гасит рассеянный свет неба (не прямой солнечный) — как в природе
 	if (skyview_on > 0.5) {

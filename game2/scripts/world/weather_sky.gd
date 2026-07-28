@@ -19,7 +19,11 @@ static func apply_sky(sm: PhysicalSkyMaterial, oc: float) -> void:
 	sm.mie_eccentricity = lerpf(0.80, 0.55, oc)
 	sm.mie_color = Color(0.69, 0.80, 0.92).lerp(Color(0.86, 0.88, 0.90), oc)
 	sm.turbidity = lerpf(2.5, 10.0, oc)
-	sm.sun_disk_scale = lerpf(1.0, 0.0, oc)          # диск гаснет за облачностью
+	# ДИСК СОЛНЦА НАСТОЯЩЕГО РАЗМЕРА. Godot берёт видимый размер диска как
+	# угол света × sun_disk_scale. Свету мы даём НАМЕРЕННО МАЛЫЙ угол (0.20°),
+	# чтобы тень была собранной и не дрожала, поэтому здесь домножаем обратно:
+	# 0.53 / 0.20 = 2.65 — и в небе снова настоящие 0.53°.
+	sm.sun_disk_scale = lerpf(2.65, 0.0, oc)         # диск гаснет за облачностью
 	sm.energy_multiplier = lerpf(1.0, 1.5, oc)
 	sm.ground_color = Color(0.30, 0.30, 0.31)
 
