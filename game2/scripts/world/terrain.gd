@@ -282,6 +282,15 @@ func _setup_soil_horizons(m: ShaderMaterial) -> void:
 	m.set_shader_parameter("hz_dry", dry)
 	m.set_shader_parameter("hz_wet", wet)
 	m.set_shader_parameter("hz_rough", rough)
+	# ПОЛЕ ДРЕНАЖА: где вода застаивается (ложбины + водоупор), а где уходит.
+	# Считано из настоящих скоростей впитывания слоёв (k_sat) и рельефа.
+	var df := FileAccess.open("res://assets/dem/soil_drain.bin", FileAccess.READ)
+	if df != null:
+		var db := df.get_buffer(SOIL_HZ_N * SOIL_HZ_N)
+		if db.size() == SOIL_HZ_N * SOIL_HZ_N:
+			var dimg := Image.create_from_data(SOIL_HZ_N, SOIL_HZ_N, false, Image.FORMAT_R8, db)
+			m.set_shader_parameter("drain_tex", ImageTexture.create_from_image(dimg))
+			m.set_shader_parameter("drain_on", 1.0)
 	m.set_shader_parameter("soil_hz_on", 1.0)
 	print("[terrain] горизонты почвы: %d слоёв, карта %d² (катена+покров)" % [
 		dry.size(), SOIL_HZ_N])

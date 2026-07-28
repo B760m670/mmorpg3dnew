@@ -30,6 +30,7 @@ DEM = os.path.join(ROOT, "game2/assets/dem/gatchina_cm.bin")
 PROFILE = os.path.join(ROOT, "game2/data/real/soil_profile.json")
 OUT_H = os.path.join(ROOT, "game2/assets/dem/soil_horizons.bin")
 OUT_CUT = os.path.join(ROOT, "game2/assets/dem/soil_cut_cm.bin")
+OUT_WET = os.path.join(ROOT, "game2/assets/dem/soil_drain.bin")
 META = os.path.join(ROOT, "game2/assets/dem/meta_soil.json")
 
 DEM_N = 513
@@ -233,6 +234,20 @@ def main():
     else:
         print("  OK: в ложбинах срез %.2f м против %.2f м в среднем (намыв гумуса)" % (
             cut[wet].mean(), cut.mean()))
+
+    # ПОЛЕ ДРЕНАЖА (для влаги/луж): куда стекает и где стоит вода.
+    # twi — топографический индекс влажности (высокий = ложбина, вода копится),
+    # k_sat поверхностного слоя — как быстро впитывает (глина держит, песок пьёт).
+    ksat = np.array([h["k_sat"] for h in hz])
+    surf_k = ksat[idx]
+    # 0 = сухо/дренирует, 255 = мокро/застаивается
+    twi_n = np.clip((twi - np.percentile(twi, 5)) /
+                    (np.percentile(twi, 98) - np.percentile(twi, 5) + 1e-9), 0, 1)
+    slow = np.clip((np.log10(1e-3) - np.log10(surf_k)) / 6.0, 0, 1)   # медленно впитывает
+    wetf = np.clip(0.65 * twi_n + 0.35 * slow, 0, 1)
+    (wetf * 255).astype(np.uint8).tofile(OUT_WET)
+    print("  поле дренажа: ложбины+водоупор -> %s (средн %.2f)" % (
+        os.path.basename(OUT_WET), wetf.mean()))
 
     idx.astype(np.uint8).tofile(OUT_H)
     np.clip(cut * 100.0, -32000, 32000).astype("<i2").tofile(OUT_CUT)

@@ -279,7 +279,8 @@ func _build_sun() -> void:
 # --- ОБЛАКА: объёмный слой (raymarch), движется ветром; покрытие ∝ пасмурности ---
 var _clouds: Clouds
 var _sky_mat: PhysicalSkyMaterial          # небо, ведомое погодой (WeatherSky)
-var _weather_oc: float = -1.0              # кэш пасмурности (обновляем небо при изменении)
+var _weather_oc: float = -1.0
+var _soil_wet: float = 0.25          # влага земли (идёт за погодой, медленно)
 
 ## --- НОЧНОЕ НЕБО: настоящие звёзды (каталог) + Луна (орбита+фаза) ---
 var _night_sky: NightSky
@@ -308,6 +309,12 @@ func _update_weather() -> void:
 		return
 	var oc := WeatherSky.overcast_from_coverage(_clouds.current_coverage)
 	_clock.overcast = oc                          # пасмурность гасит/сереет прямой свет
+	# ВЛАГА ЗЕМЛИ идёт за погодой: под плотной облачностью (дожди) земля сырая,
+	# в ясную — сохнет. Меняется медленно: почва не сохнет мгновенно.
+	var target_wet := clampf((oc - 0.35) / 0.5, 0.0, 1.0)
+	_soil_wet = lerpf(_soil_wet, target_wet, 0.02)
+	if _terrain != null and _terrain.ground_mat != null:
+		_terrain.ground_mat.set_shader_parameter("soil_wetness", _soil_wet)
 	if absf(oc - _weather_oc) > 0.01:             # небо/экспозицию — при заметном изменении
 		_weather_oc = oc
 		if _sky_mat != null:

@@ -22,6 +22,13 @@ uniform vec4 hz_dry[7];
 uniform vec4 hz_wet[7];
 uniform float hz_rough[7];
 
+// ВЛАГА: поле дренажа (где вода застаивается — ложбины и водоупорная глина;
+// где уходит — песок на бугре). Считано из настоящих k_sat слоёв и рельефа.
+// soil_wetness ведёт погода: дождь копит, сушь убирает.
+uniform sampler2D drain_tex : filter_linear, repeat_disable;
+uniform float drain_on = 0.0;
+uniform float soil_wetness = 0.25;   // 0 сушь .. 1 после ливня
+
 // ОСНОВА ЗЕМЛИ = РЕАЛЬНАЯ ПОЧВА из ФОТО местной почвы Гатчины, СТРУКТУРНО (набор
 // по полю): база — влажный серо-бурый суглинок (soil_c=loam), в низинах —
 // плодородный тёмный гумус (soil_wet_c=fertile), на сухих пятнах — растрескавшаяся
@@ -295,7 +302,16 @@ void fragment() {
 
 	// СТРУКТУРНО ПО ПОЛЮ: низины (wet) → плодородный тёмный; сухие пятна (шум,
 	// не в низине, не на склоне) → растрескавшаяся светлая; иначе — суглинок-база.
-	float wetf = clamp(wet * 1.4, 0.0, 1.0);
+	// ВЛАЖНОСТЬ ЗЕМЛИ = погода x способность места держать воду. В ложбине и на
+	// глине после дождя сыро долго, на песчаном бугре сохнет сразу — это не
+	// «нарисованные пятна», а следствие рельефа и водопроницаемости слоёв.
+	float drain_hold = 0.5;
+	if (drain_on > 0.5) {
+		vec2 duv2 = clamp((v_wpos.xz + vec2(dem_half)) / (2.0 * dem_half), 0.0, 1.0);
+		drain_hold = texture(drain_tex, duv2).r;
+	}
+	float weather_wet = clamp(soil_wetness * (0.35 + 1.3 * drain_hold), 0.0, 1.0);
+	float wetf = clamp(max(wet * 1.4, weather_wet), 0.0, 1.0);
 	float dryf = clamp(smoothstep(0.58, 0.85, vnoise(v_wpos.xz * 0.03))
 		* (1.0 - wetf) - slope * 0.5, 0.0, 1.0) * 0.45;
 
