@@ -21,6 +21,7 @@
 """
 import argparse
 import os
+import re
 import shutil
 
 from PIL import Image
@@ -41,6 +42,36 @@ def role_of(name):
     return None
 
 
+def used_by_game():
+    """Что игра ДЕЙСТВИТЕЛЬНО просит — вычитано из кода, а не из списка.
+
+    ЗАЧЕМ. Сначала я положил в сборку всю библиотеку: 24 материала, 120 карт,
+    85 МБ. Игра при этом обращалась к СЕМИ файлам. Остальные 113 ехали к
+    пользователю на телефон впустую и удлиняли каждую переустановку — а
+    переустановка тут полная, у неподписанных IPA частичных обновлений нет.
+
+    Список составляется разбором исходников: ищем строки вида
+    "Ground037/NormalGL.png" рядом с путём materials_game. Тогда он не может
+    разойтись с кодом — добавил материал в шейдер, он сам попал в сборку.
+    """
+    pat = re.compile(r'"([A-Za-z0-9_]+)/([A-Za-z]+)\.(?:jpg|png)"')
+    used = {}
+    for root, _, files in os.walk(os.path.join(ROOT, "game2")):
+        for f in files:
+            if not f.endswith((".gd", ".gdshader")):
+                continue
+            p = os.path.join(root, f)
+            try:
+                txt = open(p, encoding="utf-8").read()
+            except Exception:
+                continue
+            if "materials_game" not in txt:
+                continue
+            for mat, role in pat.findall(txt):
+                used.setdefault(mat, set()).add(role)
+    return used
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--res", type=int, default=1024)
@@ -51,18 +82,23 @@ def main():
         shutil.rmtree(DST)
     os.makedirs(DST, exist_ok=True)
 
+    used = used_by_game()
     total_src = total_dst = 0
     n_mat = n_map = 0
     print("== СЖАТИЕ МАТЕРИАЛОВ ДЛЯ СБОРКИ ==")
+    print("код просит %d материалов, %d карт (остальное в сборку НЕ едет)"
+          % (len(used), sum(len(v) for v in used.values())))
     for mat in sorted(os.listdir(SRC)):
         d = os.path.join(SRC, mat)
         if not os.path.isdir(d) or mat in ("created", "real"):
+            continue
+        if mat not in used:
             continue
         out = os.path.join(DST, mat)
         got = []
         for f in sorted(os.listdir(d)):
             r = role_of(f)
-            if r is None:
+            if r is None or r not in used[mat]:
                 continue
             p = os.path.join(d, f)
             total_src += os.path.getsize(p)

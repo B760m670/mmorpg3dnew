@@ -17,7 +17,7 @@ extends Node3D
 const DEM_PATH := "res://assets/dem/gatchina_cm.bin"
 # Запасная текстура на случай пропажи основной: она процедурная и хуже скана,
 # но она ЕСТЬ в репозитории всегда. Белая земля недопустима.
-const FALLBACK_TEX := "res://assets/materials/created/soil_loam_clods/Color.png"
+const FALLBACK_TEX := "res://assets/materials_game/fallback.jpg"
 const DEM_N := 513
 const DEM_STEP := 32.0
 const DEM_HALF := (DEM_N - 1) * DEM_STEP * 0.5   # 8192 м
