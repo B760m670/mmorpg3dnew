@@ -113,6 +113,8 @@ func _ready() -> void:
 		var r: Dictionary = _soil.report()
 		print("[soil] ВЫКОПАНО: %.2f м3 (с разрыхлением), глубина %.2f м, окно %.0f м, ячейка %.2f м"
 			% [vol, r["deepest_m"], r["window_m"], r["cell_m"]])
+		print("[soil] ЗАМЕР GDScript: осыпание %.1f мс, геометрия %.1f мс, ячеек %d"
+			% [r["collapse_ms"], r["mesh_ms"], r["cells"]])
 
 	if "--boot-shot" in args or inspect:
 		var out_path := _arg_val(args, "--out")

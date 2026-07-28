@@ -29,6 +29,8 @@ var _center := Vector2.ZERO       # центр окна в мире (x, z)
 var _surf := PackedFloat32Array() # текущая поверхность (просадка от исходной), м
 var _cut := PackedFloat32Array()  # срез профиля в этой точке (катена), м
 var _dirty := false
+var last_collapse_ms: float = 0.0   # замер решателя осыпания
+var last_mesh_ms: float = 0.0       # замер построения геометрии
 
 var _mesh_inst: MeshInstance3D
 var _mat: ShaderMaterial
@@ -121,8 +123,15 @@ func dig(world_x: float, world_z: float, r_m: float, depth_m: float) -> float:
 			moved += (want - cur) * cell_area
 			_surf[i] = want
 	if moved > 0.0:
+		# ЗАМЕР: решатель осыпания — самый тяжёлый цикл. Числа решают, нужен ли
+		# перенос в C++/GPU-compute (в AAA это делают компьют-шейдером).
+		var t0 := Time.get_ticks_usec()
 		_collapse()
-		_dirty = true
+		last_collapse_ms = float(Time.get_ticks_usec() - t0) / 1000.0
+		var t1 := Time.get_ticks_usec()
+		_rebuild_mesh()
+		last_mesh_ms = float(Time.get_ticks_usec() - t1) / 1000.0
+		_dirty = false
 	# РАЗРЫХЛЕНИЕ: вынутый грунт занимает больше места, чем в массиве
 	return moved * 1.25
 
@@ -137,22 +146,32 @@ func _collapse() -> void:
 		Vector3(1, 1, sqrt(2.0)), Vector3(1, -1, sqrt(2.0)),
 		Vector3(-1, 1, sqrt(2.0)), Vector3(-1, -1, sqrt(2.0)),
 	]
+	# ОПТИМИЗАЦИЯ горячего цикла: тангенсы углов откоса считаем ОДИН раз, горизонт
+	# каждой ячейки — один раз за проход (а не 8 раз, по разу на направление).
+	# Замер до: 2775 мс на одно копание (игра замирала на 3 с).
+	var tan_rep := PackedFloat32Array()
+	for h in profile:
+		tan_rep.append(tan(deg_to_rad(float(h["repose_deg"]))))
+	var lim_cell := PackedFloat32Array()
+	lim_cell.resize(N * N)
 	for pass_i in 24:
+		for i in range(N * N):
+			lim_cell[i] = tan_rep[horizon_at(_surf[i], _cut[i])] * CELL_M
 		var moved := false
 		for d in dirs:
 			var ox := int(d.x)
 			var oy := int(d.y)
+			var step := oy * N + ox
+			var dist: float = d.z
 			for iy in range(1, N - 1):
+				var row := iy * N
 				for ix in range(1, N - 1):
-					var i := _idx(ix, iy)
-					var j := _idx(ix + ox, iy + oy)
-					var hz := horizon_at(_surf[i], _cut[i])
-					var lim: float = tan(deg_to_rad(repose_of(hz))) * d.z * CELL_M
-					var excess := (_surf[i] - _surf[j]) - lim
+					var i := row + ix
+					var excess := (_surf[i] - _surf[i + step]) - lim_cell[i] * dist
 					if excess > 0.0:
 						var give := excess * 0.4
 						_surf[i] -= give
-						_surf[j] += give
+						_surf[i + step] += give
 						moved = true
 		if not moved:
 			break
@@ -220,4 +239,5 @@ func report() -> Dictionary:
 	for v in _surf:
 		dug += v * CELL_M * CELL_M
 		deepest = maxf(deepest, v)
-	return {"volume_m3": dug, "deepest_m": deepest, "window_m": WINDOW_M, "cell_m": CELL_M}
+	return {"volume_m3": dug, "deepest_m": deepest, "window_m": WINDOW_M, "cell_m": CELL_M,
+		"collapse_ms": last_collapse_ms, "mesh_ms": last_mesh_ms, "cells": N * N}
