@@ -553,26 +553,61 @@ func _setup_slice(m: ShaderMaterial) -> void:
 
 # ------------------------------------------------------------------ физика
 ## рельеф — твёрдое тело: heightmap по той же height()
+# --- КОЛЛИЗИЯ, СЛЕДУЮЩАЯ ЗА ИГРОКОМ ---
+# Раньше здесь была ОДНА сетка на весь мир с ячейкой 32 м. Пока земля тоже была
+# 32-метровой, это сходилось. Как только у парка появились метровые высоты,
+# «то, что видно» и «то, по чему ходишь» разъехались: ИЗМЕРЕНО расхождение до
+# 2.11 м. Игрок оказывался НИЖЕ видимой земли — камера уходила внутрь грунта, и
+# низ кадра становился чернотой изнутри рельефа.
+#
+# Мелкая сетка на весь мир невозможна: 12.3 км с шагом 2 м — это 37 млн высот.
+# Поэтому коллизия теперь ЛОКАЛЬНАЯ и едет за игроком. Вне неё физика не нужна:
+# там игрок либо летит, либо его нет.
+const COL_HALF := 96.0         # м: полупролёт заплатки вокруг игрока
+const COL_CELL := 2.0          # м: тот же шаг, что у самой мелкой сетки земли
+const COL_MOVE := 24.0         # м: насколько отойти, чтобы пересобрать
+
+var _col_shape: HeightMapShape3D
+var _col_body: StaticBody3D
+var _col_center := Vector3(1e9, 0, 1e9)
+var last_collision_ms := 0.0
+
 func build_collision() -> void:
-	var n := collision_res + 1
-	var cell := world_size_m / float(collision_res)
-	var heights := PackedFloat32Array()
-	heights.resize(n * n)
-	var half := world_size_m * 0.5
-	for j in range(n):
-		for i in range(n):
-			heights[j * n + i] = height(-half + i * cell, -half + j * cell)
-	var shape := HeightMapShape3D.new()
-	shape.map_width = n
-	shape.map_depth = n
-	shape.map_data = heights
+	_col_shape = HeightMapShape3D.new()
 	var cs := CollisionShape3D.new()
-	cs.shape = shape
-	cs.scale = Vector3(cell, 1.0, cell)
-	var body := StaticBody3D.new()
-	body.add_child(cs)
-	add_child(body)
-	print("[terrain] коллизия: heightmap %d² (ячейка %.0f м) — рельеф твёрдый" % [n, cell])
+	cs.shape = _col_shape
+	cs.scale = Vector3(COL_CELL, 1.0, COL_CELL)
+	_col_body = StaticBody3D.new()
+	_col_body.add_child(cs)
+	add_child(_col_body)
+	update_collision(Vector3.ZERO)
+	print("[terrain] коллизия: заплатка ±%.0f м, ячейка %.0f м (едет за игроком) — "
+		% [COL_HALF, COL_CELL],
+		"собрана за %.1f мс" % last_collision_ms)
+
+## Пересобрать заплатку вокруг точки, если игрок ушёл достаточно далеко.
+func update_collision(pos: Vector3) -> void:
+	if _col_shape == null:
+		return
+	if absf(pos.x - _col_center.x) < COL_MOVE and absf(pos.z - _col_center.z) < COL_MOVE:
+		return
+	var t0 := Time.get_ticks_usec()
+	# снап к шагу ячейки: иначе поверхность «дрожит» при каждой пересборке
+	var cx := snappedf(pos.x, COL_CELL)
+	var cz := snappedf(pos.z, COL_CELL)
+	var n := int(COL_HALF * 2.0 / COL_CELL) + 1
+	var h := PackedFloat32Array()
+	h.resize(n * n)
+	for j in range(n):
+		var z := cz - COL_HALF + float(j) * COL_CELL
+		for i in range(n):
+			h[j * n + i] = height(cx - COL_HALF + float(i) * COL_CELL, z)
+	_col_shape.map_width = n
+	_col_shape.map_depth = n
+	_col_shape.map_data = h
+	_col_body.global_position = Vector3(cx, 0.0, cz)
+	_col_center = Vector3(cx, 0.0, cz)
+	last_collision_ms = float(Time.get_ticks_usec() - t0) / 1000.0
 
 func report() -> Dictionary:
 	return {"size_m": DEM_HALF * 2.0, "relief_m": max_h - min_h,

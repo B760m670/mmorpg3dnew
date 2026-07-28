@@ -708,6 +708,12 @@ func _process(_delta: float) -> void:
 		_post_mat.set_shader_parameter("t", float(Time.get_ticks_msec()) / 1000.0)
 	_update_weather()
 	_update_fog_altitude()
+	# КОЛЛИЗИЯ ЕДЕТ ЗА НАБЛЮДАТЕЛЕМ. Без этого твёрдая земля остаётся там, где
+	# игрок был при запуске, и он проваливается сквозь видимый рельеф.
+	if _terrain != null:
+		var who := _walker.global_position if _walk_active and _walker != null \
+			else (_cam.global_position if _cam != null else Vector3.ZERO)
+		_terrain.update_collision(who)
 	_update_hud()
 	_update_compass()
 
