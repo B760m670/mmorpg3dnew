@@ -397,7 +397,15 @@ func soil_cut_at(wx: float, wz: float) -> float:
 		return 0.0
 	return float(_soil_cut.decode_s16((j * SOIL_HZ_N + i) * 2)) / 100.0
 
-func _mip_tex(path: String) -> Texture2D:
+## is_color=true — файл хранит ЦВЕТ в sRGB и его надо перевести в линейное.
+## ИЗМЕРЕНО, почему это важно: Godot переводит sRGB->линейное только для
+## ИМПОРТИРОВАННЫХ текстур. Мы читаем файлы напрямую (иначе движок их не видит),
+## и перевода не происходило: шейдер брал sRGB-значения как линейные. Замер
+## режимом «без освещения»: альбедо на выходе 0.445 при 0.208 в самой текстуре —
+## земля светлее правды более чем вдвое. Отсюда и «днём белеет».
+## Карты нормали/шероховатости/высоты/затенения — НЕ цвет, они уже линейные,
+## их переводить нельзя.
+func _mip_tex(path: String, is_color: bool = false) -> Texture2D:
 	var img: Image = null
 	var res := load(path)
 	if res is Texture2D:
@@ -422,6 +430,8 @@ func _mip_tex(path: String) -> Texture2D:
 	else:
 		print("[terrain] текстура %s: %dx%d %s"
 			% [path.get_file(), img.get_width(), img.get_height(), img.get_format()])
+	if is_color:
+		img.srgb_to_linear()
 	if not img.has_mipmaps():
 		img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
@@ -470,9 +480,9 @@ func _ground_material() -> ShaderMaterial:
 	# без текстур земли — земля стала БЕЛОЙ. Ассет, нужный игре, обязан лежать
 	# в репозитории.
 	const M := "res://assets/materials_game/"
-	m.set_shader_parameter("soil_c", _mip_tex(M + "Ground037/Color.jpg"))
-	m.set_shader_parameter("soil_dry_c", _mip_tex(M + "Ground023/Color.jpg"))
-	m.set_shader_parameter("soil_wet_c", _mip_tex(M + "Ground024/Color.jpg"))
+	m.set_shader_parameter("soil_c", _mip_tex(M + "Ground037/Color.jpg", true))
+	m.set_shader_parameter("soil_dry_c", _mip_tex(M + "Ground023/Color.jpg", true))
+	m.set_shader_parameter("soil_wet_c", _mip_tex(M + "Ground024/Color.jpg", true))
 	m.set_shader_parameter("soil_n", _mip_tex(M + "Ground037/NormalGL.png"))
 	m.set_shader_parameter("soil_r", _mip_tex(M + "Ground037/Roughness.jpg"))
 	m.set_shader_parameter("soil_ao", _mip_tex(M + "Ground037/AmbientOcclusion.jpg"))

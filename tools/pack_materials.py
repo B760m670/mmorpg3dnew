@@ -24,6 +24,7 @@ import os
 import re
 import shutil
 
+import numpy as np
 from PIL import Image
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -33,6 +34,57 @@ DST = os.path.join(ROOT, "game2", "assets", "materials_game")
 # какая карта чем становится
 AS_PNG = ("NormalGL",)
 KEEP = ("Color", "NormalGL", "Roughness", "AmbientOcclusion", "Displacement")
+
+# --- КАЛИБРОВКА АЛЬБЕДО ---
+# ЗАЧЕМ. Альбедо — доля отражённого света, величина ИЗМЕРИМАЯ. Фотоснимок ею не
+# является: у него нормализованная выдержка, и как альбедо он почти всегда
+# завышен. ИЗМЕРЕНО на нашей основной текстуре: яркость 0.298 — это альбедо
+# СУХОГО ПЕСКА (0.30-0.40), а не травы по земле (0.18-0.25). Отсюда и жалоба
+# «днём земля белеет, как будто отражает солнце»: она буквально отражала
+# столько, сколько отражает песок.
+#
+# Справочные значения (доля отражённого света):
+#   влажная почва        0.05-0.10      зелёная трава     0.18-0.25
+#   сухая тёмная почва   0.10-0.15      сухая трава       0.25-0.30
+#   сухая светлая почва  0.15-0.25      песок сухой       0.30-0.40
+#
+# Приводим яркость каждой текстуры к её настоящему значению, СОХРАНЯЯ оттенок:
+# множитель один на все каналы, цвет снимка не выдумывается.
+ALBEDO_TARGET = {
+    "Ground037": 0.21,   # трава по влажной земле, июнь
+    "Ground023": 0.13,   # сухая бурая земля с листвой
+    "Ground024": 0.09,   # сырая лесная подстилка со мхом
+    "Ground020": 0.10,
+    "Ground030": 0.18,
+    "Ground062S": 0.20,  # песчано-гравийная дорожка
+    "Moss001": 0.12,
+    "Bricks038": 0.18, "Bricks084": 0.28, "Bricks090": 0.18,
+    "Bricks085": 0.18, "Bricks100": 0.26,
+    "PavingStones138": 0.22, "PavingStones139": 0.20,
+    "Rock046L": 0.18, "Rock064": 0.16, "Rocks025": 0.18,
+    "PaintedPlaster006": 0.30, "PaintedPlaster018": 0.30, "Concrete040": 0.25,
+}
+
+
+def to_linear(a):
+    return np.where(a <= 0.04045, a / 12.92, ((a + 0.055) / 1.055) ** 2.4)
+
+
+def to_srgb(a):
+    return np.where(a <= 0.0031308, a * 12.92, 1.055 * np.power(a, 1 / 2.4) - 0.055)
+
+
+def calibrate(im, target):
+    """Привести альбедо к измеренному значению, не трогая оттенок."""
+    a = np.asarray(im, np.float32) / 255.0
+    lin = to_linear(a)
+    lum = 0.2126 * lin[..., 0] + 0.7152 * lin[..., 1] + 0.0722 * lin[..., 2]
+    cur = float(lum.mean())
+    if cur <= 1e-6:
+        return im, cur, cur
+    k = target / cur
+    out = np.clip(to_srgb(np.clip(lin * k, 0.0, 1.0)) * 255.0, 0, 255)
+    return Image.fromarray(out.astype(np.uint8)), cur, target
 
 
 def role_of(name):
@@ -96,6 +148,7 @@ def main():
             continue
         out = os.path.join(DST, mat)
         got = []
+        note = []
         for f in sorted(os.listdir(d)):
             r = role_of(f)
             if r is None or r not in used[mat]:
@@ -113,6 +166,9 @@ def main():
             else:
                 # цвет в RGB, служебные карты в градациях серого — вчетверо легче
                 im = im.convert("RGB" if r == "Color" else "L")
+                if r == "Color" and mat in ALBEDO_TARGET:
+                    im, was, now = calibrate(im, ALBEDO_TARGET[mat])
+                    note.append("альбедо %.3f -> %.3f" % (was, now))
                 q = os.path.join(out, "%s.jpg" % r)
                 im.save(q, quality=args.quality, optimize=True, subsampling=0)
             total_dst += os.path.getsize(q)
@@ -120,7 +176,7 @@ def main():
             n_map += 1
         if got:
             n_mat += 1
-            print("  %-18s %s" % (mat, ", ".join(got)))
+            print("  %-18s %-46s %s" % (mat, ", ".join(got), "; ".join(note)))
 
     print("\nматериалов %d, карт %d" % (n_mat, n_map))
     print("было %.0f МБ  ->  стало %.1f МБ  (в %.0f раз легче)"
