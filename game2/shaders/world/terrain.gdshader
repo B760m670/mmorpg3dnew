@@ -135,6 +135,51 @@ vec3 hblend(vec3 ca, float ha, vec3 cb, float hb, float w) {
 	return (ca * wa + cb * wb) / max(wa + wb, 1e-5);
 }
 
+// СТОХАСТИЧЕСКОЕ (ГЕКСАГОНАЛЬНОЕ) ТАЙЛИРОВАНИЕ — приём современных AAA против
+// «обоев»: глаз ловит повтор текстуры по сетке. Мир режется на ШЕСТИУГОЛЬНИКИ,
+// у каждого свой случайный сдвиг И ПОВОРОТ выборки; три ближайших смешиваются
+// по весам. Регулярной решётки не остаётся — повтор исчезает, а материал тот же.
+// Три выборки заменяют прежний двухчастотный расстрой (он повтор не убирал).
+vec2 hex_center(vec2 p, out vec3 w, out vec2 c1, out vec2 c2) {
+	// косые координаты гекс-сетки
+	const vec2 s = vec2(1.0, 1.7320508);         // 1, sqrt(3)
+	vec2 a = mod(p, s) - s * 0.5;
+	vec2 b = mod(p - s * 0.5, s) - s * 0.5;
+	vec2 gv = dot(a, a) < dot(b, b) ? a : b;
+	vec2 c0 = p - gv;
+	// два соседа для смешения (по знаку смещения внутри ячейки)
+	c1 = c0 + vec2(sign(gv.x) * s.x * 0.5, sign(gv.y) * s.y * 0.5);
+	c2 = c0 + vec2(-sign(gv.x) * s.x * 0.5, sign(gv.y) * s.y * 0.5);
+	float d0 = length(gv);
+	float d1 = length(p - c1);
+	float d2 = length(p - c2);
+	// веса: ближе центр — больше вклад (мягко, чтобы не было швов)
+	w = 1.0 / pow(vec3(d0, d1, d2) + 0.001, vec3(6.0));
+	w /= (w.x + w.y + w.z);
+	return c0;
+}
+
+vec2 hex_uv(vec2 uv, vec2 cell) {
+	// свой сдвиг и ПОВОРОТ на каждый шестиугольник — ломает регулярность
+	float r = fract(sin(dot(cell, vec2(41.7, 289.1))) * 43758.5453);
+	float ang = r * 6.2831853;
+	float ca = cos(ang);
+	float sa = sin(ang);
+	vec2 off = vec2(r, fract(r * 7.13)) * 13.0;
+	return mat2(vec2(ca, -sa), vec2(sa, ca)) * uv + off;
+}
+
+// выборка цвета БЕЗ ПОВТОРА (3 гекс-выборки, смешение по весам)
+vec3 tex_stoch(sampler2D t, vec2 uv) {
+	vec3 w;
+	vec2 c1;
+	vec2 c2;
+	vec2 c0 = hex_center(uv * 0.35, w, c1, c2);   // масштаб гекс-сетки
+	return texture(t, hex_uv(uv, c0)).rgb * w.x
+		+ texture(t, hex_uv(uv, c1)).rgb * w.y
+		+ texture(t, hex_uv(uv, c2)).rgb * w.z;
+}
+
 vec3 zone_tint(int z) {
 	if (z == 1) return vec3(0.150, 0.310, 0.095);   // парк
 	if (z == 2) return vec3(0.080, 0.185, 0.075);   // лес
@@ -231,7 +276,16 @@ void fragment() {
 	tw /= max(tw.x + tw.y + tw.z, 1e-4);
 	float side = 1.0 - tw.y;                     // 0 на ровном, 1 на отвесном
 
-	vec3 c_base = mix(texture(soil_c, uv0).rgb, texture(soil_c, uvb).rgb, 0.35);
+	// БЛИЗКО — стохастическое тайлирование (нет повтора, но 3 выборки);
+	// ДАЛЬШЕ 90 м переходим на обычную выборку: там повтор всё равно не читается,
+	// а лишние выборки едят кадр. Так честно и по виду, и по цене.
+	float near_w = 1.0 - smoothstep(60.0, 90.0, dist);
+	vec3 c_base;
+	if (near_w > 0.01) {
+		c_base = mix(texture(soil_c, uv0).rgb, tex_stoch(soil_c, uv0), near_w);
+	} else {
+		c_base = mix(texture(soil_c, uv0).rgb, texture(soil_c, uvb).rgb, 0.35);
+	}
 	if (side > 0.01) {
 		vec3 cs = texture(soil_c, uv_x).rgb * tw.x + texture(soil_c, uv_z).rgb * tw.z;
 		c_base = mix(c_base, cs / max(tw.x + tw.z, 1e-4), side);
