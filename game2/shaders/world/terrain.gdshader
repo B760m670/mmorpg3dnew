@@ -122,6 +122,19 @@ float vnoise(vec2 p) {
 	return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
+// СМЕШИВАНИЕ ПО ВЫСОТЕ: вместо линейного mix спорят рельефы материалов —
+// выступы одного пробиваются сквозь другой, впадины заполняются. Ширина зоны
+// перехода D: чем меньше, тем резче «зубчатая» граница (как у настоящего грунта).
+vec3 hblend(vec3 ca, float ha, vec3 cb, float hb, float w) {
+	const float D = 0.12;
+	float a = ha + (1.0 - w);
+	float b = hb + w;
+	float m = max(a, b) - D;
+	float wa = max(a - m, 0.0);
+	float wb = max(b - m, 0.0);
+	return (ca * wa + cb * wb) / max(wa + wb, 1e-5);
+}
+
 vec3 zone_tint(int z) {
 	if (z == 1) return vec3(0.150, 0.310, 0.095);   // парк
 	if (z == 2) return vec3(0.080, 0.185, 0.075);   // лес
@@ -206,9 +219,23 @@ void fragment() {
 	// против «плоской заливки» на дали. На всех дистанциях. ---
 	// выборка почвы на ДВУХ частотах тайла — против явного повтора. Зерно на дали
 	// лечится мип-картами + АНИЗОТРОПИЕЙ (в объявлениях сэмплеров), а не шейдером.
+	// ТРИПЛАН на склонах: плоская проекция XZ растягивает материал тем сильнее,
+	// чем круче склон (в 1/cos(наклона) раз). Подмешиваем боковые проекции по
+	// весу нормали — на обрывах и в стенках выемок фактура перестаёт «течь».
 	vec2 uv0 = v_wpos.xz / detail_tile_m;
 	vec2 uvb = v_wpos.xz / (detail_tile_m * 5.7);
+	vec2 uv_x = v_wpos.zy / detail_tile_m;
+	vec2 uv_z = v_wpos.xy / detail_tile_m;
+	vec3 tw = abs(gn);
+	tw = pow(tw, vec3(4.0));
+	tw /= max(tw.x + tw.y + tw.z, 1e-4);
+	float side = 1.0 - tw.y;                     // 0 на ровном, 1 на отвесном
+
 	vec3 c_base = mix(texture(soil_c, uv0).rgb, texture(soil_c, uvb).rgb, 0.35);
+	if (side > 0.01) {
+		vec3 cs = texture(soil_c, uv_x).rgb * tw.x + texture(soil_c, uv_z).rgb * tw.z;
+		c_base = mix(c_base, cs / max(tw.x + tw.z, 1e-4), side);
+	}
 	vec3 c_dry = mix(texture(soil_dry_c, uv0).rgb, texture(soil_dry_c, uvb).rgb, 0.35);
 	vec3 c_wet = mix(texture(soil_wet_c, uv0).rgb, texture(soil_wet_c, uvb).rgb, 0.35);
 
@@ -217,8 +244,17 @@ void fragment() {
 	float wetf = clamp(wet * 1.4, 0.0, 1.0);
 	float dryf = clamp(smoothstep(0.58, 0.85, vnoise(v_wpos.xz * 0.03))
 		* (1.0 - wetf) - slope * 0.5, 0.0, 1.0) * 0.45;
-	vec3 s_alb = mix(c_base, c_wet, wetf);
-	s_alb = mix(s_alb, c_dry, dryf);
+
+	// СМЕШИВАНИЕ ПО ВЫСОТЕ (height-blend) — главный приём AAA вместо линейного
+	// перехода. При обычном mix два материала «растворяются» друг в друге серой
+	// кашей. Здесь спорят их РЕЛЬЕФЫ: где комья базового грунта выше, они
+	// торчат сквозь наносимый слой, а тот заполняет впадины между ними —
+	// как в жизни. hb(): смещаем высоты на вес и берём верхний с узкой зоной.
+	float h_base = texture(soil_h, uv0).r;
+	float h_wet = texture(soil_h, uv0 * 1.31 + vec2(0.37)).r;   // своя фаза — не копия
+	float h_dry = texture(soil_h, uv0 * 0.83 + vec2(0.71)).r;
+	vec3 s_alb = hblend(c_base, h_base, c_wet, h_wet, wetf);
+	s_alb = hblend(s_alb, mix(h_base, h_wet, wetf), c_dry, h_dry, dryf);
 
 	// --- ГОРИЗОНТ ПОЧВЫ: чем земля ЯВЛЯЕТСЯ здесь (не шум, а педология) ---
 	// Индекс обнажённого слоя из карты; его настоящий цвет (сухой/мокрый)
