@@ -39,6 +39,7 @@ var _biggest := ""
 func build() -> void:
 	_load_flow()
 	_load_level()
+	_load_park_water()
 	var f := FileAccess.open(WATER_JSON, FileAccess.READ)
 	if f == null:
 		push_warning("[water] нет данных водоёмов (%s)" % WATER_JSON)
@@ -86,8 +87,42 @@ func _load_level() -> void:
 	if b.size() == GRID_N * GRID_N * 2:
 		_level = b
 
+# Урез в парке — из МЕТРОВОГО растра (tools/build_park_dem.py). Общая сетка
+# 32 м не описывает пруд в 60-200 м: урез из неё выходил выше берега, и гладь
+# висела плитой над землёй. В парке спрашиваем сначала метровую карту.
+const PARK_WATER := "res://assets/dem/park_water_cm.bin"
+var _park_w: PackedByteArray
+
+func _load_park_water() -> void:
+	if terrain == null or terrain.park_n == 0:
+		return
+	var f := FileAccess.open(PARK_WATER, FileAccess.READ)
+	if f == null:
+		return
+	var b := f.get_buffer(terrain.park_n * terrain.park_n * 2)
+	if b.size() == terrain.park_n * terrain.park_n * 2:
+		_park_w = b
+
+func _park_level_at(x: float, z: float) -> float:
+	if _park_w.is_empty():
+		return NAN
+	var n: int = terrain.park_n
+	var i := int(roundf(x - terrain.park_cx + terrain.park_half))
+	var j := int(roundf(terrain.park_cy + terrain.park_half - (-z)))
+	if i < 0 or j < 0 or i >= n or j >= n:
+		return NAN
+	var v := _park_w.decode_s16((j * n + i) * 2)
+	if v == NO_WATER:
+		return NAN
+	return float(v) / 100.0 - terrain.h_ref
+
 ## Урез воды из растра (см → м). Возвращает NAN, если в этой клетке воды нет.
 func level_at(x: float, z: float) -> float:
+	# В ОКНЕ ПАРКА действует ТОЛЬКО метровый растр. Грубый (32 м) там нельзя
+	# спрашивать даже как запасной: его уровни в парке заведомо неверны, и
+	# именно они давали воду на 10 м ниже земли рядом с прудом.
+	if terrain != null and terrain.park_weight(x, z) > 0.0:
+		return _park_level_at(x, z)
 	if _level.is_empty() or terrain == null:
 		return NAN
 	var i := int(roundf((x + HALF_M) / STEP_M))

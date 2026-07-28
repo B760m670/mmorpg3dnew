@@ -54,6 +54,12 @@ uniform float detail_tile_m = 2.0;
 // ВЕРТИКАЛЬНЫЙ СРЕЗ (Дворцовый парк): детальная карта поверхностей 1 м/пкс.
 // В её границах земля красится богатым набором (газон/роща/лес/аллея/плац/
 // берег/мостовая) поверх грубой зоны — «земля везде разная».
+// метровые высоты парка (абсолютные метры; park_ref — ноль мира)
+uniform sampler2D park_tex : filter_linear, repeat_disable;
+uniform vec2 park_center = vec2(0.0, 400.0);
+uniform float park_half = 0.0;                   // 0 → метровых высот нет
+uniform float park_ref = 0.0;
+
 uniform sampler2D slice_tex : filter_nearest, repeat_disable;
 uniform vec2 slice_center = vec2(0.0, 400.0);   // данные: восток, север
 uniform float slice_half = 0.0;                 // 0 → срез выключен
@@ -96,6 +102,23 @@ void vertex() {
 	float h_fine = textureLod(height_tex, huv, lod).r;
 	float h_coarse = textureLod(height_tex, huv, lod + 1.0).r;
 	float h = mix(h_fine, h_coarse, morph);
+
+	// --- ВЫСОТЫ ПАРКА С ШАГОМ 1 МЕТР ---
+	// Общая сетка — 32 м, и пруд в 60-200 м в неё не помещается: урез из неё
+	// вычислить нельзя, гладь вставала выше берега. В окне парка высоту берём
+	// из метровой карты (tools/build_park_dem.py), где чаши прудов вырезаны по
+	// настоящим контурам. К краю окна плавно возвращаемся к общей сетке, иначе
+	// на границе была бы ступенька.
+	if (park_half > 1.0) {
+		vec2 ppos = vec2(w.x, -w.z);                  // данные: восток, север
+		vec2 puv = (ppos - park_center) / (2.0 * park_half) + 0.5;
+		puv.y = 1.0 - puv.y;                          // строка 0 = север
+		if (puv.x > 0.0 && puv.x < 1.0 && puv.y > 0.0 && puv.y < 1.0) {
+			vec2 e = min(puv, vec2(1.0) - puv);
+			float k = smoothstep(0.0, 60.0 / (2.0 * park_half), min(e.x, e.y));
+			h = mix(h, texture(park_tex, puv).r - park_ref, k);
+		}
+	}
 	bool skirt = VERTEX.y < -500.0;      // маркер вершин-юбок
 	VERTEX.y = h - (skirt ? cell * 2.0 + 2.0 : 0.0);
 	v_wpos = vec3(w.x, h, w.z);

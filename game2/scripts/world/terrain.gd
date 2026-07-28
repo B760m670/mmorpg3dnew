@@ -54,6 +54,7 @@ func _init() -> void:
 	_ridge.frequency = 0.02
 	_ridge.fractal_octaves = 3
 	_load_dem()
+	_load_park()
 
 func _load_dem() -> void:
 	var f := FileAccess.open(DEM_PATH, FileAccess.READ)
@@ -89,10 +90,76 @@ func _dem_height(x: float, z: float) -> float:
 	return lerpf(lerpf(_dem_at(i, j), _dem_at(i + 1, j), fx),
 		lerpf(_dem_at(i, j + 1), _dem_at(i + 1, j + 1), fx), fy)
 
+# ---- МЕТРОВЫЕ ВЫСОТЫ ПАРКА (tools/build_park_dem.py) ----
+# Общая сетка 32 м не может описать пруд в 60-200 м: урез из неё не вычисляется,
+# и гладь вставала выше берега. В окне парка высота берётся отсюда — и ФИЗИКА
+# обязана читать ту же карту, что и рисунок, иначе игрок пойдёт по одному
+# рельефу, а увидит другой.
+const PARK_BIN := "res://assets/dem/park_dem_cm.bin"
+const PARK_META := "res://assets/dem/park_dem.json"
+var park_n := 0
+var park_half := 0.0
+var park_cx := 0.0
+var park_cy := 0.0
+var _park: PackedByteArray
+
+func _load_park() -> void:
+	var fm := FileAccess.open(PARK_META, FileAccess.READ)
+	var fb := FileAccess.open(PARK_BIN, FileAccess.READ)
+	if fm == null or fb == null:
+		return
+	var meta: Variant = JSON.parse_string(fm.get_as_text())
+	if not meta is Dictionary:
+		return
+	park_n = int(meta["n"])
+	park_half = float(meta["half_m"])
+	park_cx = float(meta["cx"])
+	park_cy = float(meta["cy"])
+	var b := fb.get_buffer(park_n * park_n * 2)
+	if b.size() != park_n * park_n * 2:
+		park_n = 0
+		return
+	_park = b
+
+## Высота парка в АБСОЛЮТНЫХ метрах, NAN — вне окна. Билинейно.
+func park_height_abs(x: float, z: float) -> float:
+	if park_n == 0:
+		return NAN
+	var u := (x - park_cx + park_half)                 # столбец (восток)
+	var v := (park_cy + park_half - (-z))              # строка (0 = север)
+	if u < 0.0 or v < 0.0 or u >= float(park_n - 1) or v >= float(park_n - 1):
+		return NAN
+	var i := int(u)
+	var j := int(v)
+	var fx := u - float(i)
+	var fy := v - float(j)
+	var a := float(_park.decode_s16((j * park_n + i) * 2)) / 100.0
+	var b := float(_park.decode_s16((j * park_n + i + 1) * 2)) / 100.0
+	var c := float(_park.decode_s16(((j + 1) * park_n + i) * 2)) / 100.0
+	var d := float(_park.decode_s16(((j + 1) * park_n + i + 1) * 2)) / 100.0
+	return lerpf(lerpf(a, b, fx), lerpf(c, d, fx), fy)
+
+## Вес метровой карты: 1 внутри, плавно к 0 у края окна (стык без ступеньки).
+func park_weight(x: float, z: float) -> float:
+	if park_n == 0:
+		return 0.0
+	var u := (x - park_cx + park_half) / (2.0 * park_half)
+	var v := (park_cy + park_half - (-z)) / (2.0 * park_half)
+	if u <= 0.0 or v <= 0.0 or u >= 1.0 or v >= 1.0:
+		return 0.0
+	var e := minf(minf(u, 1.0 - u), minf(v, 1.0 - v))
+	return smoothstep(0.0, 60.0 / (2.0 * park_half), e)
+
 ## высота мира (м); 0 — уровень дворца. По ней — физика, вода, объекты.
 func height(x: float, z: float) -> float:
 	if real_dem:
-		return _dem_height(x, z) - h_ref
+		var base := _dem_height(x, z) - h_ref
+		var kw := park_weight(x, z)
+		if kw > 0.0:
+			var ph := park_height_abs(x, z)
+			if not is_nan(ph):
+				return lerpf(base, ph - h_ref, kw)
+		return base
 	var hp := _noise.get_noise_2d(x, z) * 14.0
 	hp += _noise.get_noise_2d(x * 3.7 + 100.0, z * 3.7) * 4.0
 	return hp
@@ -410,6 +477,7 @@ func _ground_material() -> ShaderMaterial:
 	m.set_shader_parameter("soil_r", _mip_tex(M + "Ground037/Roughness.jpg"))
 	m.set_shader_parameter("soil_ao", _mip_tex(M + "Ground037/AmbientOcclusion.jpg"))
 	m.set_shader_parameter("soil_h", _mip_tex(M + "Ground037/Displacement.jpg"))
+	_setup_park(m)
 	_setup_slice(m)
 	_setup_moisture(m)
 	return m
@@ -444,6 +512,25 @@ func _setup_moisture(m: ShaderMaterial) -> void:
 # --- ВЕРТИКАЛЬНЫЙ СРЕЗ: детальная карта поверхностей Дворцового парка ---
 const SLICE_BIN := "res://assets/dem/slice_palace.bin"
 const SLICE_META := "res://assets/dem/slice_palace.json"
+
+func _setup_park(m: ShaderMaterial) -> void:
+	if park_n == 0:
+		m.set_shader_parameter("park_half", 0.0)
+		return
+	# высоты кладём как 32-битный float на канал: точность до сантиметра важна,
+	# 8 бит дали бы ступеньки в 12 см — на глади пруда это было бы видно
+	var f := PackedFloat32Array()
+	f.resize(park_n * park_n)
+	for k in range(park_n * park_n):
+		f[k] = float(_park.decode_s16(k * 2)) / 100.0
+	var img := Image.create_from_data(park_n, park_n, false, Image.FORMAT_RF,
+		f.to_byte_array())
+	m.set_shader_parameter("park_tex", ImageTexture.create_from_image(img))
+	m.set_shader_parameter("park_center", Vector2(park_cx, park_cy))
+	m.set_shader_parameter("park_half", park_half)
+	m.set_shader_parameter("park_ref", h_ref)
+	print("[terrain] высоты парка: %dx%d, 1 м/точка, окно ±%.0f м вокруг (%.0f, %.0f)"
+		% [park_n, park_n, park_half, park_cx, park_cy])
 
 func _setup_slice(m: ShaderMaterial) -> void:
 	var fm := FileAccess.open(SLICE_META, FileAccess.READ)
