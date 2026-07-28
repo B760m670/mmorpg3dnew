@@ -43,7 +43,7 @@ func build() -> void:
 	var h := PackedFloat32Array(); h.resize(n * n)
 	for k in range(n * n):
 		h[k] = float(raw.decode_s16(k * 2)) / 100.0
-	var ref: float = terrain._h_ref if terrain != null else h[(n / 2) * n + (n / 2)]
+	var ref: float = terrain.h_ref if terrain != null else h[(n / 2) * n + (n / 2)]
 
 	var half := (n - 1) * step * 0.5
 	var st := SurfaceTool.new()

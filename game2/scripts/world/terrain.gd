@@ -30,7 +30,7 @@ const SKIRT_MARK := -1000.0       # маркер вершин-юбок (в ло�
 
 var real_dem: bool = false
 var _dem: PackedByteArray
-var _h_ref: float = 0.0                          # высота дворца — ноль мира
+var h_ref: float = 0.0                           # высота дворца — ноль мира
 var abs_min: float = 0.0
 var abs_max: float = 0.0
 var tri_count: int = 0
@@ -62,14 +62,14 @@ func _load_dem() -> void:
 		push_warning("[terrain] файл рельефа неполный — процедурный фолбэк")
 		return
 	real_dem = true
-	_h_ref = _dem_at(DEM_N / 2, DEM_N / 2)
+	h_ref = _dem_at(DEM_N / 2, DEM_N / 2)
 	abs_min = INF; abs_max = -INF
 	for k in range(0, DEM_N * DEM_N, 7):
 		var v := float(_dem.decode_s16(k * 2)) / 100.0
 		abs_min = minf(abs_min, v)
 		abs_max = maxf(abs_max, v)
-	min_h = abs_min - _h_ref
-	max_h = abs_max - _h_ref
+	min_h = abs_min - h_ref
+	max_h = abs_max - h_ref
 
 func _dem_at(i: int, j: int) -> float:
 	i = clampi(i, 0, DEM_N - 1)
@@ -89,7 +89,7 @@ func _dem_height(x: float, z: float) -> float:
 ## высота мира (м); 0 — уровень дворца. По ней — физика, вода, объекты.
 func height(x: float, z: float) -> float:
 	if real_dem:
-		return _dem_height(x, z) - _h_ref
+		return _dem_height(x, z) - h_ref
 	var hp := _noise.get_noise_2d(x, z) * 14.0
 	hp += _noise.get_noise_2d(x * 3.7 + 100.0, z * 3.7) * 4.0
 	return hp
@@ -355,7 +355,7 @@ func _ground_material() -> ShaderMaterial:
 		var img1 := Image.create(4, 4, false, Image.FORMAT_R8)
 		m.set_shader_parameter("zone_tex", ImageTexture.create_from_image(img1))
 	m.set_shader_parameter("zone_size_m", world_size_m)
-	m.set_shader_parameter("wet_level", (abs_min + 6.0) - _h_ref if real_dem else -3.0)
+	m.set_shader_parameter("wet_level", (abs_min + 6.0) - h_ref if real_dem else -3.0)
 	_setup_soil_horizons(m)
 	# ОСНОВА ЗЕМЛИ = РЕАЛЬНАЯ ПОЧВА везде (травы-раскраски больше нет — плоский
 	# скан травы был «обоями»; настоящую траву создадим геометрией отдельным слоем).

@@ -103,6 +103,19 @@ func _ready() -> void:
 		get_viewport().debug_draw = _debug_mode(_dbg_arg)
 		print("[light] ДИАГНОСТИКА: ", _dbg_arg)
 
+	# ЖИВОЙ КАНАЛ: игра остаётся работать и слушает команды по сокету.
+	# Раньше любой взгляд на мир стоил полного перезапуска (минуты на софтовом
+	# растеризаторе) и показывал только заранее заданный ракурс. Теперь мир
+	# поднимается один раз, и по нему можно ходить и смотреть.
+	if "--live" in args:
+		var link := LIVE_LINK.new()
+		link.camera = _cam
+		link.terrain = _terrain
+		link.water = _water_real
+		link.clock = _clock
+		link.hud = _hud
+		add_child(link)
+
 	# офлайн-снимок / инспекция: ждём схождения и выгружаем состояние
 	# ПРОБНАЯ ЯМА (стенд): выкопать в точке камеры, чтобы увидеть настоящие слои
 	if "--dig" in args:
@@ -138,6 +151,9 @@ func _arg_val(args: PackedStringArray, key: String) -> String:
 
 # --- РЕЖИМ ДИАГНОСТИКИ: встроенные отладочные буферы Godot ---
 var _dbg_arg: String = ""
+# preload, а не class_name: имя класса берётся из кэша проекта, а он на свежем
+# запуске может ещё не знать про новый файл — тогда сцена вовсе не грузится.
+const LIVE_LINK := preload("res://scripts/tools/live_link.gd")
 const DBG_CYCLE := ["disabled", "wire", "overdraw", "unshaded", "normals", "lighting"]
 var _dbg_idx: int = 0
 

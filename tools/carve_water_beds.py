@@ -1,15 +1,33 @@
 #!/usr/bin/env python3
-"""ДНО ВОДОЁМОВ — фундамент настоящей воды. SRTM отдаёт гладь озера как плоскость
-(уровень воды), а не дно, поэтому у воды не было ни глубины, ни берега (плита на
-плоском рельефе → z-fight у кромки). Здесь в реальный DEM ВЫРЕЗАЮТСЯ котловины
-под реальными контурами озёр: глубина растёт от берега к центру (пологий профиль),
-у самого берега 0 (мягкий заход), в центре — до предела по размеру озера.
+"""ДНО ВОДОЁМОВ — фундамент настоящей воды.
 
-Тогда: у воды есть глубина (шейдер красит по ней — мелко/глубоко), а БЕРЕГ
-возникает сам там, где рельеф пересекает уровень воды. Рельеф вне воды не тронут.
+ИЗМЕРЕНО, зачем это нужно (озеро «Тёплая», 2007 м, самое большое у нас):
+    берег по DEM: мин 77.00  макс 86.48  медиана 79.76 м
+    «дно» в центре по DEM:   79.95 м
+    толща воды при уровне=медиана берега: -0.19 м  → воды НЕ ВИДНО
+Причина: SRTM меряет ОТРАЖЕНИЕ ОТ ГЛАДИ. Внутри озера в DEM записан уровень
+воды, а не дно. Чаши нет, глубины нет, шейдер красит воду по толще → ALPHA=0.
+Разброс берега 9.5 м — это шум радара, а не рельеф: урез озера по определению
+горизонтален.
 
-Данные: gatchina_cm.bin (+ backup), water.json. Проверка числами: глубины, что
-суша не изменилась. Запуск: python3 tools/carve_water_beds.py
+Что делаем (и почему именно так):
+ 1. УРОВЕНЬ = медиана DEM по контуру. Медиана, а не минимум: минимум ловит
+    выброс шума (у «Тёплой» минимум на 2.8 м ниже дна — вода закапывалась).
+ 2. ВНУТРИ контура высота задаётся ЗАНОВО (не min с исходной): исходные
+    значения внутри — это гладь, их сохранять нечего. Дно = уровень минус
+    глубина.
+ 3. ГЛУБИНА растёт от берега вглубь с уклоном SLOPE и упирается в MAX_DEPTH.
+    Профиль сам масштабируется: лужа 40 м получит 0.7 м, озеро — предел.
+ 4. БЕРЕГ (кольцо суши в одну клетку) поджимается так, чтобы он был ВЫШЕ уреза
+    на 0.3..3.0 м. Без этого шум ±9 м торчит островами посреди озера.
+ 5. УРОВЕНЬ ЗАПИСЫВАЕТСЯ В РАСТР water_level_cm.bin — движок берёт его оттуда,
+    а не выводит заново из уже прорезанного DEM (иначе уровень уползал бы вниз
+    с каждым прогоном).
+
+Идемпотентно: всегда начинаем с бэкапа .prebed (чистый DEM без вмешательств).
+
+Данные: gatchina_cm.bin(.prebed), water.json. Запуск:
+    python3 tools/carve_water_beds.py
 """
 import json
 import os
@@ -21,14 +39,22 @@ from scipy.ndimage import distance_transform_edt
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 DEM = os.path.join(ROOT, "game2/assets/dem/gatchina_cm.bin")
+LEVEL_BIN = os.path.join(ROOT, "game2/assets/dem/water_level_cm.bin")
 WATER = os.path.join(ROOT, "game2/data/real/water.json")
 N = 513
 STEP = 32.0
 HALF = (N - 1) * STEP / 2.0
 BOUND = 6800.0
 MAX_DIM = 3500.0
-SLOPE = 0.09          # м глубины на м от берега (пологое дно)
-MAX_DEPTH = 4.5       # предел глубины (озёра Гатчины мелкие)
+
+# ГЛУБИНА. Опора на измеренное: Белое озеро в Гатчинском парке — макс 3.5 м,
+# Чёрное ~2 м. Это ледниковая равнина, озёра мелкие. Уклон дна 0.09 м/м —
+# пологое ложе, за 40 м от берега 3.5 м (совпадает с промерами Белого).
+SLOPE = 0.09
+MAX_DEPTH = 3.5
+BANK_MIN = 0.3        # м: берег обязан быть выше уреза хотя бы на столько
+BANK_MAX = 3.0        # м: и не выше — иначе шум DEM встаёт стеной у воды
+NO_WATER = -32768     # маркер «здесь воды нет» в растре уровня
 
 
 def to_px(x, y):
@@ -39,14 +65,20 @@ def to_px(x, y):
 
 
 def main():
-    raw = np.frombuffer(open(DEM, "rb").read(), "<i2").astype(np.float32).reshape(N, N) / 100.0
-    orig = raw.copy()
+    # всегда от чистого DEM: инструмент можно гонять сколько угодно раз
+    if os.path.exists(DEM + ".prebed"):
+        shutil.copy(DEM + ".prebed", DEM)
+    else:
+        shutil.copy(DEM, DEM + ".prebed")
+        print("бэкап исходного DEM → gatchina_cm.bin.prebed")
+    orig = np.frombuffer(open(DEM, "rb").read(), "<i2").astype(np.float32).reshape(N, N) / 100.0
     data = json.load(open(WATER))
 
     mask = Image.new("L", (N, N), 0)
     dm = ImageDraw.Draw(mask)
     level_img = np.zeros((N, N), np.float32)   # уровень воды (абс, м) на клетках воды
     lakes = 0
+    biggest = None
     for r in data:
         for poly in r.get("polys", []):
             o = poly[0]
@@ -57,7 +89,6 @@ def main():
             cx = (min(xs) + max(xs)) / 2; cy = (min(ys) + max(ys)) / 2
             if dim >= MAX_DIM or abs(cx) > BOUND or abs(cy) > BOUND:
                 continue
-            # уровень = медиана рельефа по контуру (гладь = уровень)
             hs = []
             px = []
             for p in o:
@@ -65,44 +96,64 @@ def main():
                 px.append((i, j))
                 ii = int(np.clip(i, 0, N - 1)); jj = int(np.clip(j, 0, N - 1))
                 hs.append(orig[jj, ii])
-            level = float(np.median(hs))
-            # растеризуем этот полигон в отдельную маску, чтобы вписать его уровень
+            level = float(np.median(hs))       # урез = медиана берега (устойчива к шуму)
             one = Image.new("L", (N, N), 0)
             ImageDraw.Draw(one).polygon(px, fill=1)
             om = np.asarray(one, bool)
+            if not om.any():
+                continue                        # мельче клетки DEM — чаши не будет
             level_img[om] = level
             dm.polygon(px, fill=1)
             lakes += 1
+            if biggest is None or dim > biggest[0]:
+                biggest = (dim, r.get("name"), level, om)
 
     wmask = np.asarray(mask, bool)
     if not wmask.any():
         print("вода не найдена в пределах — дно не вырезано")
         return
 
-    # расстояние до берега (в метрах) внутри воды
-    dist = distance_transform_edt(wmask) * STEP
-    depth = np.minimum(dist * SLOPE, MAX_DEPTH)
-    bed = level_img - depth
-    # вырезаем: под водой высота = дно (только опускаем)
+    # --- ЧАША: глубина от расстояния до берега (полклетки = сам урез) ---
+    dist_m = np.maximum(distance_transform_edt(wmask) - 0.5, 0.0) * STEP
+    depth = np.minimum(dist_m * SLOPE, MAX_DEPTH)
     out = orig.copy()
-    out[wmask] = np.minimum(orig[wmask], bed[wmask])
+    out[wmask] = (level_img - depth)[wmask]     # внутри — ЗАНОВО: там было не дно
 
-    # --- проверка числами ---
-    changed = np.abs(out - orig) > 0.01
-    land_changed = changed & (~wmask)
-    dvals = (level_img - out)[wmask]
+    # --- БЕРЕГ: клетки суши в один шаг от воды поджимаем к урезу ---
+    # уровень ближайшей воды для каждой клетки суши
+    _, (jy, ix) = distance_transform_edt(~wmask, return_indices=True)
+    near_level = level_img[jy, ix]
+    dist_land = distance_transform_edt(~wmask)
+    bank = (~wmask) & (dist_land <= 1.5)
+    raised = np.clip(orig - near_level, BANK_MIN, BANK_MAX)
+    out[bank] = (near_level + raised)[bank]
+
+    # --- ПРОВЕРКА ЧИСЛАМИ ---
+    thick = (level_img - out)[wmask]            # толща воды в каждой клетке
+    land_far = (~wmask) & (~bank)
     print("== ДНО ВОДОЁМОВ ==")
-    print("озёр вырезано: %d, клеток воды: %d" % (lakes, int(wmask.sum())))
-    print("глубина под водой (м): сред %.2f  макс %.2f  у берега(мин) %.2f"
-          % (dvals.mean(), dvals.max(), dvals.min()))
-    print("клеток суши изменено (должно 0): %d" % int(land_changed.sum()))
-    print("рельеф вне воды не тронут:", "OK" if land_changed.sum() == 0 else "ОШИБКА!")
+    print("озёр с чашей: %d, клеток воды: %d, клеток берега поджато: %d"
+          % (lakes, int(wmask.sum()), int(bank.sum())))
+    print("толща воды (м): мин %.2f  сред %.2f  макс %.2f"
+          % (thick.min(), thick.mean(), thick.max()))
+    print("вода везде выше дна:", "OK" if thick.min() > 0.0 else "ОШИБКА!")
+    print("берег над урезом (м): мин %.2f  макс %.2f"
+          % ((out - near_level)[bank].min(), (out - near_level)[bank].max()))
+    dl = np.abs(out - orig)[land_far].max() if land_far.any() else 0.0
+    print("суша вне воды и берега изменена (должно 0.00): %.2f м" % dl)
+    if biggest is not None:
+        dim, name, lev, om = biggest
+        t = (lev - out)[om]
+        print("самое большое — «%s» (%.0f м): урез %.2f м, толща мин %.2f сред %.2f макс %.2f м"
+              % (name, dim, lev, t.min(), t.mean(), t.max()))
 
-    if not os.path.exists(DEM + ".prebed"):
-        shutil.copy(DEM, DEM + ".prebed")
-        print("бэкап исходного DEM → gatchina_cm.bin.prebed")
     np.clip(np.round(out * 100.0), -32768, 32767).astype("<i2").tofile(DEM)
+    # растр уровня: движок ставит гладь ровно сюда, не пересчитывая из DEM
+    lvl = np.full((N, N), NO_WATER, np.int32)
+    lvl[wmask] = np.round(level_img[wmask] * 100.0).astype(np.int32)
+    np.clip(lvl, -32768, 32767).astype("<i2").tofile(LEVEL_BIN)
     print("DEM с дном записан:", DEM)
+    print("растр уровня воды записан:", LEVEL_BIN)
 
 
 if __name__ == "__main__":

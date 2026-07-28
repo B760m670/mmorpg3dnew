@@ -21,19 +21,24 @@ extends Node3D
 
 const WATER_JSON := "res://data/real/water.json"
 const FLOW_BIN := "res://assets/dem/flow_map.bin"
-const LAKE_BIN := "res://assets/dem/lake_depth_cm.bin"
+const LEVEL_BIN := "res://assets/dem/water_level_cm.bin"
 const GRID_N := 513
 const STEP_M := 32.0
 const HALF_M := (GRID_N - 1) * STEP_M * 0.5
+const NO_WATER := -32768        # маркер растра уровня: здесь воды нет
 
 var terrain: Terrain
 var lakes_built := 0
 var rivers_built := 0
 
 var _flow_tex: ImageTexture
+var _level: PackedByteArray     # растр уреза воды (int16, см), из carve_water_beds.py
+var _biggest_w := 0.0
+var _biggest := ""
 
 func build() -> void:
 	_load_flow()
+	_load_level()
 	var f := FileAccess.open(WATER_JSON, FileAccess.READ)
 	if f == null:
 		push_warning("[water] нет данных водоёмов (%s)" % WATER_JSON)
@@ -60,6 +65,8 @@ func build() -> void:
 
 	print("[water] озёр %d, рек %d — положение из настоящих данных, поведение из физики"
 		% [lakes_built, rivers_built])
+	if _biggest != "":
+		print(_biggest)
 
 func _load_flow() -> void:
 	var f := FileAccess.open(FLOW_BIN, FileAccess.READ)
@@ -71,33 +78,91 @@ func _load_flow() -> void:
 	var img := Image.create_from_data(GRID_N, GRID_N, false, Image.FORMAT_RGB8, b)
 	_flow_tex = ImageTexture.create_from_image(img)
 
-## ОЗЕРО: полигон из настоящих данных, уровень — по самой низкой точке берега
+func _load_level() -> void:
+	var f := FileAccess.open(LEVEL_BIN, FileAccess.READ)
+	if f == null:
+		return
+	var b := f.get_buffer(GRID_N * GRID_N * 2)
+	if b.size() == GRID_N * GRID_N * 2:
+		_level = b
+
+## Урез воды из растра (см → м). Возвращает NAN, если в этой клетке воды нет.
+func level_at(x: float, z: float) -> float:
+	if _level.is_empty() or terrain == null:
+		return NAN
+	var i := int(roundf((x + HALF_M) / STEP_M))
+	var j := int(roundf((z + HALF_M) / STEP_M))
+	if i < 0 or j < 0 or i >= GRID_N or j >= GRID_N:
+		return NAN
+	var v := _level.decode_s16((j * GRID_N + i) * 2)
+	if v == NO_WATER:
+		return NAN
+	# растр в АБСОЛЮТНЫХ метрах; мир отсчитывается от нуля-дворца
+	return float(v) / 100.0 - terrain.h_ref
+
+## ОЗЕРО: полигон из настоящих данных, урез — из растра (испечён вместе с чашей)
 func _build_body(ring: Array, is_river: bool) -> void:
 	if ring.size() < 3:
 		return
 	var pts := PackedVector2Array()
-	var lowest := INF
+	var cen := Vector2.ZERO
 	for p in ring:
 		var x := float(p[0])
 		var z := -float(p[1])                    # данные: север+, движок: z=-север
 		if absf(x) > HALF_M or absf(z) > HALF_M:
 			return                                # за краем территории не строим
 		pts.append(Vector2(x, z))
-		if terrain != null:
-			lowest = minf(lowest, terrain.height(x, z))
-	if pts.size() < 3 or lowest == INF:
+		cen += Vector2(x, z)
+	if pts.size() < 3:
 		return
-	# уровень воды — чуть ниже самой низкой точки контура (берег сухой)
-	var level := lowest - 0.15
+	cen /= float(pts.size())
+	# УРЕЗ ВОДЫ берём из растра water_level_cm.bin — того самого, по которому
+	# вырезана чаша (tools/carve_water_beds.py). Это принципиально:
+	#   ИЗМЕРЕНО на озере «Тёплая»: SRTM пишет внутри озера ГЛАДЬ, а не дно —
+	#   толща воды при уровне=медиана берега выходила -0.19 м, вода была НИЖЕ
+	#   земли и ALPHA шейдера падала в 0. Воды не было видно вообще.
+	#   Теперь чаша вырезана (толща 1.44..3.50 м), а урез испечён рядом с ней.
+	#   Выводить урез заново из уже прорезанного DEM нельзя: он уползал бы вниз
+	#   с каждым прогоном инструмента.
+	var lv := level_at(cen.x, cen.y)
+	if is_nan(lv):
+		# вогнутый контур — центр мог попасть на сушу; ищем воду у вершин,
+		# сдвинутых на 30% внутрь
+		var found := PackedFloat32Array()
+		for p2 in pts:
+			var q := p2.lerp(cen, 0.3)
+			var l2 := level_at(q.x, q.y)
+			if not is_nan(l2):
+				found.append(l2)
+		if found.is_empty():
+			return                                # водоём мельче клетки DEM — чаши нет
+		found.sort()
+		lv = found[found.size() / 2]
+	var level: float = lv
 	var idx := Geometry2D.triangulate_polygon(pts)
 	if idx.is_empty():
 		return
+	# НАМОТКА. cull_back отсекает грань по обходу, а не по нормали: полигон,
+	# свёрнутый «не в ту сторону», был бы невидим сверху и никакой шейдер бы не
+	# помог. Данные приходят и по часовой, и против — поэтому обход задаём САМИ.
+	# ИЗМЕРЕНО: в Godot (Y вверх, правая тройка) грань смотрит ВВЕРХ, когда
+	# обход по (x,z) идёт ПО часовой стрелке (знаковая площадь < 0).
+	var area2 := 0.0
+	for i in range(pts.size()):
+		var a := pts[i]
+		var b := pts[(i + 1) % pts.size()]
+		area2 += a.x * b.y - b.x * a.y
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for k in idx:
-		st.set_normal(Vector3.UP)
-		st.add_vertex(Vector3(pts[k].x, level, pts[k].y))
-	st.generate_normals()
+	for t in range(0, idx.size(), 3):
+		var tri := [idx[t], idx[t + 1], idx[t + 2]]
+		if area2 > 0.0:
+			tri.reverse()                         # контур был против часовой — разворачиваем
+		for k in tri:
+			st.set_normal(Vector3.UP)
+			st.add_vertex(Vector3(pts[k].x, level, pts[k].y))
+	# generate_normals() НЕ зовём: он выводит нормаль из обхода и на плоской
+	# глади может дать её вниз — нормаль тут одна и известна, это UP.
 	var mi := MeshInstance3D.new()
 	mi.mesh = st.commit()
 	mi.material_override = _material(is_river)
@@ -107,6 +172,14 @@ func _build_body(ring: Array, is_river: bool) -> void:
 		rivers_built += 1
 	else:
 		lakes_built += 1
+	# --- КОНТРОЛЬ ЧИСЛАМИ по самому большому водоёму, а не «на глаз» ---
+	var w := pts[0].distance_to(pts[pts.size() / 2])
+	if w > _biggest_w:
+		_biggest_w = w
+		var gh := terrain.height(cen.x, cen.y) if terrain != null else 0.0
+		_biggest = "[water] самый большой: центр (%.0f, %.0f), урез %.2f м, дно %.2f м, ТОЛЩА %.2f м, △=%d, обход %s" \
+			% [cen.x, cen.y, level, gh, level - gh, idx.size() / 3,
+			"CCW→развёрнут" if area2 > 0.0 else "CW"]
 
 ## РЕКА-линия: узкая лента по настоящей оси, течёт по flow map
 func _build_ribbon(line: Array) -> void:
