@@ -304,7 +304,35 @@ void fragment() {
 	// кашей. Здесь спорят их РЕЛЬЕФЫ: где комья базового грунта выше, они
 	// торчат сквозь наносимый слой, а тот заполняет впадины между ними —
 	// как в жизни. hb(): смещаем высоты на вес и берём верхний с узкой зоной.
-	float h_base = texture(soil_h, uv0).r;
+	// --- МИКРОРЕЛЬЕФ (параллакс): земля перестаёт быть плоской ---
+	// Комья и борозды получают ГЛУБИНУ: луч зрения смещается по карте высот,
+	// поэтому выступы загораживают впадины, а при движении головы возникает
+	// параллакс — плоская «наклейка» превращается в поверхность с объёмом.
+	// Прошлый раз POM работал ВЕЗДЕ и уронил FPS до 10. Теперь строго вблизи
+	// (до 4 м, гаснет к 10 м) и малым числом шагов — цена ограничена.
+	float pom_w = 1.0 - smoothstep(4.0, 10.0, dist);
+	vec2 uv_p = uv0;
+	if (pom_w > 0.01) {
+		vec3 vdir_w = normalize(v_wpos - CAMERA_POSITION_WORLD);
+		// направление взгляда в плоскости земли; крутизна = насколько косой взгляд
+		vec2 pdir = vdir_w.xz / max(abs(vdir_w.y), 0.35);
+		const float AMP = 0.035;                 // глубина рельефа, м (комья ~3.5 см)
+		const int PSTEP = 6;                     // мало шагов — дёшево
+		float layer = 1.0 / float(PSTEP);
+		vec2 duv = pdir * (AMP / detail_tile_m) * layer;
+		float cur_h = 1.0;
+		vec2 uvp = uv0;
+		float hs = texture(soil_h, uvp).r;
+		for (int pi = 0; pi < PSTEP; pi++) {
+			if (hs >= cur_h) { break; }
+			uvp += duv;
+			cur_h -= layer;
+			hs = texture(soil_h, uvp).r;
+		}
+		uv_p = mix(uv0, uvp, pom_w);
+	}
+
+	float h_base = texture(soil_h, uv_p).r;
 	float h_wet = texture(soil_h, uv0 * 1.31 + vec2(0.37)).r;   // своя фаза — не копия
 	float h_dry = texture(soil_h, uv0 * 0.83 + vec2(0.71)).r;
 	vec3 s_alb = hblend(c_base, h_base, c_wet, h_wet, wetf);
@@ -347,9 +375,9 @@ void fragment() {
 		s_alb = clamp(hcol * structure, vec3(0.0), vec3(1.0));
 	}
 
-	float mat_rough = texture(soil_r, uv0).r;
-	vec3 tn = texture(soil_n, uv0).xyz * 2.0 - 1.0;
-	float s_ao = texture(soil_ao, uv0).r;
+	float mat_rough = texture(soil_r, uv_p).r;
+	vec3 tn = texture(soil_n, uv_p).xyz * 2.0 - 1.0;
+	float s_ao = texture(soil_ao, uv_p).r;
 	vec3 mat_alb = s_alb * mix(1.0, s_ao, 0.75);   // реальный AO почвы в западинах
 
 	// макро-девариация ДВУХ низких частот (тональная) — против «плоской заливки»;
