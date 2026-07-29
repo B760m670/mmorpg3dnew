@@ -27,6 +27,21 @@ static func apply_sky(sm: PhysicalSkyMaterial, oc: float) -> void:
 	sm.energy_multiplier = lerpf(1.0, 1.5, oc)
 	sm.ground_color = Color(0.30, 0.30, 0.31)
 
+## ГРУБЫЙ ДВУХЦВЕТНЫЙ КУПОЛ: [у горизонта, в зените], линейные величины.
+## Нужен ровно в одном месте — воде, когда отражённый луч ушёл за край кадра И
+## неба в кадре нет вовсе (смотрим круто вниз). Там Френель даёт 2-10%, поэтому
+## грубости хватает; настоящее небо вода берёт из самого кадра.
+## Цвета взяты из тех же величин, что ведут PhysicalSkyMaterial выше: рэлеевское
+## рассеяние красит зенит синим и слабеет с облачностью, ми-рассеяние белит
+## горизонт и с облачностью растёт. Яркость — по высоте Солнца.
+static func sky_colors(oc: float, sun_el_deg: float) -> Array:
+	# сумерки не обрываются в ноль: даже при Солнце под горизонтом небо светится
+	var day := clampf(sin(deg_to_rad(maxf(sun_el_deg, -6.0))) + 0.10, 0.02, 1.0)
+	var zen := Color(0.26, 0.41, 0.58).lerp(Color(0.55, 0.58, 0.62), oc)
+	var hor := Color(0.69, 0.80, 0.92).lerp(Color(0.86, 0.88, 0.90), oc)
+	var e := day * lerpf(1.0, 0.75, oc)
+	return [Vector3(hor.r, hor.g, hor.b) * e, Vector3(zen.r, zen.g, zen.b) * e]
+
 ## экспозиция и сила рассеянного света неба по пасмурности (для Environment)
 static func exposure(oc: float) -> float:
 	return lerpf(0.95, 0.82, oc)

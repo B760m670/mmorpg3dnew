@@ -93,6 +93,8 @@ func _load_level() -> void:
 const PARK_WATER := "res://assets/dem/park_water_cm.bin"
 var _park_w: PackedByteArray
 
+var _park_mask: ImageTexture
+
 func _load_park_water() -> void:
 	if terrain == null or terrain.park_n == 0:
 		return
@@ -100,8 +102,30 @@ func _load_park_water() -> void:
 	if f == null:
 		return
 	var b := f.get_buffer(terrain.park_n * terrain.park_n * 2)
-	if b.size() == terrain.park_n * terrain.park_n * 2:
-		_park_w = b
+	if b.size() != terrain.park_n * terrain.park_n * 2:
+		return
+	_park_w = b
+	# МАСКА ВОДЫ ДЛЯ ШЕЙДЕРА — тот же метровый растр, только «есть/нет».
+	# ЗАЧЕМ. Рисуем воду по контуру озера из внешних данных (Overture), а где
+	# вода НА САМОМ ДЕЛЕ — знает наш метровый растр. Они расходятся:
+	# ИЗМЕРЕНО по Белому озеру (полигон 387 685 м²):
+	#   растр говорит ВОДА — 291 056 м² (75.1%);
+	#   ПЛЁНКА, где растр говорит суша, а полигон лёг выше земли —
+	#     19 888 м² (5.1%), толща медиана 0.50 м, до 3.15 м;
+	#   скрыто рельефом — 76 744 м² (19.8%).
+	# Эти 5% и были «жидкостью на траве» на снимках с устройства. Теперь маска
+	# обрезает воду по НАШЕМУ растру, а не по чужому контуру, и заодно даёт
+	# кромку с точностью 1 м вместо ломаного полигона.
+	var n: int = terrain.park_n
+	var img := Image.create(n, n, false, Image.FORMAT_R8)
+	var raw := PackedByteArray()
+	raw.resize(n * n)
+	for j in range(n):
+		var row := j * n
+		for i in range(n):
+			raw[row + i] = 0 if b.decode_s16((row + i) * 2) == NO_WATER else 255
+	img.set_data(n, n, false, Image.FORMAT_R8, raw)
+	_park_mask = ImageTexture.create_from_image(img)
 
 func _park_level_at(x: float, z: float) -> float:
 	if _park_w.is_empty():
@@ -302,6 +326,11 @@ func _material(is_river: bool) -> ShaderMaterial:
 	m.set_shader_parameter("dem_half", HALF_M)
 	if _flow_tex != null:
 		m.set_shader_parameter("flow_tex", _flow_tex)
+	if _park_mask != null and terrain != null:
+		m.set_shader_parameter("park_mask", _park_mask)
+		m.set_shader_parameter("park_cx", terrain.park_cx)
+		m.set_shader_parameter("park_cy", terrain.park_cy)
+		m.set_shader_parameter("park_half", terrain.park_half)
 	if is_river:
 		_mat_river = m
 	else:
@@ -347,6 +376,15 @@ func set_wind(ms: float) -> void:
 		_mat_lake.set_shader_parameter("wind_ms", ms)
 	if _mat_river != null:
 		_mat_river.set_shader_parameter("wind_ms", maxf(ms * 0.5, 0.0))
+
+## ЗАПАСНОЕ НЕБО для отражения — только на случай, когда неба нет и в кадре.
+func set_sky(horizon: Vector3, zenith: Vector3) -> void:
+	if _mat_lake != null:
+		_mat_lake.set_shader_parameter("sky_horizon", horizon)
+		_mat_lake.set_shader_parameter("sky_zenith", zenith)
+	if _mat_river != null:
+		_mat_river.set_shader_parameter("sky_horizon", horizon)
+		_mat_river.set_shader_parameter("sky_zenith", zenith)
 
 ## Потревожить воду: нога вошла, камень упал, весло гребнуло.
 ## amp — высота горба у самого места, м. Для шага человека это сантиметры.

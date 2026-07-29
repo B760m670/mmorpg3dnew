@@ -118,8 +118,12 @@ func _exec(line: String) -> void:
 			if camera == null:
 				_reply("нет камеры"); return
 			var t := _v3(arg)
+			# ЧЕРЕЗ setup(), А НЕ look_at(). Свободная камера держит СВОИ углы и
+			# каждый кадр собирает из них базис заново — look_at она затирала уже
+			# на следующем кадре, и снимок приходил не оттуда, куда я смотрел.
+			# Ловил это трижды, пока не сверил компас в кадре с командой.
 			if camera.global_position.distance_to(t) > 0.01:
-				camera.look_at(t, Vector3.UP)
+				camera.setup(camera.global_position, t)
 			_reply("ok смотрю на %s" % t)
 		"turn":
 			# азимут в градусах: 0=север(-Z), +по часовой на восток; второй — наклон
@@ -127,7 +131,7 @@ func _exec(line: String) -> void:
 			var az := deg_to_rad(float(p[0]))
 			var el := deg_to_rad(float(p[1])) if p.size() > 1 else 0.0
 			var d := Vector3(sin(az) * cos(el), sin(el), -cos(az) * cos(el))
-			camera.look_at(camera.global_position + d, Vector3.UP)
+			camera.setup(camera.global_position, camera.global_position + d)
 			_reply("ok азимут %s наклон %s" % [p[0], p[1] if p.size() > 1 else "0"])
 		"move":
 			var p2 := arg.split(",")

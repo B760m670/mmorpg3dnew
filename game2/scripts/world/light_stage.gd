@@ -380,6 +380,11 @@ func _update_weather() -> void:
 		if _sky_mat != null:
 			WeatherSky.apply_sky(_sky_mat, oc)
 		_env.ambient_light_energy = WeatherSky.ambient_energy(oc)
+		# ВОДЕ — запасной купол на случай, когда отражённый луч ушёл за кадр и
+		# неба в кадре нет. Обновляем вместе с погодой, а не каждый кадр.
+		if _water_real != null and _clock != null:
+			var sc := WeatherSky.sky_colors(oc, _clock.sun_elevation_deg)
+			_water_real.set_sky(sc[0], sc[1])
 		# под водой экспозицией и туманом распоряжается _update_underwater:
 		# иначе погода тут же возвращала воздушные значения, и погружение
 		# пропадало через кадр
