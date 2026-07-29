@@ -114,6 +114,8 @@ func _ready() -> void:
 		link.water = _water_real
 		link.clock = _clock
 		link.hud = _hud
+		link.walker = _walker
+		link.stage = self
 		add_child(link)
 
 	# офлайн-снимок / инспекция: ждём схождения и выгружаем состояние
@@ -378,7 +380,11 @@ func _update_weather() -> void:
 		if _sky_mat != null:
 			WeatherSky.apply_sky(_sky_mat, oc)
 		_env.ambient_light_energy = WeatherSky.ambient_energy(oc)
-		_env.tonemap_exposure = WeatherSky.exposure(oc)
+		# под водой экспозицией и туманом распоряжается _update_underwater:
+		# иначе погода тут же возвращала воздушные значения, и погружение
+		# пропадало через кадр
+		if not _underwater:
+			_env.tonemap_exposure = WeatherSky.exposure(oc)
 
 # --- НАСТОЯЩАЯ земля: рельеф Гатчины в реальном масштабе (метры) ---
 func _build_ground() -> void:
@@ -387,14 +393,10 @@ func _build_ground() -> void:
 	_terrain.build()
 	_terrain.build_collision()          # рельеф — твёрдое тело (физика)
 
-# --- вода по реальным контурам (шаг 1 генплана) ---
-var _water: WaterBodies
-
-func _build_water() -> void:
-	_water = WaterBodies.new()
-	_water.terrain = _terrain
-	add_child(_water)
-	_water.build()
+# СТАРАЯ ВОДА (WaterBodies, scripts/world/water.gd) УБРАНА ОТСЮДА: её строитель
+# не вызывался ни разу, но переменная _water осталась и чуть не увела за собой —
+# пешехода я сперва подключил именно к ней, и озеро для тела так и осталось бы
+# несуществующим. Живая вода одна: _water_real.
 
 ## ВОДА ВЕРНУЛАСЬ — но как ДВА РАЗНЫХ ВЕЩЕСТВА (озеро и река), на настоящих
 ## местах и с физикой: оптика по измеренным коэффициентам поглощения, течение
@@ -508,6 +510,10 @@ func _build_camera() -> void:
 	_cam.toggle_requested.connect(_toggle_walk)
 
 	_walker = Walker.new()
+	# БЕЗ ЭТОЙ СТРОКИ ОЗЕРО ДЛЯ ТЕЛА НЕ СУЩЕСТВУЕТ: пешеход шёл по дну посуху.
+	# Вода строится раньше камеры (_build_water_real до _build_camera), так что
+	# к этому моменту она уже есть.
+	_walker.water = _water_real
 	add_child(_walker)
 	_walker.deactivate()
 	_walker.toggle_requested.connect(_toggle_walk)
@@ -747,8 +753,56 @@ func _process(_delta: float) -> void:
 		_post_mat.set_shader_parameter("t", float(Time.get_ticks_msec()) / 1000.0)
 	_update_weather()
 	_update_fog_altitude()
+	_update_underwater()
 	_update_hud()
 	_update_compass()
+
+# --- ПОД ВОДОЙ ---
+# Раньше глаз мог оказаться ниже глади, и не менялось РОВНО НИЧЕГО: гладь была
+# плёнкой без объёма, а под ней был обычный воздух. Теперь погружение видно:
+# вода поглощает свет по тем же измеренным коэффициентам (Pope & Fry), что и
+# сверху, только теперь путь идёт не до дна, а до всего, на что смотришь.
+# Красный тонет в первом метре, синий проходит десятки — отсюда цвет.
+var _underwater := false
+
+func _update_underwater() -> void:
+	if _env == null or _water_real == null:
+		return
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	var p := cam.global_position
+	var surf := _water_real.surface_y(p.x, p.z)
+	var under: bool = not is_nan(surf) and p.y < surf
+	if under == _underwater:
+		return
+	_underwater = under
+	if under:
+		# ДАЛЬНОСТЬ ВИДИМОСТИ — из прозрачности воды, а не на вкус. Цветущее
+		# озеро даёт диск Секки около 2.5 м; связь с показателем ослабления
+		# приблизительно c = 1.7/Секки = 0.68 1/м, отсюда плотность тумана.
+		# ЦВЕТ — та же взвесь, которой вода красится сверху (scatter_color
+		# озера), иначе над водой и под водой было бы два разных вещества.
+		# ЯРКОСТЬ — по потере света с глубиной: на 2 м вниз проходит около 40%
+		# полуденного, отсюда экспозиция.
+		# ИЗМЕРЕНО, что было неверно: при плотности 0.13 и энергии 0.6 кадр под
+		# водой выходил почти чёрным (яркость 0.102 против 0.408 над водой) —
+		# так на трёх метрах днём не бывает.
+		_env.fog_mode = Environment.FOG_MODE_EXPONENTIAL
+		_env.fog_density = 0.68
+		_env.fog_light_color = Color(0.10, 0.26, 0.21)
+		_env.fog_light_energy = 2.2
+		_env.fog_sky_affect = 1.0
+		_env.fog_aerial_perspective = 0.0
+		_env.tonemap_exposure = WeatherSky.exposure(_weather_oc) * 0.85
+	else:
+		_env.fog_mode = Environment.FOG_MODE_DEPTH
+		_env.fog_density = 0.0007
+		_env.fog_light_color = Color(0.58, 0.64, 0.74)
+		_env.fog_light_energy = 1.0
+		_env.fog_sky_affect = 0.0
+		_env.fog_aerial_perspective = 0.55
+		_env.tonemap_exposure = WeatherSky.exposure(_weather_oc)
 
 # воздушная перспектива — ПРИЗЕМНЫЙ эффект (даль тает в дымке). С высоты полёта
 # её граница (fog_depth_end) ложилась ДИСКОМ по земле («круг» под облаками).

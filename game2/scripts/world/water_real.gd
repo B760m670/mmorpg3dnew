@@ -264,8 +264,19 @@ func _build_ribbon(line: Array) -> void:
 	add_child(mi)
 	rivers_built += 1
 
-## ВЕЩЕСТВО водоёма: озеро и река — разные, по испытанным свойствам
+## ВЕЩЕСТВО водоёма: озеро и река — разные, по испытанным свойствам.
+## МАТЕРИАЛ ОДИН НА ВСЕ ОЗЁРА и один на все реки. Раньше их создавалось по
+## одному на водоём — 153 озера и 330 рек, то есть 483 материала. Кроме лишних
+## переключений в рендере это делало невозможным главное: каждый кадр сообщать
+## воде, где её потревожили. Теперь это две записи в кадр.
+var _mat_lake: ShaderMaterial
+var _mat_river: ShaderMaterial
+
 func _material(is_river: bool) -> ShaderMaterial:
+	if is_river and _mat_river != null:
+		return _mat_river
+	if not is_river and _mat_lake != null:
+		return _mat_lake
 	var m := ShaderMaterial.new()
 	m.shader = load("res://shaders/world/water_real.gdshader")
 	# ДНО БОЛЬШЕ НЕ ЗАДАЁТСЯ ЦВЕТОМ. Раньше тут стояли bottom_color и картинка
@@ -291,4 +302,78 @@ func _material(is_river: bool) -> ShaderMaterial:
 	m.set_shader_parameter("dem_half", HALF_M)
 	if _flow_tex != null:
 		m.set_shader_parameter("flow_tex", _flow_tex)
+	if is_river:
+		_mat_river = m
+	else:
+		_mat_lake = m
 	return m
+
+# ============================================================================
+# ВОДА КАК ТЕЛО: глубина, поверхность, круги от возмущений
+# ============================================================================
+
+## Высота глади в точке (мировые метры) или NAN, если воды тут нет.
+func surface_y(x: float, z: float) -> float:
+	return level_at(x, z)
+
+## ТОЛЩА ВОДЫ в точке, м. Ноль — воды нет или она сошла на нет.
+## Это то же число, которым шейдер красит воду, только взятое из данных, а не
+## из буфера глубины: физика и картинка обязаны говорить об одной воде.
+func depth_at(x: float, z: float) -> float:
+	var lv := level_at(x, z)
+	if is_nan(lv) or terrain == null:
+		return 0.0
+	return maxf(0.0, lv - terrain.height(x, z))
+
+## КРУГИ ПО ВОДЕ. Каждое возмущение — точка, время рождения и амплитуда.
+## Шейдер сам разносит от неё волну со скоростью sqrt(g·d) по своей толще.
+## Держим 6 последних: больше на кадре всё равно не различить, а каждое стоит
+## шести операций на пиксель воды.
+const RIPPLE_MAX := 6
+const RIPPLE_LIFE := 4.0            # с, дольше круг уже не виден
+var _rip := PackedVector4Array()    # x, z, возраст (с), амплитуда (м)
+var _rip_next := 0
+
+func _ready() -> void:
+	_rip.resize(RIPPLE_MAX)
+	for i in range(RIPPLE_MAX):
+		_rip[i] = Vector4(0.0, 0.0, RIPPLE_LIFE * 2.0, 0.0)   # заведомо мёртвые
+
+## ВЕТЕР НАД ВОДОЙ, м/с. Отсюда шейдер берёт уклон ряби по Cox & Munk.
+## Позже это поведёт погода; сейчас это ещё и единственный способ сделать гладь
+## стеклом, чтобы измерить круг от всплеска отдельно от ряби.
+func set_wind(ms: float) -> void:
+	if _mat_lake != null:
+		_mat_lake.set_shader_parameter("wind_ms", ms)
+	if _mat_river != null:
+		_mat_river.set_shader_parameter("wind_ms", maxf(ms * 0.5, 0.0))
+
+## Потревожить воду: нога вошла, камень упал, весло гребнуло.
+## amp — высота горба у самого места, м. Для шага человека это сантиметры.
+func disturb(pos: Vector3, amp: float) -> void:
+	if amp <= 0.0:
+		return
+	_rip[_rip_next] = Vector4(pos.x, pos.z, 0.0, amp)
+	_rip_next = (_rip_next + 1) % RIPPLE_MAX
+
+func _process(delta: float) -> void:
+	if _mat_lake == null and _mat_river == null:
+		return
+	var alive := false
+	for i in range(RIPPLE_MAX):
+		var r: Vector4 = _rip[i]
+		if r.z < RIPPLE_LIFE:
+			r.z += delta
+			_rip[i] = r
+			alive = true
+	# Пока ничего не тревожили, уравнения не гоняем: у стоячего пруда решение
+	# известно и равно плоской глади.
+	if not alive and not _rip_dirty:
+		return
+	_rip_dirty = alive
+	if _mat_lake != null:
+		_mat_lake.set_shader_parameter("ripples", _rip)
+	if _mat_river != null:
+		_mat_river.set_shader_parameter("ripples", _rip)
+
+var _rip_dirty := false

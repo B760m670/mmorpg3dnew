@@ -23,15 +23,23 @@ extends Node
 ##   state                где я, что подо мной, какое время, сколько кадров/с
 ##   probe X,Z            рельеф/вода/почва в точке
 ##   time ЧЧ:ММ           поставить время
+##   walk X,Z             поставить ТЕЛО в точку и смотреть его глазами
+##   go ВПЕРЁД[,ВБОК]     задать телу намерение движения (как стик, 0..1)
+##   body                 что тело чувствует: погружение, брод, плавание
+##   splash X,Z[,АМПЛ]    бросить в воду — от точки пойдёт круг
+##   wind М/С             ветер над водой (0 — гладь как стекло)
 ##   hud on|off           убрать надпись, которая закрывает вид
 ##   dbg РЕЖИМ            wire|overdraw|unshaded|normals|lighting|off
 ##   quit                 закрыть игру
 
 const PORT := 8787
+const WP := preload("res://scripts/world/water_physics.gd")
 
 var camera: Camera3D
 var terrain: Terrain
 var water: WaterReal
+var walker: Walker
+var stage: Node
 var clock: WorldClock
 var hud: CanvasItem
 
@@ -145,6 +153,49 @@ func _exec(line: String) -> void:
 			var qx := float(pp[0])
 			var qz := float(pp[1]) if pp.size() > 1 else 0.0
 			_reply(_phys(qx, qz))
+		"walk":
+			# ТЕЛО В ТОЧКУ. Без этого воду нельзя проверить: смотреть на неё
+			# камерой — не то же самое, что войти в неё телом.
+			var wp := arg.split(",")
+			if walker == null or terrain == null or stage == null:
+				_reply("нет тела"); return
+			var wx := float(wp[0])
+			var wz := float(wp[1]) if wp.size() > 1 else 0.0
+			var gy := terrain.height(wx, wz)
+			terrain.update_collision(Vector3(wx, 0.0, wz))
+			if not stage._walk_active:
+				stage._walk_active = true
+				camera.set_process_input(false)
+			walker.activate(Vector3(wx, gy + 0.6, wz), 0.0)
+			_reply("ok тело в (%.1f, %.2f, %.1f)" % [wx, gy + 0.6, wz])
+		"go":
+			if walker == null:
+				_reply("нет тела"); return
+			var gp := arg.split(",")
+			walker.set_intent(Vector2(float(gp[1]) if gp.size() > 1 else 0.0,
+				-float(gp[0])))
+			_reply("ok намерение %s" % arg)
+		"wind":
+			if water == null:
+				_reply("нет воды"); return
+			water.set_wind(float(arg))
+			_reply("ok ветер %s м/с" % arg)
+		"splash":
+			# БРОСИТЬ В ВОДУ. Нужно, чтобы круги можно было проверить не «на
+			# глаз», а замером: снять два кадра и померить, на сколько ушёл
+			# фронт. Он обязан идти со скоростью sqrt(g·d).
+			if water == null:
+				_reply("нет воды"); return
+			var sp2 := arg.split(",")
+			var sx := float(sp2[0])
+			var sz := float(sp2[1]) if sp2.size() > 1 else 0.0
+			var sa := float(sp2[2]) if sp2.size() > 2 else 0.06
+			water.disturb(Vector3(sx, 0.0, sz), sa)
+			var dd := water.depth_at(sx, sz)
+			_reply("ok всплеск %.2f м в (%.1f, %.1f), толща %.2f м, круг пойдёт %.2f м/с"
+				% [sa, sx, sz, dd, WP.wave_speed(dd)])
+		"body":
+			_reply(_body())
 		"state":
 			_reply(_state())
 		"probe":
@@ -274,6 +325,31 @@ func _state() -> String:
 	if clock != null:
 		s += "\nвремя %s, солнце %.1f°/аз %.1f°" \
 			% [clock.local_time_string(), clock.sun_elevation_deg, clock.sun_azimuth_deg]
+	return s
+
+## ЧТО ЧУВСТВУЕТ ТЕЛО. Раньше такого вопроса нельзя было задать вовсе: вода
+## была плёнкой, и «войти в неё» ничего не значило.
+func _body() -> String:
+	if walker == null:
+		return "тела нет"
+	var p := walker.global_position
+	var sub: float = walker.submersion
+	var v := Vector2(walker.velocity.x, walker.velocity.z).length()
+	var s := "тело X %.1f Y %.2f Z %.1f | скорость %.2f м/с" % [p.x, p.y, p.z, v]
+	if sub <= 0.02:
+		return s + " | посуху"
+	s += "\n  вверх %.3f м/с, опора: %s" % [walker.velocity.y,
+		"есть" if walker.is_on_floor() else "нет"]
+	s += "\n  погружение %.2f м (%s)" % [sub, "ПЛЫВЁТ" if walker.swimming else "брод"]
+	s += "\n  на ногах %.0f%% веса, архимедова сила %.0f Н из %.0f Н веса" \
+		% [WP.foot_load(sub) * 100.0, WP.buoyancy(sub),
+		WP.BODY_M * WP.G]
+	s += "\n  предел брода тут %.2f м/с, площадь под водой %.3f м²" \
+		% [WP.wade_speed(sub), WP.frontal_area(sub)]
+	if water != null:
+		var d := water.depth_at(p.x, p.z)
+		s += "\n  толща воды %.2f м, круги идут %.2f м/с" \
+			% [d, WP.wave_speed(d)]
 	return s
 
 func _probe(x: float, z: float) -> String:

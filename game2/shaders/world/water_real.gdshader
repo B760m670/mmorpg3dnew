@@ -69,6 +69,16 @@ uniform sampler2D depth_tex : hint_depth_texture, filter_nearest;
 uniform sampler2D flow_tex : filter_linear, repeat_disable;   // RG=направление, B=скорость
 uniform float dem_half = 8192.0;
 
+// КРУГИ ОТ ВОЗМУЩЕНИЙ: x, z, возраст в секундах, амплитуда в метрах.
+// Это единственное место, где вода ДВИЖЕТСЯ не от ветра, а от того, что в неё
+// вошли. Круг здесь не картинка и не «эффект»: гребень идёт со скоростью
+// sqrt(g·d) — решение волнового уравнения для мелкой воды, где d берётся
+// ИЗ ИЗМЕРЕННОЙ ТОЛЩИ под самим пикселем. Поэтому у берега круг медленнее, чем
+// на глубине, сам собой.
+uniform vec4 ripples[6];
+const float RIP_LIFE = 4.0;      // с
+const float RIP_LAM = 0.42;      // м, длина волны от шага человека
+
 // измеренные коэффициенты поглощения чистой воды (Pope & Fry 1997), 1/м
 const vec3 ABSORB = vec3(0.3400, 0.0638, 0.0145);
 // показатель преломления воды и вытекающее из него отражение по нормали
@@ -117,6 +127,38 @@ vec2 ripple_slope(vec2 p, float t, vec2 flow, float rms, float px, out float los
 		float vis = smoothstep(3.0 * px, 7.0 * px, LAM[i]);
 		s += d * (amp * vis * cos(ph));
 		lost += amp * amp * 0.5 * (1.0 - vis * vis);
+	}
+	return s;
+}
+
+// УКЛОН ОТ РАСХОДЯЩИХСЯ КРУГОВ.
+// Волна на мелкой воде не дисперсна: весь цуг идёт одной скоростью c=sqrt(g·d),
+// поэтому фронт находится ровно на r = c·t. За фронтом тянется короткий цуг.
+// Амплитуда падает как 1/sqrt(r): энергия кольца сохраняется, а длина кольца
+// растёт пропорционально r. Это не подгонка, это закон сохранения.
+vec2 ripple_disturb(vec2 p, float depth, float px) {
+	float c = sqrt(9.81 * clamp(depth, 0.02, 4.0));
+	float k = 6.28318530718 / RIP_LAM;
+	// круг мельче нескольких пикселей рисовать нельзя — будет мерцать
+	float vis = smoothstep(2.0 * px, 6.0 * px, RIP_LAM);
+	if (vis <= 0.0) { return vec2(0.0); }
+	vec2 s = vec2(0.0);
+	for (int i = 0; i < 6; i++) {
+		float age = ripples[i].z;
+		float amp = ripples[i].w;
+		if (age >= RIP_LIFE || amp <= 0.0) { continue; }
+		vec2 d = p - ripples[i].xy;
+		float r = length(d);
+		if (r < 0.001) { continue; }
+		float front = c * age;
+		float dr = front - r;                     // положительно ЗА фронтом
+		// длина цуга растёт со временем: короткий всплеск расплывается
+		float train = RIP_LAM * (1.5 + age * 1.2);
+		if (dr < 0.0 || dr > train) { continue; }
+		float env = amp / sqrt(max(r, 0.25))
+			* (1.0 - dr / train)                  // хвост цуга затухает
+			* (1.0 - age / RIP_LIFE);             // вязкость съедает круг
+		s += (d / r) * (env * k * cos(k * dr) * vis);
 	}
 	return s;
 }
@@ -251,6 +293,12 @@ void fragment() {
 		d_ray = max(0.0, length(p_bottom) - length(VERTEX));   // вдоль луча, м
 	}
 	float d_vert = d_ray * abs(vdir.y);          // вертикальная толща, м
+
+	// КРУГИ ОТ ТОГО, ЧТО В ВОДУ ВОШЛИ. Считаются здесь, а не выше, потому что
+	// скорость круга зависит от ТОЛЩИ, а толща стала известна только сейчас.
+	sl += ripple_disturb(v_world.xz, d_vert, px);
+	n_world = normalize(vec3(-sl.x, 1.0, -sl.y));
+	cos_i = clamp(dot(-vdir, n_world), 0.0, 1.0);
 
 	// --- ПРЕЛОМЛЕНИЕ: сдвиг того, что видно сквозь воду ---
 	// Снелль: при малом наклоне поверхности луч уходит вбок на
