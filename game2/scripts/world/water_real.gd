@@ -268,25 +268,26 @@ func _build_ribbon(line: Array) -> void:
 func _material(is_river: bool) -> ShaderMaterial:
 	var m := ShaderMaterial.new()
 	m.shader = load("res://shaders/world/water_real.gdshader")
+	# ДНО БОЛЬШЕ НЕ ЗАДАЁТСЯ ЦВЕТОМ. Раньше тут стояли bottom_color и картинка
+	# дна — то есть вода несла СВОЁ представление о том, что под ней. Теперь
+	# сквозь воду видно НАСТОЯЩИЙ рельеф из кадра (преломление по экрану), и
+	# цвет воды возникает из поглощения на измеренной толще. Остаётся задать
+	# только ВЕЩЕСТВО: сколько в воде взвеси и какого она цвета.
 	if is_river:
-		# РЕКА: проточная, прозрачнее, но несёт глину -> буроватый оттенок;
-		# дно — промытый песок (из подводных почв, 1750 кг/м3)
+		# РЕКА: проточная, прозрачнее, но несёт глину -> буроватая взвесь
 		m.set_shader_parameter("turbidity", 0.28)
-		m.set_shader_parameter("tint", Vector3(0.18, 0.20, 0.15))
+		m.set_shader_parameter("scatter_color", Vector3(0.18, 0.20, 0.15))
 		m.set_shader_parameter("flow_scale", 1.0)
-		m.set_shader_parameter("wave_amp", 0.030)      # течение мельчит волну
-		m.set_shader_parameter("wave_len", 1.1)
-		m.set_shader_parameter("bottom_color", Vector3(0.31, 0.29, 0.25))
+		# над руслом ветер сбит берегами и деревьями
+		m.set_shader_parameter("wind_ms", 2.0)
 	else:
-		# ОЗЕРО: стоячее, цветёт планктоном -> зелёная муть; дно — сапропель
-		# (ил, 180 кг/м3, почти чёрный мокрый)
+		# ОЗЕРО: стоячее, цветёт планктоном -> зелёная муть
 		m.set_shader_parameter("turbidity", 0.55)
-		m.set_shader_parameter("tint", Vector3(0.10, 0.26, 0.21))
+		m.set_shader_parameter("scatter_color", Vector3(0.10, 0.26, 0.21))
 		m.set_shader_parameter("flow_scale", 0.0)
-		# ИЗМЕРЕНО (SMB, разгон 700 м при 5 м/с): на нашем озере волна 9 см
-		m.set_shader_parameter("wave_amp", 0.045)
-		m.set_shader_parameter("wave_len", 1.8)
-		m.set_shader_parameter("bottom_color", Vector3(0.09, 0.09, 0.07))
+		# средний летний ветер Ленинградской области; отсюда по Cox & Munk
+		# берётся уклон ряби в шейдере
+		m.set_shader_parameter("wind_ms", 4.0)
 	m.set_shader_parameter("dem_half", HALF_M)
 	if _flow_tex != null:
 		m.set_shader_parameter("flow_tex", _flow_tex)
