@@ -670,7 +670,8 @@ func _update_hud() -> void:
 	var mfx := "ВКЛ" if mode.begins_with("MetalFX") else "нет"
 	var gi_on := ENABLE_GI and not bool(_hud.get_meta("gi_off", false)) and _env.sdfgi_enabled
 	_hud.text = "Ф3 · ЗЕМЛЯ+СВЕТ · Godot 4.5.2 (форк) · Metal\n" \
-		+ "GPU: %s\n" % RenderingServer.get_video_adapter_name() \
+		+ "GPU: %s · рендер: %s\n" % [RenderingServer.get_video_adapter_name(),
+			ProjectSettings.get_setting("rendering/renderer/rendering_method")] \
 		+ _terrain_line() \
 		+ "Небо: физ.атмосфера · погода: %s · облака 1.2–3.2 км (ветер)\n" % (
 			_clouds.weather_label() if _clouds != null else "—") \
