@@ -52,7 +52,11 @@ shader_type spatial;
 //   4. Рябь — не волны. У пруда волн нет: при разгоне 700 м и ветре 4 м/с это
 //      сантиметры. Здесь рябь вообще не имеет высоты, она только НАКЛОНЯЕТ
 //      зеркало. Совсем без неё вода была бы идеальным стеклом — тоже неправда.
-render_mode blend_mix, depth_draw_never, cull_back, specular_schlick_ggx;
+// ГРАНИ ДВУСТОРОННИЕ. Раньше стояло cull_back, и намотку приходилось угадывать:
+// испечённая поверхность вышла обращённой вниз и не рисовалась вовсе — сверху
+// пусто, хотя сетка на месте (проверено каркасным режимом). Для воды
+// односторонность вообще неверна: снизу, из-под воды, гладь обязана быть видна.
+render_mode blend_mix, depth_draw_never, cull_disabled, specular_schlick_ggx;
 
 // --- ВЕЩЕСТВО ВОДОЁМА (озеро и река — разные вещества) ---
 uniform float turbidity = 0.35;                 // 0 родник .. 1 цветущее озеро
@@ -68,17 +72,9 @@ uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap;
 uniform sampler2D depth_tex : hint_depth_texture, filter_nearest;
 uniform sampler2D flow_tex : filter_linear, repeat_disable;   // RG=направление, B=скорость
 uniform float dem_half = 8192.0;
-
-// МАСКА ВОДЫ ПАРКА (метровый растр, 1 = вода). Рисуем воду по контуру озера из
-// внешних данных, но ГДЕ вода на самом деле — знает наш растр, и они расходятся:
-// ИЗМЕРЕНО по Белому озеру — 19 888 м² (5.1% контура) лежали ВЫШЕ земли плёнкой
-// толщиной в среднем полметра. На устройстве это читалось как «жидкость на
-// траве». Маска обрезает воду по нашему растру; линейная фильтрация даёт
-// кромку шириной в метр, то есть заодно и мягкий берег.
-uniform sampler2D park_mask : filter_linear, repeat_disable;
-uniform float park_cx = 0.0;
-uniform float park_cy = 400.0;
-uniform float park_half = 0.0;
+// ШАГОВ ТРАССИРОВКИ ОТРАЖЕНИЯ — задаётся осью качества. Каждый шаг это одна
+// выборка буфера глубины, и только на пикселях воды.
+uniform int ssr_steps = 16;
 
 // КРУГИ ОТ ВОЗМУЩЕНИЙ: x, z, возраст в секундах, амплитуда в метрах.
 // Это единственное место, где вода ДВИЖЕТСЯ не от ветра, а от того, что в неё
@@ -238,8 +234,8 @@ vec3 sky_probe(float col_u, float ray_up, sampler2D scr, sampler2D dep) {
 // пиксель кадра там, где луч покинул экран: это и есть настоящее небо этой
 // игры, с облаками и с Солнцем. Отдельной «краски неба» не нужно.
 vec3 trace_reflection(vec3 ro, vec3 rd, sampler2D scr, sampler2D dep,
-		mat4 proj, mat4 inv_proj, vec3 fallback, float lod) {
-	const int STEPS = 20;
+		mat4 proj, mat4 inv_proj, vec3 fallback, float lod, int ssr_n) {
+	int STEPS = clamp(ssr_n, 4, 32);
 	float t = 0.4;
 	float step_len = 0.4;
 	vec2 last_uv = vec2(0.5);
@@ -395,7 +391,7 @@ void fragment() {
 
 	vec3 rdir = normalize((VIEW_MATRIX * vec4(rw, 0.0)).xyz);
 	vec3 refl = trace_reflection(VERTEX, rdir, screen_tex, depth_tex,
-		PROJECTION_MATRIX, INV_PROJECTION_MATRIX, sky_est, refl_lod);
+		PROJECTION_MATRIX, INV_PROJECTION_MATRIX, sky_est, refl_lod, ssr_steps);
 
 	// --- СБОРКА ---
 	// Обе доли — УЖЕ ОСВЕЩЁННЫЕ пиксели кадра, их нельзя класть в ALBEDO (свет
@@ -414,16 +410,7 @@ void fragment() {
 	// вклад — ПРЯМОЙ блик Солнца (дорожка на воде); он единственный, что до
 	// прозрачных поверхностей доходит.
 	SPECULAR = 0.354;
-	// ОБРЕЗКА ПО НАШЕМУ РАСТРУ. Вне окна парка (park_half = 0) маски нет и вода
-	// рисуется как раньше. Внутри — вода кончается там, где её нет по растру.
-	float a = 1.0;
-	if (park_half > 0.0) {
-		vec2 muv = vec2((v_world.x - park_cx + park_half),
-		                (park_cy + park_half + v_world.z)) / (2.0 * park_half);
-		if (muv.x > 0.0 && muv.x < 1.0 && muv.y > 0.0 && muv.y < 1.0) {
-			a = smoothstep(0.30, 0.70, texture(park_mask, muv).r);
-		}
-	}
-	// прозрачность даёт преломление; альфа тут — только граница водоёма
-	ALPHA = a;
+	// Границу водоёма задаёт ГЕОМЕТРИЯ (испечена по нашей батиметрии), поэтому
+	// маска в шейдере больше не нужна: там, где воды нет, нет и треугольников.
+	ALPHA = 1.0;
 }

@@ -16,10 +16,16 @@ const ENABLE_METALFX := true
 # Исправлено: 1 м при 5 каскадах -> 1024 м покрытия.
 # Локально проверить нельзя: SDFGI только в Forward+, а стенд идёт в
 # GL Compatibility (Vulkan в окружении нет) — проверка только на устройстве.
-const ENABLE_GI := true
-const ENABLE_SSAO := true        # контактные тени
-const ENABLE_SSIL := true        # непрямой свет от соседних поверхностей (GI экрана)
-const ENABLE_GLOW := true        # мягкое свечение в бликах
+# ЭФФЕКТЫ БОЛЬШЕ НЕ ЗАШИТЫ ЗДЕСЬ. Их состав задаёт ось качества Core.gfx() —
+# один источник правды. Здесь стояли жёсткие «const ENABLE_* := true», и пока
+# устройство шло на мобильном рендере это было незаметно: половина этих
+# эффектов там не работает вовсе. Как только рендер стал forward_plus, все они
+# включились по-настоящему, и кадр упал до 13 при пределе 120.
+var GFX: Dictionary = {}
+var ENABLE_GI := false
+var ENABLE_SSAO := false
+var ENABLE_SSIL := false
+var ENABLE_GLOW := true
 # ПОГОДА Гатчины теперь КОГЕРЕНТНА и ДИНАМИЧНА: пасмурность рождается из
 # плотности облаков (Clouds.current_coverage) и через WeatherSky ведёт небо
 # (синее↔серое), рассеянный свет и приглушение Солнца — см. _update_weather.
@@ -51,6 +57,14 @@ func _ready() -> void:
 		get_tree().quit()
 		return
 
+	GFX = Core.gfx()
+	ENABLE_GI = bool(GFX["sdfgi"])
+	ENABLE_SSAO = bool(GFX["ssao"])
+	ENABLE_SSIL = bool(GFX["ssil"])
+	ENABLE_GLOW = bool(GFX["glow"])
+	print("[light] качество «%s»: SDFGI=%s SSIL=%s SSAO=%s масштаб 3D=%.2f шагов отражения=%d, предел кадров %d"
+		% [Core.graphics, ENABLE_GI, ENABLE_SSIL, ENABLE_SSAO,
+		GFX["scale"], GFX["ssr_steps"], Engine.max_fps])
 	_env = _build_environment(ENABLE_GI and not gi_off)
 	var we := WorldEnvironment.new()
 	we.environment = _env
@@ -58,6 +72,7 @@ func _ready() -> void:
 
 	_build_sun()
 	_build_night_sky()
+	_build_moon_light()
 	_build_clouds()
 	_build_ground()
 	_build_water_real()
@@ -324,7 +339,7 @@ func _build_sun() -> void:
 	_sun.shadow_blur = 1.0
 	_sun.shadow_bias = 0.04
 	_sun.shadow_normal_bias = 3.0
-	_sun.directional_shadow_max_distance = 120.0
+	_sun.directional_shadow_max_distance = float(GFX.get("shadow_far", 120.0))
 	_sun.directional_shadow_fade_start = 0.9
 	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	add_child(_sun)
@@ -344,6 +359,74 @@ var _soil_wet: float = 0.25          # влага земли (идёт за по
 
 ## --- НОЧНОЕ НЕБО: настоящие звёзды (каталог) + Луна (орбита+фаза) ---
 var _night_sky: NightSky
+
+## СВЕТ ЛУНЫ. Его не было вовсе: Луна висела в небе сферой, но земля ночью
+## получала РОВНО НОЛЬ — снимок в 22:15 дал в нижней половине кадра 0.0235, и
+## подъём экспозиции не менял ничего (ноль умножить на что угодно — ноль).
+## Отсюда и «чёрная полоса в воде»: вода честно отражала чёрный берег.
+##
+## ЧЕСТНО О ВЕЛИЧИНЕ. По радиометрии полнолуние даёт 0.25 лк против 100 000 лк
+## у полудня — отношение 2.5·10⁻⁶, и при таком множителе не видно ничего. Но
+## глаз в темноте переходит на палочки и поднимает чувствительность примерно в
+## миллион раз, поэтому лунная ночь ВЫГЛЯДИТ как тусклый синий день. Здесь
+## моделируется именно ВОСПРИЯТИЕ, а не радиометрия, и это единственное число в
+## освещении, взятое не из физики. Всё остальное настоящее: направление и фаза
+## Луны считаются по орбите (Meeus) в night_sky.
+var _moon_light: DirectionalLight3D
+
+func _build_moon_light() -> void:
+	_moon_light = DirectionalLight3D.new()
+	_moon_light.light_color = Color(0.62, 0.70, 0.92)   # холодный, как лунный свет
+	_moon_light.light_energy = 0.0
+	_moon_light.shadow_enabled = true
+	_moon_light.light_angular_distance = 0.53           # диск Луны того же размера, что Солнце
+	_moon_light.directional_shadow_max_distance = 80.0
+	add_child(_moon_light)
+
+func _update_moon_light() -> void:
+	if _moon_light == null or _night_sky == null or _env == null:
+		return
+	# СВЕЧЕНИЕ НОЧНОГО НЕБА. Рассеянный свет берётся с купола неба, а ночью его
+	# яркость практически ноль — земля получала РОВНО НОЛЬ, и никакая экспозиция
+	# этого не исправляет. Между тем безлунная ясная ночь даёт у земли около
+	# 0.002 лк (воздушное свечение, звёзды, рассеянный свет городов), и формы
+	# различимы. Ночью источник рассеянного света переключается на явный
+	# холодный цвет — это тот же приём приспособления глаза, что и в night_gain.
+	# ИЗМЕРЕНО, где порог. Замер яркости неба и земли в одном кадре:
+	#   09:00 небо 0.656 земля 0.276 — 2:1
+	#   15:09 небо 0.665 земля 0.427 — 2:1
+	#   19:15 (Солнце −0.3°) небо 0.710 земля 0.0235 — 30:1
+	# Небо такое же яркое, а земля проваливается в ноль: её освещало почти
+	# только Солнце, а рассеянный свет неба до неё практически не доходил.
+	# Поэтому подъём начинается не в глубокой ночи, а с +3°, когда Солнце ещё
+	# над горизонтом, — то есть ровно там, где прямой свет начинает гаснуть.
+	var night := clampf((3.0 - _clock.sun_elevation_deg) / 9.0, 0.0, 1.0)
+	if night > 0.0:
+		_env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+		# цвет — холодный, как сумеречное и ночное небо; сила растёт по мере
+		# ухода Солнца, компенсируя исчезнувший прямой свет
+		_env.ambient_light_color = Color(0.34, 0.42, 0.58)
+		_env.ambient_light_energy = lerpf(WeatherSky.ambient_energy(_weather_oc), 3.2, night)
+		# БЕЗ ЭТОЙ СТРОКИ ПРЕДЫДУЩИЕ ДВЕ НЕ ДЕЛАЮТ НИЧЕГО. Доля неба в рассеянном
+		# свете по умолчанию 1.0, и при ней заданный цвет игнорируется целиком —
+		# сколько ни ставь ambient_light_color и energy, работает только купол
+		# неба, а его яркость в сумерках почти ноль. ИЗМЕРЕНО: подъём энергии до
+		# 3.2 сдвинул землю всего с 0.0235 до 0.0382 при небе 0.717.
+		_env.ambient_light_sky_contribution = 1.0 - night
+	else:
+		_env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+		_env.ambient_light_sky_contribution = 1.0
+		_env.ambient_light_energy = WeatherSky.ambient_energy(_weather_oc)
+	var d: Vector3 = _night_sky.moon_dir_world
+	var above := clampf(d.y, 0.0, 1.0)
+	if above <= 0.001:
+		_moon_light.light_energy = 0.0
+		return
+	_moon_light.look_at_from_position(Vector3.ZERO, -d, Vector3.UP)
+	# яркость: фаза × высота над горизонтом × «насколько уже стемнело»
+	var lit: float = _night_sky.moon_light.get_luminance() * 2.0
+	var dark := clampf((-_clock.sun_elevation_deg + 2.0) / 8.0, 0.0, 1.0)
+	_moon_light.light_energy = clampf(lit * above * dark * 0.5, 0.0, 0.25)
 
 func _build_night_sky() -> void:
 	_night_sky = NightSky.new()
@@ -375,6 +458,11 @@ func _update_weather() -> void:
 	_soil_wet = lerpf(_soil_wet, target_wet, 0.02)
 	if _terrain != null and _terrain.ground_mat != null:
 		_terrain.ground_mat.set_shader_parameter("soil_wetness", _soil_wet)
+	# ЭКСПОЗИЦИЯ — КАЖДЫЙ КАДР, а не только при смене погоды: Солнце садится
+	# непрерывно, и приспособление глаза к темноте должно идти за ним.
+	if _env != null and _clock != null and not _underwater:
+		_env.tonemap_exposure = WeatherSky.exposure(_weather_oc) \
+			* WeatherSky.night_gain(_clock.sun_elevation_deg)
 	if absf(oc - _weather_oc) > 0.01:             # небо/экспозицию — при заметном изменении
 		_weather_oc = oc
 		if _sky_mat != null:
@@ -389,7 +477,8 @@ func _update_weather() -> void:
 		# иначе погода тут же возвращала воздушные значения, и погружение
 		# пропадало через кадр
 		if not _underwater:
-			_env.tonemap_exposure = WeatherSky.exposure(oc)
+			_env.tonemap_exposure = WeatherSky.exposure(oc) \
+				* WeatherSky.night_gain(_clock.sun_elevation_deg)
 
 # --- НАСТОЯЩАЯ земля: рельеф Гатчины в реальном масштабе (метры) ---
 func _build_ground() -> void:
@@ -411,6 +500,7 @@ var _water_real: WaterReal
 func _build_water_real() -> void:
 	_water_real = WaterReal.new()
 	_water_real.terrain = _terrain
+	_water_real.ssr_steps = int(GFX.get("ssr_steps", 16))
 	add_child(_water_real)
 	_water_real.build()
 
@@ -759,6 +849,7 @@ func _process(_delta: float) -> void:
 	_update_weather()
 	_update_fog_altitude()
 	_update_underwater()
+	_update_moon_light()
 	_update_hud()
 	_update_compass()
 
