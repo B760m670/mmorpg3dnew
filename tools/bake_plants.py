@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
-"""РАСТЕНИЯ В ГЕОМЕТРИЮ — печётся здесь, без Blender.
+"""ПОКРЫТИЕ И КУРТИНЫ — то, чего нет в build_plants.py.
 
-ПОЧЕМУ БЕЗ BLENDER. tools/build_plants.py написан на bpy и поэтому не
-запускается там, где идёт работа: Blender в окружении нет. Из-за одной этой
-причины трава стояла месяц. Здесь то же самое делается numpy и пишется в наш
-бинарь — тем же способом, каким уже испечены город (gatchina_city.bin),
-дворец и поверхность воды (water_surface.bin). Загрузчик в игре тонкий.
+ПОПРАВКА К ПРЕЖНЕЙ ВЕРСИИ ЭТОГО ФАЙЛА. Здесь было написано, будто Blender в
+окружении нет и потому bpy-инструмент не запускается. ЭТО НЕВЕРНО: bpy 5.0.1
+установлен, tools/build_plants.py работает и выдаёт 20 моделей (тысячелистник
+203 △, полынь 174 △, осока 178 △) — богаче, чем геометрия здесь. Я проверил
+`which blender`, получил пусто, а молчаливый успех `import bpy` прочитал как
+отказ. Про «трава стояла месяц» тоже неправда: tools/vegetation.py остановлена
+28 июля, сегодня 30-е — два дня.
+
+ЧТО ОСТАЁТСЯ ЗА ЭТИМ ФАЙЛОМ. Геометрию РАСТЕНИЙ делает build_plants.py на
+Blender — это решение принято раньше и оно верное. Здесь считается то, чего
+там нет и что нужно, чтобы покров вообще встал в кадр:
+  ПРОЕКТИВНОЕ ПОКРЫТИЕ каждой модели — из него выводится густота посева;
+  КУРТИНЫ сообществ — крупная единица для средней дали;
+  бинарь для тонкого загрузчика игры.
 
 ЧТО ПЕЧЁТСЯ. Не «трава вообще», а ДЕРНИНА каждого вида по его собственным
 числам из ботаники (tools/vegetation.py → data/real/vegetation.json): высота
@@ -357,18 +366,94 @@ def community_patch(veg, species, cname, com, rng, side_m=0.5, widen=3.0):
     return m, added, m.ground_cover(cell=0.01)
 
 
+def load_glb(path):
+    """Читает модель, сделанную Blender (tools/build_plants.py).
+
+    Берём только положение, нормаль и индексы: цвет в моделях не лежит
+    (атрибуты POSITION и NORMAL, цвет — в материалах green/flower), поэтому
+    цвет берётся из ботаники и кладётся в вершину при упаковке. Так у нас один
+    источник цвета — ботаника, а не два.
+    """
+    d = open(path, "rb").read()
+    jlen = struct.unpack("<I", d[12:16])[0]
+    j = json.loads(d[20:20 + jlen])
+    bin_off = 20 + jlen + 8
+    buf = d[bin_off:]
+
+    def acc(i):
+        a = j["accessors"][i]
+        bv = j["bufferViews"][a["bufferView"]]
+        off = bv.get("byteOffset", 0) + a.get("byteOffset", 0)
+        n = a["count"]
+        comp = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}[a["type"]]
+        fmt = {5121: np.uint8, 5123: np.uint16, 5125: np.uint32,
+               5126: np.float32}[a["componentType"]]
+        arr = np.frombuffer(buf, dtype=fmt, count=n * comp, offset=off)
+        return arr.reshape(n, comp) if comp > 1 else arr
+
+    verts, norms, idx, mats = [], [], [], []
+    base = 0
+    for m in j["meshes"]:
+        for p in m["primitives"]:
+            v = acc(p["attributes"]["POSITION"]).astype(float)
+            nn = acc(p["attributes"]["NORMAL"]).astype(float)
+            ii = acc(p["indices"]).astype(int) + base
+            verts.append(v)
+            norms.append(nn)
+            idx.append(ii)
+            # материал 0 — зелень, 1 — цветок/соцветие
+            mats.append(np.full(len(v), int(p.get("material", 0))))
+            base += len(v)
+    if not verts:
+        return None
+    return (np.vstack(verts), np.vstack(norms),
+            np.concatenate(idx), np.concatenate(mats))
+
+
+def mesh_from_glb(path, sp):
+    """Модель Blender -> наша Mesh с цветом из ботаники."""
+    g = load_glb(path)
+    if g is None:
+        return None
+    v, n, i, mat = g
+    m = Mesh()
+    col_leaf = sp["color"]
+    col_flower = sp["flower"]
+    for k in range(len(v)):
+        # glTF УЖЕ Y-вверх: экспортёр Blender сам переводит Z-вверх в Y-вверх.
+        # Я довернул ещё раз, и высота ушла в другую ось — у всех двадцати видов
+        # верх оказался -0.00 м. Оси берём как есть.
+        m.v.append(np.array([v[k][0], v[k][1], v[k][2]]))
+        m.n.append(np.array([n[k][0], n[k][1], n[k][2]]))
+        m.c.append(col_flower if mat[k] == 1 else col_leaf)
+    m.i = [int(x) for x in i]
+    return m
+
+
 def main():
     veg = json.load(open(os.path.join(G2, "data/real/vegetation.json")))
     species = veg["species"]
     os.makedirs(OUT_DIR, exist_ok=True)
-    print("== РАСТЕНИЯ В ГЕОМЕТРИЮ (без Blender) ==")
+    print("== ПОКРЫТИЕ И КУРТИНЫ (геометрия — от Blender) ==")
+    n_glb = len([f for f in os.listdir(OUT_DIR) if f.endswith(".glb")]) \
+        if os.path.isdir(OUT_DIR) else 0
+    print("моделей от Blender: %d (если 0 — запусти сначала tools/build_plants.py)" % n_glb)
     print("вид                     | тип           | △    | высота, м | вершин | покрытие м²")
     rows = []
     blobs = []
     for name, sp in sorted(species.items()):
         habit = sp["habit"]
         rng = np.random.default_rng(abs(hash(name)) % (2 ** 31))
-        m = BUILDERS[habit](sp, rng)
+        # ГЕОМЕТРИЮ БЕРЁМ У BLENDER, если он её уже сделал. Свои строители
+        # остаются только как запасной путь: у Blender модель богаче
+        # (тысячелистник 203 △ против 58 здесь), и держать два источника формы
+        # незачем.
+        glb = os.path.join(OUT_DIR, sp["lat"].replace(" ", "_") + ".glb")
+        m = None
+        if os.path.exists(glb):
+            m = mesh_from_glb(glb, sp)
+        if m is None:
+            m = BUILDERS[habit](sp, rng)
         vb, ib, nv, ni = m.pack()
         top = max(p[1] for p in m.v)
         cover = m.ground_cover()
