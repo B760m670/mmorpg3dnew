@@ -1,5 +1,11 @@
 #include "shallow_water.h"
 
+// ПРОВЕРЕНО ПО ЗАГОЛОВКАМ 4.5.2, а не по памяти:
+//   class_db.h — без него нет ни ClassDB::bind_method, ни D_METHOD;
+//   math_funcs.h — make_half_float лежит в NAMESPACE Math (не в классе);
+//   time.h — get_singleton()->get_ticks_usec().
+#include "core/math/math_funcs.h"
+#include "core/object/class_db.h"
 #include "core/os/time.h"
 
 void ShallowWater::setup(int side, float cell_m) {

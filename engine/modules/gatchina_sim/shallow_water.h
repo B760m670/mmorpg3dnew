@@ -14,7 +14,6 @@
 
 #include "core/io/image.h"
 #include "core/object/ref_counted.h"
-#include "core/variant/typed_array.h"
 #include "scene/resources/image_texture.h"
 
 #include "sw_core.h"
