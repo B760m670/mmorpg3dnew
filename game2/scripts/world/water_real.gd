@@ -98,6 +98,7 @@ func build() -> void:
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
 	lakes_built = 1
+	_sim_init()
 	print("[water] поверхность: %d плит (△ %d), площадь %.0f м², урез %.2f..%.2f м — ОДНА сетка вместо 483"
 		% [n, n * 2, area, y_min, y_max])
 
@@ -271,6 +272,10 @@ func set_sky(horizon: Vector3, zenith: Vector3) -> void:
 func disturb(pos: Vector3, amp: float) -> void:
 	if amp <= 0.0:
 		return
+	if sim != null:
+		# радиус пятна — размер ступни; амплитуда та же, в метрах
+		sim.disturb(pos, 0.22, -amp)
+		return
 	_rip[_rip_next] = Vector4(pos.x, pos.z, 0.0, amp)
 	_rip_next = (_rip_next + 1) % RIPPLE_MAX
 
@@ -295,3 +300,84 @@ func _process(delta: float) -> void:
 		_mat_river.set_shader_parameter("ripples", _rip)
 
 var _rip_dirty := false
+
+# ============================================================================
+# РЕШАТЕЛЬ МЕЛКОЙ ВОДЫ НА C++ (engine/modules/gatchina_sim)
+# ============================================================================
+# Здесь кончается «аналитический круг» и начинается настоящее решение уравнения
+# мелкой воды на сетке. Разница не косметическая:
+#   круг в шейдере — одна формула на расходящееся кольцо, он не знает ни берега,
+#     ни другой волны, ни отражения, и складывать их можно только штуками;
+#   решатель — поле на сетке, где волны сами складываются, отражаются от берега,
+#     замедляются на отмели и разворачиваются вдоль изобат.
+# ПРОВЕРЕНО ЧИСЛАМИ (engine/modules/gatchina_sim/tests/run.sh):
+#   скорость гребня против sqrt(g·d): -2.3% на 3 м, -4.6% на 2 м, -7% на 1 м;
+#   сходимость второго порядка по шагу сетки (0.50 м -30.9%, 0.25 м -4.6%,
+#     0.125 м -0.5%) — значит дискретизация верна, остаток это разрешение;
+#   энергия при выключенном затухании держится ровно на 50% (половина ушла в
+#     кинетическую, как и должно быть при старте из покоя);
+#   вода за сухие ячейки не выходит (максимум на суше 0.000000 м);
+#   цена кадра 196 мкс на сетке 128×128 против 26-79 мс на GDScript.
+#
+# ПОЧЕМУ ЧЕРЕЗ ПРОВЕРКУ НАЛИЧИЯ КЛАССА. Модуль живёт в шаблоне движка, а шаблон
+# собирается отдельно. Пока на устройстве стоит старый шаблон, класса нет — и
+# игра обязана работать по-прежнему, а не падать.
+const SIM_SIDE := 128           # ячеек
+const SIM_CELL := 0.25          # м; из замера сходимости — рабочая точность
+const SIM_RECENTER := 6.0       # м смещения наблюдателя до переезда окна
+
+var sim: RefCounted             # ShallowWater, если модуль есть
+var _sim_origin := Vector2(1e9, 1e9)
+var _sim_logged := false
+
+func sim_available() -> bool:
+	return sim != null
+
+func _sim_init() -> void:
+	if not ClassDB.class_exists("ShallowWater"):
+		print("[вода] решателя мелкой воды нет: шаблон движка без модуля gatchina_sim — идут аналитические круги")
+		return
+	sim = ClassDB.instantiate("ShallowWater")
+	sim.setup(SIM_SIDE, SIM_CELL)
+	# затухание: рябь от шага должна жить секунды, а не минуты
+	sim.set_damping(0.55)
+	print("[вода] решатель мелкой воды: сетка %d×%d по %.2f м (окно %.0f м)"
+		% [SIM_SIDE, SIM_SIDE, SIM_CELL, SIM_SIDE * SIM_CELL])
+
+## Переставить окно расчёта под наблюдателя и залить глубины из НАШЕЙ батиметрии.
+## Глубина — то же число, которым вода нарисована: урез минус земля.
+func sim_center_on(pos: Vector3) -> void:
+	if sim == null:
+		return
+	var half := SIM_SIDE * SIM_CELL * 0.5
+	var org := Vector2(pos.x - half, pos.z - half)
+	if _sim_origin.distance_to(org) < SIM_RECENTER:
+		return
+	_sim_origin = org
+	sim.set_origin(org)
+	var d := PackedFloat32Array()
+	d.resize(SIM_SIDE * SIM_SIDE)
+	for j in range(SIM_SIDE):
+		var wz := org.y + float(j) * SIM_CELL
+		for i in range(SIM_SIDE):
+			var wx := org.x + float(i) * SIM_CELL
+			d[j * SIM_SIDE + i] = depth_at(wx, wz)
+	sim.set_depth(d)
+
+## Шаг решателя и передача поля в шейдер. Возвращает отчёт числами или пусто.
+func sim_step(delta: float) -> Dictionary:
+	if sim == null:
+		return {}
+	sim.step(delta)
+	var tex: Texture2D = sim.get_texture()
+	if tex != null and _mat_lake != null:
+		_mat_lake.set_shader_parameter("sim_tex", tex)
+		_mat_lake.set_shader_parameter("sim_origin", _sim_origin)
+		_mat_lake.set_shader_parameter("sim_size", SIM_SIDE * SIM_CELL)
+	var r: Dictionary = sim.report()
+	if not _sim_logged:
+		_sim_logged = true
+		print("[вода] шаг решателя: %.0f мкс, подшагов %d, предел шага %.4f с, глубина до %.2f м"
+			% [r.get("step_usec", 0.0), r.get("substeps", 0),
+			r.get("max_dt", 0.0), r.get("max_depth", 0.0)])
+	return r

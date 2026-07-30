@@ -1,0 +1,10 @@
+# ГАТЧИНА · СИМУЛЯЦИЯ. Наш код на C++ внутри форка движка.
+#
+# Почему модулем движка, а не GDExtension: игра уходит на iPhone неподписанным
+# IPA через LiveContainer, а там подгрузка отдельной динамической библиотеки —
+# лишний источник отказов. Модуль попадает прямо в шаблон, который мы и так
+# собираем сами (engine/build_ios_templates.sh).
+Import("env")
+
+env_gatchina = env.Clone()
+env_gatchina.add_source_files(env.modules_sources, "*.cpp")

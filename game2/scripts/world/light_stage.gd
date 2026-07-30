@@ -849,9 +849,22 @@ func _process(_delta: float) -> void:
 	_update_weather()
 	_update_fog_altitude()
 	_update_underwater()
+	_update_water_sim(_delta)
 	_update_moon_light()
 	_update_hud()
 	_update_compass()
+
+# --- РЕШАТЕЛЬ МЕЛКОЙ ВОДЫ ---
+# Окно расчёта 32 м едет за наблюдателем: считать волны по всей карте 16 км ни
+# нужно, ни возможно, а видно их только рядом.
+func _update_water_sim(delta: float) -> void:
+	if _water_real == null or not _water_real.sim_available():
+		return
+	var who := _cam.global_position if _cam != null else Vector3.ZERO
+	if _walk_active and _walker != null:
+		who = _walker.global_position
+	_water_real.sim_center_on(who)
+	_water_real.sim_step(delta)
 
 # --- ПОД ВОДОЙ ---
 # Раньше глаз мог оказаться ниже глади, и не менялось РОВНО НИЧЕГО: гладь была

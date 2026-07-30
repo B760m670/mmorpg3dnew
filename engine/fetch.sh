@@ -14,4 +14,16 @@ for p in "$HERE"/patches/*.patch; do
   echo "applying $(basename "$p")"
   git apply --check "$p" && git apply "$p"
 done
-echo "engine ready: $DIR @ $GODOT_TAG (+$(ls "$HERE"/patches/*.patch 2>/dev/null | wc -l) patches)"
+# НАШ КОД НА C++ — МОДУЛЯМИ ДВИЖКА. Не патчами: патч к чужому файлу ломается на
+# каждом обновлении апстрима, а модуль лежит своей папкой и живёт сам. Всё, что
+# мы пишем на C++ (симуляция воды, дальше разрушаемость и явления), кладётся
+# сюда и попадает прямо в шаблон, который мы и так собираем сами.
+mkdir -p "$DIR/modules"
+for m in "$HERE"/modules/*/; do
+  [ -d "$m" ] || continue
+  name="$(basename "$m")"
+  rm -rf "$DIR/modules/$name"
+  cp -r "$m" "$DIR/modules/$name"
+  echo "module: $name"
+done
+echo "engine ready: $DIR @ $GODOT_TAG (+$(ls "$HERE"/patches/*.patch 2>/dev/null | wc -l) patches, $(ls -d "$HERE"/modules/*/ 2>/dev/null | wc -l) modules)"
