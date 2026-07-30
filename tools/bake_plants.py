@@ -33,6 +33,7 @@
     uint8  длина имени, затем имя (utf-8, латинское)
     uint8  тип роста: 0 злак, 1 разнотравье, 2 кустарничек, 3 папоротник, 4 осока
     float  высота дернины, м (для отбора по расстоянию)
+    float  проективное покрытие дернины, м² (сколько земли закрывает сверху)
     uint32 вершин, uint32 индексов
     вершины: float x,y,z, float nx,ny,nz, uint8 r,g,b,a   (28 байт)
     индексы: uint32
@@ -97,6 +98,37 @@ class Mesh:
 
     def tri_count(self):
         return len(self.i) // 3
+
+    def ground_cover(self, cell=0.01):
+        """ПРОЕКТИВНОЕ ПОКРЫТИЕ дернины, м² — сколько земли она закрывает,
+        если смотреть сверху. Это и есть та величина, которую в играх совмещают
+        с ботаникой, а НЕ число побегов: глазу важно, видно ли землю, а не
+        сколько в квадратном метре стеблей. Считается растеризацией
+        треугольников на сетку 1 см в плане — без домыслов о форме."""
+        if not self.i:
+            return 0.0
+        v = np.array(self.v, dtype=float)
+        tri = np.array(self.i, dtype=int).reshape(-1, 3)
+        p = v[:, [0, 2]]                      # вид сверху
+        filled = set()
+        for a, b, c in tri:
+            pa, pb, pc = p[a], p[b], p[c]
+            lo = np.floor(np.minimum(np.minimum(pa, pb), pc) / cell).astype(int)
+            hi = np.ceil(np.maximum(np.maximum(pa, pb), pc) / cell).astype(int)
+            if (hi - lo).max() > 400:
+                continue
+            d = (pb[1] - pc[1]) * (pa[0] - pc[0]) + (pc[0] - pb[0]) * (pa[1] - pc[1])
+            if abs(d) < 1e-12:
+                continue
+            for gi in range(lo[0], hi[0] + 1):
+                for gj in range(lo[1], hi[1] + 1):
+                    q = np.array([(gi + 0.5) * cell, (gj + 0.5) * cell])
+                    l1 = ((pb[1] - pc[1]) * (q[0] - pc[0]) + (pc[0] - pb[0]) * (q[1] - pc[1])) / d
+                    l2 = ((pc[1] - pa[1]) * (q[0] - pc[0]) + (pa[0] - pc[0]) * (q[1] - pc[1])) / d
+                    l3 = 1.0 - l1 - l2
+                    if l1 >= -1e-6 and l2 >= -1e-6 and l3 >= -1e-6:
+                        filled.add((gi, gj))
+        return len(filled) * cell * cell
 
     def pack(self):
         v = np.array(self.v, dtype="<f4")
@@ -277,12 +309,60 @@ BUILDERS = {"злак": grass_tuft, "разнотравье": herb_plant,
             "осока": sedge_tuft}
 
 
+def community_patch(veg, species, cname, com, rng, side_m=0.5, widen=3.0):
+    """КУРТИНА сообщества — крупная единица для средней дали.
+
+    ЗАЧЕМ ОНА ВООБЩЕ. Дернина закрывает 0.0018 м², и на луг с покрытием 97%
+    их нужно 539 на квадратный метр — 59 536 △/м², то есть геометрия кончается
+    на 2.1 м от ног. Кадра из этого не выйдет. Куртина закрывает ту же землю
+    много меньшим числом треугольников, потому что её листья ШИРЕ.
+
+    ПОЧЕМУ РАСШИРЯТЬ ЛИСТ — НЕ ОБМАН. ИЗМЕРЕНО: на телефоне (1290 пикселей по
+    ширине, поле зрения 66°) один пиксель на расстоянии 8 м закрывает 8 мм, а
+    лист травы шириной 5-9 мм — это ровно один пиксель. Лист тоньше пикселя
+    нарисовать НЕЛЬЗЯ: он либо исчезает, либо мерцает. Расширение с расстоянием
+    — это правильное поведение при нехватке разрешения, тот же довод, по
+    которому рябь воды переходит в шероховатость.
+
+    Число листьев не назначается, а ИЩЕТСЯ: добавляем, пока измеренное покрытие
+    куртины не дойдёт до покрытия сообщества.
+    """
+    target = com["cover"] * side_m * side_m
+    names = list(com["mix"].keys())
+    shares = np.array([com["mix"][n] for n in names], dtype=float)
+    shares = shares / shares.sum()
+    m = Mesh()
+    added = 0
+    for _ in range(4000):
+        cov = m.ground_cover(cell=0.01)
+        if cov >= target:
+            break
+        sname = names[int(rng.choice(len(names), p=shares))]
+        sp = species[sname]
+        h_lo, h_hi = sp["h_cm"]
+        h = rng.uniform(h_lo, h_hi) / 100.0
+        lw = sp["leaf_mm"] / 1000.0 * 0.5 * widen
+        col = sp["color"]
+        # место листа внутри куртины
+        px = rng.uniform(0.0, side_m)
+        pz = rng.uniform(0.0, side_m)
+        az = rng.uniform(0.0, math.tau)
+        pts = [np.array([px, 0.0, pz]) + p for p in
+               arc(h, rng.uniform(0.05, 0.20), rng.uniform(0.10, 0.35), az=az)]
+        widths = [lw * (1.0 - 0.8 * (k / LEAF_SEGS) ** 1.5) for k in range(LEAF_SEGS + 1)]
+        shade = rng.uniform(0.82, 1.18)
+        m.add_ribbon(pts, widths, [min(1.0, c * shade) for c in col],
+                     np.array([0.0, 1.0, 0.0]))
+        added += 1
+    return m, added, m.ground_cover(cell=0.01)
+
+
 def main():
     veg = json.load(open(os.path.join(G2, "data/real/vegetation.json")))
     species = veg["species"]
     os.makedirs(OUT_DIR, exist_ok=True)
     print("== РАСТЕНИЯ В ГЕОМЕТРИЮ (без Blender) ==")
-    print("вид                     | тип           | △    | высота, м | вершин")
+    print("вид                     | тип           | △    | высота, м | вершин | покрытие м²")
     rows = []
     blobs = []
     for name, sp in sorted(species.items()):
@@ -291,20 +371,50 @@ def main():
         m = BUILDERS[habit](sp, rng)
         vb, ib, nv, ni = m.pack()
         top = max(p[1] for p in m.v)
-        rows.append((sp["lat"], habit, m.tri_count(), top, nv))
-        blobs.append((sp["lat"], HABIT_CODE[habit], top, vb, ib, nv, ni))
-        print("%-23s | %-13s | %4d | %9.2f | %5d"
-              % (sp["lat"], habit, m.tri_count(), top, nv))
+        cover = m.ground_cover()
+        rows.append((sp["lat"], habit, m.tri_count(), top, nv, cover))
+        blobs.append((sp["lat"], HABIT_CODE[habit], top, cover, vb, ib, nv, ni))
+        print("%-23s | %-13s | %4d | %9.2f | %5d | %8.4f"
+              % (sp["lat"], habit, m.tri_count(), top, nv, cover))
 
     with open(OUT, "wb") as f:
         f.write(struct.pack("<II", 1, len(blobs)))
-        for lat, code, top, vb, ib, nv, ni in blobs:
+        for lat, code, top, cover, vb, ib, nv, ni in blobs:
             nm = lat.encode("utf-8")
-            f.write(struct.pack("<BBf", len(nm), code, top))
+            f.write(struct.pack("<BBff", len(nm), code, top, cover))
             f.write(nm)
             f.write(struct.pack("<II", nv, ni))
             f.write(vb)
             f.write(ib)
+
+    # --- КУРТИНЫ СООБЩЕСТВ (средняя даль) ---
+    print("\n== КУРТИНЫ 0.5 x 0.5 м (лист расширен втрое — по пикселю на 8 м) ==")
+    print("сообщество | листьев | покрытие | △    | куртин/м² | △/м²  | радиус при 800 тыс.")
+    patch_blobs = []
+    for cname, com in veg["communities"].items():
+        rng = np.random.default_rng(1000 + abs(hash(cname)) % 10000)
+        pm, added, cov = community_patch(veg, species, cname, com, rng)
+        vb, ib, nv, ni = pm.pack()
+        top = max(p[1] for p in pm.v) if pm.v else 0.0
+        patch_blobs.append((cname, com["zone"], top, cov, vb, ib, nv, ni))
+        n_m2 = 1.0 / 0.25                      # куртина закрывает свои 0.25 м²
+        tri_m2 = n_m2 * pm.tri_count()
+        radius = math.sqrt(800000.0 / max(tri_m2, 1.0) / math.pi)
+        print("%-10s | %7d | %7.0f%% | %4d | %9.1f | %6.0f | %.1f м"
+              % (cname, added, 100.0 * cov / 0.25, pm.tri_count(), n_m2, tri_m2, radius))
+
+    with open(os.path.join(OUT_DIR, "patches.bin"), "wb") as f:
+        f.write(struct.pack("<II", 1, len(patch_blobs)))
+        for cname, zone, top, cov, vb, ib, nv, ni in patch_blobs:
+            nm = cname.encode("utf-8")
+            f.write(struct.pack("<BBff", len(nm), zone, top, cov))
+            f.write(nm)
+            f.write(struct.pack("<II", nv, ni))
+            f.write(vb)
+            f.write(ib)
+    print("  записано: %s (%.1f КБ)"
+          % (os.path.join(OUT_DIR, "patches.bin"),
+             os.path.getsize(os.path.join(OUT_DIR, "patches.bin")) / 1024.0))
 
     tris = sum(r[2] for r in rows)
     print("\nвсего видов %d, треугольников на все дернины %d" % (len(rows), tris))
@@ -324,20 +434,39 @@ def main():
             print("  %-23s высота %.2f м вне ботаники %.2f..%.2f м" % (lat, top, lo, hi))
     print("  видов с высотой вне диапазона: %d из %d" % (bad, len(rows)))
 
-    # --- ЧТО ЭТО ЗНАЧИТ ДЛЯ КАДРА
-    lug = veg["communities"]["луг"]
-    per_tuft = tris / max(len(rows), 1)
-    shoots_m2 = lug["shoots_m2"]
-    print("\n== ЦЕНА ПОКРОВА (луг, %d побегов/м²) ==" % shoots_m2)
-    for r_m in (2.0, 4.0, 8.0):
-        area = math.pi * r_m * r_m
-        # дернин на м² берём из ботаники: побеги / побегов в дернине (в среднем)
-        avg_shoots = np.mean([species[n]["shoots"] for n in lug["mix"]])
-        tufts = area * shoots_m2 / avg_shoots
-        print("  радиус %4.1f м: %6.0f м², дернин %8.0f, △ %10.0f"
-              % (r_m, area, tufts, tufts * per_tuft))
-    print("  Отсюда видно, почему геометрией показывается ТОЛЬКО ближний круг:")
-    print("  бюджет кадра телефона — единицы миллионов треугольников на ВСЁ.")
+    # --- СКОЛЬКО ДЕРНИН НУЖНО, ЧТОБЫ ЗАКРЫТЬ ЗЕМЛЮ ---
+    # Совмещаем ПОКРЫТИЕ, а не число побегов. Настоящий луг держит 11 000
+    # побегов/м², и геометрией это не показать никогда: 1100 дернин/м² при 89 △
+    # это 98 тысяч треугольников на КАЖДЫЙ квадратный метр. Но глазу важно
+    # другое — видно ли землю. Покрытие луга 97%, и его можно закрыть на два
+    # порядка меньшим числом дернин, потому что одна дернина закрывает не
+    # 1/11000 квадратного метра, а измеренную здесь площадь.
+    print("\n== СКОЛЬКО ДЕРНИН НУЖНО ПО ПОКРЫТИЮ ==")
+    print("сообщество | покрытие | дернин/м² | △/м²  | радиус при 800 тыс. △")
+    budget = 800000.0        # треугольников на весь покров в кадре
+    for cname, com in veg["communities"].items():
+        mix = com["mix"]
+        # среднее покрытие и цена дернины по составу сообщества
+        cov = 0.0
+        tri = 0.0
+        for sname, share in mix.items():
+            lat = species[sname]["lat"]
+            r = [x for x in rows if x[0] == lat][0]
+            cov += share * r[5]
+            tri += share * r[2]
+        if cov <= 0.0:
+            continue
+        # дернины перекрываются, поэтому нужно больше, чем покрытие/площадь:
+        # при случайной раскладке доля закрытой земли равна 1-exp(-n·cov)
+        target = com["cover"]
+        n_m2 = -math.log(max(1.0 - target, 0.01)) / cov
+        tri_m2 = n_m2 * tri
+        radius = math.sqrt(budget / tri_m2 / math.pi)
+        print("%-10s | %7.0f%% | %9.0f | %6.0f | %.1f м"
+              % (cname, target * 100, n_m2, tri_m2, radius))
+    print("  Радиус — это докуда доходит ГЕОМЕТРИЯ при бюджете %.0f тыс. △." % (budget / 1000))
+    print("  Дальше покров обязан уходить в материал земли, иначе кадра не будет.")
+    print("  Число надо будет ЗАМЕРИТЬ на устройстве, здесь оно расчётное.")
 
 
 if __name__ == "__main__":

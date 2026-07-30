@@ -285,6 +285,21 @@ func _process(_delta: float) -> void:
 
 # ------------------------------------------------------------------ материал
 const ZONES_PATH := "res://assets/dem/zones_1024.bin"
+var _zones: PackedByteArray
+
+## Зона (сообщество) в точке: 0 луг, 1 парк, 2 лес, 3 поле, 4 город, 5 берег.
+## Тот же растр, по которому земля красится — иначе трава росла бы не там, где
+## её обещает материал.
+func zone_at(x: float, z: float) -> int:
+	if _zones.is_empty():
+		return 0
+	var u := (x + DEM_HALF) / (2.0 * DEM_HALF)
+	var v := (z + DEM_HALF) / (2.0 * DEM_HALF)
+	if u < 0.0 or v < 0.0 or u >= 1.0 or v >= 1.0:
+		return 0
+	var i := int(u * float(ZONES_N))
+	var j := int(v * float(ZONES_N))
+	return int(_zones[j * ZONES_N + i])
 const ZONES_N := 1024
 
 func _height_texture() -> ImageTexture:
@@ -445,6 +460,10 @@ func _ground_material() -> ShaderMaterial:
 	var f := FileAccess.open(ZONES_PATH, FileAccess.READ)
 	if f != null:
 		var bytes := f.get_buffer(ZONES_N * ZONES_N)
+		# ЗОНЫ НУЖНЫ И НА ПРОЦЕССОРЕ. Раньше растр уходил только в шейдер земли,
+		# и спросить «какое тут сообщество» было нельзя — а покрову это нужно,
+		# чтобы сеять луг лугом, а лес лесом. Держим те же байты у себя.
+		_zones = bytes
 		var img := Image.create_from_data(ZONES_N, ZONES_N, false, Image.FORMAT_R8, bytes)
 		m.set_shader_parameter("zone_tex", ImageTexture.create_from_image(img))
 	else:

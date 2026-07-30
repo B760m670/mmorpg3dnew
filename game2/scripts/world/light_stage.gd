@@ -79,9 +79,10 @@ func _ready() -> void:
 	_build_roads()
 	_build_city()
 	_build_backdrop()
-	# СТАРАЯ трава (MultiMesh, разбросанные былинки) УБРАНА — она была
-	# неестественной и «размазанной» по всей карте; траву создадим настоящей
-	# (разной, в Blender) позже. Сейчас работаем над ПОЧВОЙ.
+	# ПОКРОВ ВЕРНУЛСЯ, но уже настоящей геометрией по ботанике: дернины вблизи,
+	# куртины в средней дали, дальше материал земли. Густота выведена из
+	# ПРОЕКТИВНОГО ПОКРЫТИЯ сообщества, а радиус — из бюджета треугольников.
+	_build_plants()
 	_build_soil_volume()
 	_build_props()
 	_build_camera()
@@ -804,6 +805,28 @@ func _terrain_line() -> String:
 ## осыпаются по своим углам естественного откоса.
 var _soil: SoilVolume
 
+# preload, а не имя класса: кэш имён на свежем запуске может ещё не знать про
+# новый файл, и тогда СЦЕНА НЕ ГРУЗИТСЯ ВОВСЕ. Ловили это уже дважды —
+# на live_link и на water_physics.
+const PLANTS := preload("res://scripts/world/plants.gd")
+var _plants: Node3D
+
+func _build_plants() -> void:
+	_plants = PLANTS.new()
+	_plants.terrain = _terrain
+	add_child(_plants)
+	_plants.build()
+
+# ПОКРОВ СЕЕТСЯ ВОКРУГ НАБЛЮДАТЕЛЯ и пересевается, только когда он заметно
+# сместился: пересев стоит миллисекунды, и каждый кадр он не нужен.
+func _update_plants() -> void:
+	if _plants == null:
+		return
+	var who := _cam.global_position if _cam != null else Vector3.ZERO
+	if _walk_active and _walker != null:
+		who = _walker.global_position
+	_plants.reseed(who)
+
 func _build_soil_volume() -> void:
 	_soil = SoilVolume.new()
 	add_child(_soil)
@@ -850,6 +873,7 @@ func _process(_delta: float) -> void:
 	_update_fog_altitude()
 	_update_underwater()
 	_update_water_sim(_delta)
+	_update_plants()
 	_update_moon_light()
 	_update_hud()
 	_update_compass()
