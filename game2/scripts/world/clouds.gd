@@ -10,7 +10,7 @@ extends Node3D
 @export var sun: DirectionalLight3D
 @export var clock: WorldClock                 # для дня/ночи (высота Солнца)
 @export var night_sky: NightSky               # для света Луны ночью
-@export var coverage: float = 0.55
+@export var coverage: float = 0.42
 @export var day_time_scale: float = 288.0     # как у WorldClock (сутки=5 мин)
 @export var weather_enabled: bool = true      # false → покрытие фиксировано (для стенда)
 
@@ -19,6 +19,11 @@ extends Node3D
 # сереют до невидимости и сливаются с небом). Слой облаков (1200..3200 м)
 # считается аналитически по мировому лучу, от радиуса купола не зависит.
 const DOME_R := 2500.0
+# Опорные величины полудня, от которых считаются доли света для шейдера:
+# энергия луча (WorldClock.SUN_BASE_ENERGY) и рассеянный свет неба в полдень
+# 21 июня в Гатчине (полная горизонтальная 95 клк минус прямая 80 клк).
+const SUN_REF := 4.3
+const SKY_REF_KLX := 14.8
 var _mat: ShaderMaterial
 var _t: float = 0.0
 
@@ -27,7 +32,7 @@ var _t: float = 0.0
 # (в масштабе часов; на 5-мин сутках заметно за десятки секунд). Ветер при этом
 # сносит сами облака (движение). current_coverage — для HUD.
 var _weather_t: float = 0.0
-var current_coverage: float = 0.55
+var current_coverage: float = 0.42
 
 func _make_noise_3d(cellular: bool, freq: float, octaves: int) -> NoiseTexture3D:
 	var n := FastNoiseLite.new()
@@ -52,7 +57,6 @@ func build() -> void:
 	_mat.set_shader_parameter("shape_tex", _make_noise_3d(false, 0.035, 3))  # форма
 	_mat.set_shader_parameter("detail_tex", _make_noise_3d(true, 0.10, 2))   # эрозия краёв
 	_mat.set_shader_parameter("coverage", coverage)
-	_mat.set_shader_parameter("sky_ambient", Vector3(0.72, 0.78, 0.88))  # тон яркого пасмурного неба
 	_mat.set_shader_parameter("wind_x", 0.004)
 	_mat.set_shader_parameter("wind_z", 0.002)
 
@@ -107,12 +111,25 @@ func _process(delta: float) -> void:
 		_mat.set_shader_parameter("sun_dir", to_sun)
 		_mat.set_shader_parameter("sun_color", Vector3(sun.light_color.r, sun.light_color.g, sun.light_color.b))
 
-	# ДЕНЬ/НОЧЬ: дневной свет облаков гаснет с заходом Солнца (иначе облака
-	# СВЕТИЛИСЬ белым ночью). Ночью их подхватывает настоящая Луна.
-	if clock != null:
-		var el := clock.sun_elevation_deg
-		_mat.set_shader_parameter("day", smoothstep(-12.0, 3.0, el))     # купол неба/сумерки
-		_mat.set_shader_parameter("sun_up", smoothstep(-1.0, 2.0, el))   # прямой луч только над горизонтом
+	# СВЕТ ОБЛАКОВ — ДОЛЯ ОТ ПОЛУДЕННОГО, А НЕ КОНСТАНТА С ГЕЙТОМ.
+	#
+	# Раньше здесь стояли два множителя «дневности» по высоте Солнца, гасившие
+	# зашитые в шейдер константы. Работало это ровно до тех пор, пока экспозиция
+	# была почти постоянной. Как только она честно выросла к ночи (×18), кадр в
+	# 22:00 выжегся в белое целиком — ИЗМЕРЕНО, а не показалось. Свет, не
+	# связанный с люксами, рано или поздно всплывает наружу.
+	if clock != null and sun != null:
+		_mat.set_shader_parameter("sun_energy",
+			clampf(sun.light_energy / SUN_REF, 0.0, 1.3))
+		_mat.set_shader_parameter("sky_energy",
+			clampf(clock.sky_diffuse_klx / SKY_REF_KLX, 0.0, 1.3))
+		var sc: Array = WeatherSky.sky_colors(
+			WeatherSky.overcast_from_coverage(current_coverage), clock.sun_elevation_deg)
+		var hor: Vector3 = sc[0]
+		var zen: Vector3 = sc[1]
+		var tint := zen.lerp(hor, 0.5)
+		tint /= maxf(maxf(tint.x, tint.y), maxf(tint.z, 1.0e-4))
+		_mat.set_shader_parameter("sky_tint", tint)
 	if night_sky != null:
 		_mat.set_shader_parameter("moon_dir", night_sky.moon_dir_world)
 		var ml := night_sky.moon_light
