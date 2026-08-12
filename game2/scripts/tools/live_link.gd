@@ -207,6 +207,22 @@ func _exec(line: String) -> void:
 				_reply("ok %s = %s" % [pk, pa[1]])
 			else:
 				_reply("post on|off | post glare|grain|vignette|ca ЧИСЛО")
+		"env":
+			# ПОКРУТИТЬ СВЕТ РУКАМИ: «env amp 4», «env exp 2.5», «env sky 0.3».
+			# Нужно, чтобы РАЗДЕЛИТЬ причины темноты: мало рассеянного света от
+			# неба или мала экспозиция. Гадать тут нельзя — это разные лечения.
+			if stage == null or stage._env == null:
+				_reply("нет окружения"); return
+			var ea := arg.split(" ")
+			if ea.size() < 2:
+				_reply("env amb|exp|sky ЧИСЛО"); return
+			var ev := float(ea[1])
+			match ea[0]:
+				"amb": stage._env.ambient_light_energy = ev
+				"exp": stage._env.tonemap_exposure = ev
+				"sky": stage._env.ambient_light_sky_contribution = ev
+				_: _reply("env amb|exp|sky ЧИСЛО"); return
+			_reply("ok %s = %.3f" % [ea[0], ev])
 		"weather":
 			# ОБЛАЧНОСТЬ ФИКСИРУЕТСЯ (0 ясно .. 1 сплошь). Без этого «дыхание»
 			# погоды меняет свет между двумя снимками, и сравнивать их нельзя:
@@ -368,6 +384,13 @@ func _state() -> String:
 	if clock != null:
 		s += "\nвремя %s, солнце %.1f°/аз %.1f°" \
 			% [clock.local_time_string(), clock.sun_elevation_deg, clock.sun_azimuth_deg]
+	# СВЕТ ЧИСЛАМИ. Без этого «темно» остаётся впечатлением: непонятно, мало
+	# света у солнца, мало у неба или экспозиция не подхватила сумерки.
+	if stage != null and stage._sun != null and stage._env != null:
+		s += "\nсвет: солнце %.2f (%d клк, %dК), неб.свет %.2f, экспозиция %.3f, пасмурность %.2f" \
+			% [stage._sun.light_energy, int(clock.sun_direct_klx),
+			int(clock.sun_color_temp_k), stage._env.ambient_light_energy,
+			stage._env.tonemap_exposure, stage._weather_oc]
 	return s
 
 ## ЧТО ЧУВСТВУЕТ ТЕЛО. Раньше такого вопроса нельзя было задать вовсе: вода

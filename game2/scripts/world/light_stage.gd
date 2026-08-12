@@ -382,37 +382,7 @@ func _build_moon_light() -> void:
 func _update_moon_light() -> void:
 	if _moon_light == null or _night_sky == null or _env == null:
 		return
-	# СВЕЧЕНИЕ НОЧНОГО НЕБА. Рассеянный свет берётся с купола неба, а ночью его
-	# яркость практически ноль — земля получала РОВНО НОЛЬ, и никакая экспозиция
-	# этого не исправляет. Между тем безлунная ясная ночь даёт у земли около
-	# 0.002 лк (воздушное свечение, звёзды, рассеянный свет городов), и формы
-	# различимы. Ночью источник рассеянного света переключается на явный
-	# холодный цвет — это тот же приём приспособления глаза, что и в night_gain.
-	# ИЗМЕРЕНО, где порог. Замер яркости неба и земли в одном кадре:
-	#   09:00 небо 0.656 земля 0.276 — 2:1
-	#   15:09 небо 0.665 земля 0.427 — 2:1
-	#   19:15 (Солнце −0.3°) небо 0.710 земля 0.0235 — 30:1
-	# Небо такое же яркое, а земля проваливается в ноль: её освещало почти
-	# только Солнце, а рассеянный свет неба до неё практически не доходил.
-	# Поэтому подъём начинается не в глубокой ночи, а с +3°, когда Солнце ещё
-	# над горизонтом, — то есть ровно там, где прямой свет начинает гаснуть.
-	var night := clampf((3.0 - _clock.sun_elevation_deg) / 9.0, 0.0, 1.0)
-	if night > 0.0:
-		_env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-		# цвет — холодный, как сумеречное и ночное небо; сила растёт по мере
-		# ухода Солнца, компенсируя исчезнувший прямой свет
-		_env.ambient_light_color = Color(0.34, 0.42, 0.58)
-		_env.ambient_light_energy = lerpf(WeatherSky.ambient_energy(_weather_oc), 3.2, night)
-		# БЕЗ ЭТОЙ СТРОКИ ПРЕДЫДУЩИЕ ДВЕ НЕ ДЕЛАЮТ НИЧЕГО. Доля неба в рассеянном
-		# свете по умолчанию 1.0, и при ней заданный цвет игнорируется целиком —
-		# сколько ни ставь ambient_light_color и energy, работает только купол
-		# неба, а его яркость в сумерках почти ноль. ИЗМЕРЕНО: подъём энергии до
-		# 3.2 сдвинул землю всего с 0.0235 до 0.0382 при небе 0.717.
-		_env.ambient_light_sky_contribution = 1.0 - night
-	else:
-		_env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-		_env.ambient_light_sky_contribution = 1.0
-		_env.ambient_light_energy = WeatherSky.ambient_energy(_weather_oc)
+	_apply_skylight()
 	var d: Vector3 = _night_sky.moon_dir_world
 	var above := clampf(d.y, 0.0, 1.0)
 	if above <= 0.001:
@@ -423,6 +393,97 @@ func _update_moon_light() -> void:
 	var lit: float = _night_sky.moon_light.get_luminance() * 2.0
 	var dark := clampf((-_clock.sun_elevation_deg + 2.0) / 8.0, 0.0, 1.0)
 	_moon_light.light_energy = clampf(lit * above * dark * 0.5, 0.0, 0.25)
+
+# --- СВЕТ НЕБА И ЭКСПОЗИЦИЯ ПО ФИЗИКЕ, А НЕ ПО ПОРОГАМ ---
+#
+# ЧТО БЫЛО СЛОМАНО (ИЗМЕРЕНО, ясно, камера на лужайке, съёмка через час):
+#   солнце 52.3° — небо 140, земля 180   (0.8:1)
+#   солнце 17.8° — небо 120, земля  41   (2.9:1)
+#   солнце  9.7° — небо  70, земля 3.4   (20:1)   <- земля ушла в чёрное
+#   солнце  3.1° — небо  10, земля 1.5   (6.6:1)  <- чёрное всё
+#   солнце  0.9° — небо  12, земля  63   (0.2:1)  <- скачок: включилась «ночь»
+#   солнце −4.9° — небо  18, земля 147            <- ночь ярче дня
+# Земля падала в 12 раз там, где физический свет падал в 1.7 раза, а потом
+# скачком становилась ярче полудня. Обе беды — от порогов «с +3° включаем
+# ночное усиление» вместо счёта света.
+#
+# КАК ДОЛЖНО БЫТЬ. Рассеянный свет неба — не «добавка к ночи», а половина
+# дневного света и почти весь сумеречный (world_clock.sky_diffuse_klx). Поэтому
+# тень при низком солнце СВЕТЛАЯ: при 10° отношение «на солнце : в тени» около
+# 2:1, а в полдень около 7:1 — ровно наоборот тому, что делал движок.
+#
+# ДВА КОЭФФИЦИЕНТА КАЛИБРУЮТСЯ ЗАМЕРОМ, а не выводятся: единицы освещённости
+# Godot (light_energy, ambient_light_energy) к люксам не привязаны.
+# ЭНЕРГИЯ НА КИЛОЛЮКС — ОДНА И ТА ЖЕ ДЛЯ СОЛНЦА И ДЛЯ НЕБА, и она не выдумана:
+# часы дают Солнцу light_energy 4.20 при луче 101 клк, то есть 0.0416 на клк.
+# Небо обязано считаться по той же шкале, иначе доля рассеянного света в кадре
+# не имеет отношения к физике. ИЗМЕРЕНО, как я это поймал: с моим первым
+# значением 0.085 отношение «прямой на горизонталь : рассеянный» вышло 1:2.2
+# при солнце 9.7°, тогда как в люксах оно 6.4:7.2, то есть 1:1.1 — небо светило
+# ровно вдвое сильнее должного, и вечер выглядел пасмурным полднем.
+const AMB_PER_KLX := 0.0416          # рассеянный свет неба: энергия на 1 клк
+# НОЧНОЕ СВЕЧЕНИЕ — СЛАГАЕМОЕ, А НЕ ПОЛ. Пол (max) ломал порядок: сразу после
+# заката настоящий свет неба ещё 0.19 клк, а через час 0.009 клк — и пол в
+# 0.006 делал ПОЗДНИЕ сумерки ярче ранних (9.3 против 5.3 в кадре). Слагаемое
+# такого не делает.
+# Честно про величину: воздушное свечение и звёзды дают у земли около 0.001 клк,
+# а здесь заложено примерно 0.1 клк. Это не физика, а решение: иначе безлунная
+# ночь в игре — чёрный экран. Глаз добирает недостающее палочковым зрением,
+# которого у нас нет.
+const NIGHT_GLOW := 0.004
+const EXPOSURE_REF_KLX := 100.0      # при этом свете экспозиция базовая
+# ДВА РЕЖИМА ПРИСПОСОБЛЕНИЯ, а не один. Пока Солнце над горизонтом, света с
+# запасом, и глаз почти не меняет чувствительность (колбочки, фотопическое
+# зрение) — показатель 0.15. После заката свет падает на порядки за десятки
+# минут, и включается настоящая адаптация (палочки) — показатель 0.62 с
+# потолком. Одна степень на весь диапазон не годится: с мягкой ночь чернеет,
+# с жёсткой сумерки выглядят полднем. ИЗМЕРЕНО на своей же шкале: с единой
+# степенью 0.42 при Солнце 3.1° земля давала 86/255 при небе 41 — то есть
+# полдень с чёрным небом.
+const EXPOSURE_BREAK_KLX := 4.0      # граница режимов
+const EXPOSURE_P_DAY := 0.15
+const EXPOSURE_P_NIGHT := 0.62
+const EXPOSURE_MAX := 20.0
+
+func _apply_skylight() -> void:
+	if _env == null or _clock == null:
+		return
+	# Источник — ЯВНЫЙ ЦВЕТ, а не купол: яркость купола в сумерках падает на
+	# порядки быстрее, чем настоящая освещённость от неба, и именно это
+	# оставляло землю без света. Цвет берём у неба, силу — из люксов.
+	_env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	_env.ambient_light_sky_contribution = 0.0
+	# sky_colors отдаёт Vector3 и уже помноженные на «дневность»; здесь нужен
+	# только ЦВЕТ — силу задают люксы, иначе яркость учитывалась бы дважды.
+	var sc: Array = WeatherSky.sky_colors(_weather_oc, _clock.sun_elevation_deg)
+	var hor: Vector3 = sc[0]
+	var zen: Vector3 = sc[1]
+	var tint := zen.lerp(hor, 0.45)
+	tint /= maxf(maxf(tint.x, tint.y), maxf(tint.z, 1.0e-4))
+	_env.ambient_light_color = Color(tint.x, tint.y, tint.z)
+	var e := _clock.sky_diffuse_klx * AMB_PER_KLX + NIGHT_GLOW
+	# ЛУНА добавляет к свету неба: полнолуние даёт у земли около 0.25 лк —
+	# в тысячу раз меньше заката, но это разница между «видно формы» и «ничего».
+	if _night_sky != null:
+		var md: Vector3 = _night_sky.moon_dir_world
+		if md.y > 0.0:
+			e += _night_sky.moon_light.get_luminance() * md.y * 0.05
+	_env.ambient_light_energy = e
+
+## Экспозиция как приспособление глаза: не постоянная и не ступенькой.
+## Степень 0.42 выбрана так, чтобы ночь ОСТАВАЛАСЬ ночью: полный выравнивающий
+## показатель 1.0 сделал бы полночь неотличимой от полудня, что и происходило.
+func _exposure_now() -> float:
+	if _clock == null:
+		return WeatherSky.exposure(_weather_oc)
+	var e := maxf(_clock.total_horiz_klx, 1.0e-6)
+	var k_break: float = pow(EXPOSURE_REF_KLX / EXPOSURE_BREAK_KLX, EXPOSURE_P_DAY)
+	var k: float
+	if e >= EXPOSURE_BREAK_KLX:
+		k = pow(EXPOSURE_REF_KLX / e, EXPOSURE_P_DAY)
+	else:
+		k = k_break * pow(EXPOSURE_BREAK_KLX / e, EXPOSURE_P_NIGHT)
+	return WeatherSky.exposure(_weather_oc) * clampf(k, 1.0, EXPOSURE_MAX)
 
 func _build_night_sky() -> void:
 	_night_sky = NightSky.new()
@@ -457,13 +518,11 @@ func _update_weather() -> void:
 	# ЭКСПОЗИЦИЯ — КАЖДЫЙ КАДР, а не только при смене погоды: Солнце садится
 	# непрерывно, и приспособление глаза к темноте должно идти за ним.
 	if _env != null and _clock != null and not _underwater:
-		_env.tonemap_exposure = WeatherSky.exposure(_weather_oc) \
-			* WeatherSky.night_gain(_clock.sun_elevation_deg)
+		_env.tonemap_exposure = _exposure_now()
 	if absf(oc - _weather_oc) > 0.01:             # небо/экспозицию — при заметном изменении
 		_weather_oc = oc
 		if _sky_mat != null:
 			WeatherSky.apply_sky(_sky_mat, oc)
-		_env.ambient_light_energy = WeatherSky.ambient_energy(oc)
 		# ВОДЕ — запасной купол на случай, когда отражённый луч ушёл за кадр и
 		# неба в кадре нет. Обновляем вместе с погодой, а не каждый кадр.
 		if _water_real != null and _clock != null:
@@ -473,8 +532,7 @@ func _update_weather() -> void:
 		# иначе погода тут же возвращала воздушные значения, и погружение
 		# пропадало через кадр
 		if not _underwater:
-			_env.tonemap_exposure = WeatherSky.exposure(oc) \
-				* WeatherSky.night_gain(_clock.sun_elevation_deg)
+			_env.tonemap_exposure = _exposure_now()
 
 # --- НАСТОЯЩАЯ земля: рельеф Гатчины в реальном масштабе (метры) ---
 func _build_ground() -> void:
@@ -919,7 +977,7 @@ func _update_underwater() -> void:
 		_env.fog_light_energy = 2.2
 		_env.fog_sky_affect = 1.0
 		_env.fog_aerial_perspective = 0.0
-		_env.tonemap_exposure = WeatherSky.exposure(_weather_oc) * 0.85
+		_env.tonemap_exposure = _exposure_now() * 0.85
 	else:
 		_env.fog_mode = Environment.FOG_MODE_DEPTH
 		_env.fog_density = 0.0007
@@ -927,7 +985,7 @@ func _update_underwater() -> void:
 		_env.fog_light_energy = 1.0
 		_env.fog_sky_affect = 0.0
 		_env.fog_aerial_perspective = 0.55
-		_env.tonemap_exposure = WeatherSky.exposure(_weather_oc)
+		_env.tonemap_exposure = _exposure_now()
 
 # воздушная перспектива — ПРИЗЕМНЫЙ эффект (даль тает в дымке). С высоты полёта
 # её граница (fog_depth_end) ложилась ДИСКОМ по земле («круг» под облаками).
