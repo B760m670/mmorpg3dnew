@@ -161,9 +161,16 @@ func _exec(line: String) -> void:
 		"walk":
 			# ТЕЛО В ТОЧКУ. Без этого воду нельзя проверить: смотреть на неё
 			# камерой — не то же самое, что войти в неё телом.
-			var wp := arg.split(",")
 			if walker == null or terrain == null or stage == null:
 				_reply("нет тела"); return
+			if arg.begins_with("off"):
+				# ВЕРНУТЬ СВОБОДНУЮ КАМЕРУ, оставив следы на земле. Без этого
+				# на след нельзя посмотреть: в режиме пешехода камера привязана
+				# к телу и стоит там же, где след.
+				if stage._walk_active:
+					stage._toggle_walk()
+				_reply("ok полёт"); return
+			var wp := arg.split(",")
 			var wx := float(wp[0])
 			var wz := float(wp[1]) if wp.size() > 1 else 0.0
 			var gy := terrain.height(wx, wz)
