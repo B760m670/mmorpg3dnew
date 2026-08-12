@@ -244,7 +244,14 @@ func _build_environment(gi: bool) -> Environment:
 	env.ambient_light_energy = WeatherSky.ambient_energy(0.6)
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 
-	env.tonemap_mode = Environment.TONE_MAPPER_ACES
+	# ТОНМАППЕР — FILMIC, А НЕ ACES. ИЗМЕРЕНО на ночном небе (пост выключён,
+	# облачность 0, чтобы мерить именно небо): ACES даёт R16.6 G19.1 B18.1, то
+	# есть зелёный канал ВЫШЕ остальных на 1.67 — на почти чёрном кадре это
+	# читается как зелёное свечение по всему небу, и это была не сцена, а кривая
+	# тона. Filmic на том же кадре даёт R25.1 G25.1 B25.1 (зелёность 0.03),
+	# AgX 0.30. На дневном кадре Filmic ничего не ломает: средняя 98.2 -> 98.4,
+	# доля пережога та же 0.14%; контраст мягче (ско 42.4 -> 34.4), тени светлее.
+	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	env.tonemap_exposure = WeatherSky.exposure(0.6)
 	env.tonemap_white = 6.0
 

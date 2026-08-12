@@ -209,6 +209,20 @@ func _exec(line: String) -> void:
 				_reply("ok %s = %s" % [pk, pa[1]])
 			else:
 				_reply("post on|off | post glare|grain|vignette|ca ЧИСЛО")
+		"tonemap":
+			# СМЕНИТЬ ТОНМАППЕР НА ХОДУ: aces|filmic|agx|reinhard|linear.
+			# Нужно, чтобы отличить «цвет пришёл из сцены» от «цвет сделал
+			# тонмаппер»: на почти чёрном кадре кривая тона решает всё.
+			if stage == null or stage._env == null:
+				_reply("нет окружения"); return
+			match arg:
+				"aces": stage._env.tonemap_mode = Environment.TONE_MAPPER_ACES
+				"filmic": stage._env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+				"agx": stage._env.tonemap_mode = Environment.TONE_MAPPER_AGX
+				"reinhard": stage._env.tonemap_mode = Environment.TONE_MAPPER_REINHARDT
+				"linear": stage._env.tonemap_mode = Environment.TONE_MAPPER_LINEAR
+				_: _reply("tonemap aces|filmic|agx|reinhard|linear"); return
+			_reply("ok тонмаппер %s" % arg)
 		"weather":
 			# ОБЛАЧНОСТЬ ФИКСИРУЕТСЯ (0 ясно .. 1 сплошь). Без этого «дыхание»
 			# погоды меняет свет между двумя снимками, и сравнивать их нельзя:
@@ -250,11 +264,13 @@ func _exec(line: String) -> void:
 			var rep: Dictionary = water.sim_selftest(Vector3(wcx, 0.0, wcz))
 			if not rep.get("ok", false):
 				_reply("проверка не вышла: %s" % rep.get("why", "?")); return
-			_reply(("толща %.2f м · за %.2f с гребень ушёл на %.2f м (высота %.4f м)\n"
-				+ "скорость %.2f м/с против sqrt(g·d)=%.2f м/с — ошибка %+.1f%%\n"
+			_reply(("толща %.2f м · гребень: %.2f м за %.2f с -> %.2f м за %.2f с\n"
+				+ "скорость по разности %.2f м/с против sqrt(g·d)=%.2f м/с — ошибка %+.1f%%\n"
+				+ "без затухания %.2f м/с (%+.1f%%): затухание %.2f гасит ВЫСОТУ, а не скорость\n"
 				+ "шаг решателя %.0f мкс на %d ячеек")
-				% [rep["depth_m"], rep["t_s"], rep["crest_r_m"], rep["crest_h_m"],
+				% [rep["depth_m"], rep["r_a"], rep["t_a"], rep["crest_r_m"], rep["t_s"],
 				rep["v_measured"], rep["v_theory"], rep["err_pct"],
+				rep["v_nodamp"], rep["err_pct_nodamp"], rep["damping"],
 				rep["step_usec"], rep["cells"]])
 		"moon":
 			# ГДЕ ЛУНА И ВИДНА ЛИ ОНА. «Луны не видно» — это три разных случая:

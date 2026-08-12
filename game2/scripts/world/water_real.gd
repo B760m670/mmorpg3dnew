@@ -325,6 +325,9 @@ var _rip_dirty := false
 const SIM_SIDE := 128           # ячеек
 const SIM_CELL := 0.25          # м; из замера сходимости — рабочая точность
 const SIM_RECENTER := 6.0       # м смещения наблюдателя до переезда окна
+# Затухание: рябь от шага должна жить секунды, а не минуты. Оно ЗАМЕДЛЯЕТ фронт,
+# и это надо помнить, читая проверку скорости гребня.
+const SIM_DAMPING := 0.55
 
 var sim: RefCounted             # ShallowWater, если модуль есть
 var _sim_origin := Vector2(1e9, 1e9)
@@ -342,7 +345,7 @@ func _sim_init() -> void:
 	sim = ClassDB.instantiate("ShallowWater")
 	sim.setup(SIM_SIDE, SIM_CELL)
 	# затухание: рябь от шага должна жить секунды, а не минуты
-	sim.set_damping(0.55)
+	sim.set_damping(SIM_DAMPING)
 	print("[вода] решатель мелкой воды: сетка %d×%d по %.2f м (окно %.0f м)"
 		% [SIM_SIDE, SIM_SIDE, SIM_CELL, SIM_SIDE * SIM_CELL])
 
@@ -364,11 +367,33 @@ func sim_center_on(pos: Vector3, force: bool = false) -> void:
 	var t0 := Time.get_ticks_usec()
 	var d := PackedFloat32Array()
 	d.resize(SIM_SIDE * SIM_SIDE)
+	# СПРАШИВАЕМ БАТИМЕТРИЮ РЕЖЕ, ЧЕМ СЧИТАЕМ. ИЗМЕРЕНО: 16 384 обращения к
+	# depth_at стоили 35.5 мс — втрое больше ВСЕГО кадра при 90 к/с, то есть
+	# каждые шесть метров ходьбы игра спотыкалась. При этом спрашивать чаще
+	# нечего: урез у нас растром 2 м, а рельеф DEM 32 м, так что между узлами
+	# в метр нет никакой новой правды. Берём каждый четвёртый узел (1 м) и
+	# достраиваем билинейно — 1089 обращений вместо 16 384.
+	var stepn := 4
+	var cn := SIM_SIDE / stepn + 1
+	var coarse := PackedFloat32Array()
+	coarse.resize(cn * cn)
+	for cj in range(cn):
+		var wz := org.y + float(cj * stepn) * SIM_CELL
+		for ci in range(cn):
+			coarse[cj * cn + ci] = depth_at(org.x + float(ci * stepn) * SIM_CELL, wz)
 	for j in range(SIM_SIDE):
-		var wz := org.y + float(j) * SIM_CELL
+		var fj := float(j) / float(stepn)
+		var j0 := int(fj)
+		var tj := fj - float(j0)
+		var j1 := mini(j0 + 1, cn - 1)
 		for i in range(SIM_SIDE):
-			var wx := org.x + float(i) * SIM_CELL
-			d[j * SIM_SIDE + i] = depth_at(wx, wz)
+			var fi := float(i) / float(stepn)
+			var i0 := int(fi)
+			var ti := fi - float(i0)
+			var i1 := mini(i0 + 1, cn - 1)
+			var a := lerpf(coarse[j0 * cn + i0], coarse[j0 * cn + i1], ti)
+			var b := lerpf(coarse[j1 * cn + i0], coarse[j1 * cn + i1], ti)
+			d[j * SIM_SIDE + i] = lerpf(a, b, tj)
 	sim.set_depth(d)
 	sim_refill_ms = float(Time.get_ticks_usec() - t0) / 1000.0
 	if not _refill_logged:
@@ -387,6 +412,20 @@ func sim_center_on(pos: Vector3, force: bool = false) -> void:
 func sim_selftest(center: Vector3, t_probe: float = 0.8) -> Dictionary:
 	if sim == null:
 		return {"ok": false, "why": "решателя нет"}
+	# ДВА ПРОГОНА: с игровым затуханием и без него. Иначе одна цифра ошибки
+	# ничего не значит — непонятно, схема ли врёт или это затухание тормозит
+	# фронт. Затухание у нас не украшение: без него рябь от шага живёт минутами.
+	var r_free := _sim_run(center, t_probe, 0.0)
+	var r_game := _sim_run(center, t_probe, SIM_DAMPING)
+	sim.set_damping(SIM_DAMPING)
+	if not r_game.get("ok", false):
+		return r_game
+	r_game["err_pct_nodamp"] = r_free.get("err_pct", 0.0)
+	r_game["v_nodamp"] = r_free.get("v_measured", 0.0)
+	return r_game
+
+func _sim_run(center: Vector3, t_probe: float, damping: float) -> Dictionary:
+	sim.set_damping(damping)
 	# ОКНО СТАВИМ ПРИНУДИТЕЛЬНО: обычная постановка ленива (переезжает раз в 6 м),
 	# и проверка бросала бы возмущение мимо расчётной области.
 	sim_center_on(center, true)
@@ -396,36 +435,66 @@ func sim_selftest(center: Vector3, t_probe: float = 0.8) -> Dictionary:
 		return {"ok": false, "why": "в этой точке воды нет (толща %.2f м)" % d}
 	sim.disturb(center, 0.5, 0.05)
 	var dt := 1.0 / 120.0
-	var steps := int(t_probe / dt)
+	# ДВА ЗАМЕРА, А НЕ ОДИН. Возмущение рождается не в точке, а пятном радиуса
+	# 0.5 м, и гребень стартует уже с этого радиуса. Делить путь на время от
+	# нуля — значит вычесть из скорости эту фору. Скорость берём по РАЗНОСТИ
+	# двух моментов: начальный радиус в разности сокращается.
+	var t_a := t_probe * 0.35
+	var steps_a := int(t_a / dt)
+	var steps_b := int(t_probe / dt)
 	var t0 := Time.get_ticks_usec()
-	for i in range(steps):
+	for i in range(steps_a):
 		sim.step(dt)
-	var usec := float(Time.get_ticks_usec() - t0) / float(steps)
+	var r_a := _crest_radius(center)
+	for i in range(steps_b - steps_a):
+		sim.step(dt)
+	var usec := float(Time.get_ticks_usec() - t0) / float(steps_b)
 	# ГРЕБЕНЬ ищем по лучу, исключая ближнюю зону: в самом центре |h| тоже велик,
 	# и «максимум по всему полю» показал бы ноль-радиус. На этом я уже попадался.
-	var best_r := 0.0
-	var best_h := 0.0
+	var r_b := _crest_radius(center)
+	var v_meas := (r_b - r_a) / (t_probe - t_a)
+	var v_true := sqrt(9.81 * d)
+	return {
+		"ok": true, "depth_m": d, "t_s": t_probe,
+		"r_a": r_a, "t_a": t_a, "crest_r_m": r_b,
+		"v_measured": v_meas, "v_theory": v_true,
+		"err_pct": 100.0 * (v_meas - v_true) / v_true,
+		"step_usec": usec, "cells": SIM_SIDE * SIM_SIDE,
+		"damping": damping,
+	}
+
+## Радиус гребня: ищем по кольцам, исключая ближнюю зону. Максимум |h| сидит в
+## центре возмущения, и «максимум по полю» дал бы ноль-радиус — на этом я уже
+## попадался в проверке решателя на стенде.
+func _crest_radius(center: Vector3) -> float:
 	var half := SIM_SIDE * SIM_CELL * 0.5 - 1.0
-	var r := 1.0
-	while r < half:
+	const R0 := 0.6      # ближе — само пятно возмущения (радиус 0.5 м)
+	var n := int((half - R0) / SIM_CELL)
+	var prof := PackedFloat32Array()
+	prof.resize(n)
+	var best_i := 0
+	for k in range(n):
+		var r := R0 + float(k) * SIM_CELL
 		var s := 0.0
 		for a in range(16):
 			var ang := TAU * float(a) / 16.0
 			s += absf(sim.height_at(center + Vector3(cos(ang) * r, 0.0, sin(ang) * r)))
-		s /= 16.0
-		if s > best_h:
-			best_h = s
-			best_r = r
-		r += SIM_CELL
-	var v_meas := best_r / t_probe
-	var v_true := sqrt(9.81 * d)
-	return {
-		"ok": true, "depth_m": d, "t_s": t_probe,
-		"crest_r_m": best_r, "crest_h_m": best_h,
-		"v_measured": v_meas, "v_theory": v_true,
-		"err_pct": 100.0 * (v_meas - v_true) / v_true,
-		"step_usec": usec, "cells": SIM_SIDE * SIM_SIDE,
-	}
+		prof[k] = s / 16.0
+		if prof[k] > prof[best_i]:
+			best_i = k
+	# ПОДПИКСЕЛЬНОЕ УТОЧНЕНИЕ ПАРАБОЛОЙ. Без него радиус квантуется шагом сетки
+	# 0.25 м, а на базе 0.4 с это ±0.6 м/с, то есть ±11% — БОЛЬШЕ самой ошибки
+	# схемы. Именно поэтому один пруд давал −12%, а соседний −4%: мерилась не
+	# вода, а округление. Вершина трёх соседних отсчётов ищется параболой.
+	var rc := R0 + float(best_i) * SIM_CELL
+	if best_i > 0 and best_i < n - 1:
+		var y0 := prof[best_i - 1]
+		var y1 := prof[best_i]
+		var y2 := prof[best_i + 1]
+		var den := y0 - 2.0 * y1 + y2
+		if absf(den) > 1e-9:
+			rc += SIM_CELL * 0.5 * (y0 - y2) / den
+	return rc
 
 ## Шаг решателя и передача поля в шейдер. Возвращает отчёт числами или пусто.
 func sim_step(delta: float) -> Dictionary:
