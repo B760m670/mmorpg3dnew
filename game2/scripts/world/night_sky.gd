@@ -67,6 +67,7 @@ func _build_stars() -> void:
 	mesh.custom_aabb = AABB(Vector3(-R_SKY, -R_SKY, -R_SKY), Vector3(2 * R_SKY, 2 * R_SKY, 2 * R_SKY))
 	_stars_mat = ShaderMaterial.new()
 	_stars_mat.shader = load("res://shaders/world/stars.gdshader")
+	_stars_mat.render_priority = -2      # звёзды под Луной и под облаками
 	_stars_mi = MeshInstance3D.new()
 	_stars_mi.mesh = mesh
 	_stars_mi.material_override = _stars_mat
@@ -96,6 +97,12 @@ func _build_moon() -> void:
 	_moon_mat = ShaderMaterial.new()
 	_moon_mat.shader = load("res://shaders/world/moon.gdshader")
 	_moon_mat.set_shader_parameter("albedo_tex", _mip_tex("res://assets/sky/moon_albedo.png"))
+	# ПОРЯДОК ОТРИСОВКИ ЗАДАЁТСЯ ЯВНО. Луна, звёзды и облака — три прозрачных
+	# купола, и все три центрированы на камере: расстояние до них ОДИНАКОВОЕ,
+	# и обычная сортировка прозрачных по дальности их не различает. Порядок
+	# оказывался каким получится, а он тут важен: облака обязаны закрывать Луну,
+	# а не наоборот. Больший приоритет рисуется позже, то есть поверх.
+	_moon_mat.render_priority = -1
 	_moon = MeshInstance3D.new()
 	_moon.mesh = sph
 	_moon.material_override = _moon_mat

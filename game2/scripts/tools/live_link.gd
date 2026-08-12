@@ -256,6 +256,11 @@ func _exec(line: String) -> void:
 				% [rep["depth_m"], rep["t_s"], rep["crest_r_m"], rep["crest_h_m"],
 				rep["v_measured"], rep["v_theory"], rep["err_pct"],
 				rep["step_usec"], rep["cells"]])
+		"moon":
+			# ГДЕ ЛУНА И ВИДНА ЛИ ОНА. «Луны не видно» — это три разных случая:
+			# её нет над горизонтом, она есть но не нарисована, или её закрыли
+			# облака. Различать их на глаз нельзя, поэтому спрашиваем числами.
+			_reply(_moon())
 		"body":
 			_reply(_body())
 		"state":
@@ -394,6 +399,26 @@ func _state() -> String:
 			% [stage._sun.light_energy, int(clock.sun_direct_klx),
 			int(clock.sun_color_temp_k), stage._env.ambient_light_energy,
 			stage._env.tonemap_exposure, stage._weather_oc]
+	return s
+
+func _moon() -> String:
+	if stage == null or stage._night_sky == null or clock == null:
+		return "ночного неба нет"
+	var ns = stage._night_sky
+	var m: Dictionary = clock.moon_state(clock.utc_unix)
+	var d: Vector3 = ns.moon_dir_world
+	var el := rad_to_deg(asin(clampf(d.y, -1.0, 1.0)))
+	var az := fposmod(rad_to_deg(atan2(d.x, -d.z)), 360.0)
+	var drawn: bool = ns._moon != null and ns._moon.visible
+	var ml: Color = ns.moon_light
+	var s := "Луна: высота %+.1f° азимут %.0f° · фаза %.0f%% (элонгация %.0f°)\n" \
+		% [el, az, float(m["illum"]) * 100.0, float(m["elong_deg"])]
+	s += "расстояние %.0f км, видимый размер %.3f° · диск нарисован: %s\n" \
+		% [float(m["dist_km"]), float(m["ang_diam_deg"]), "да" if drawn else "НЕТ"]
+	s += "свет Луны для облаков: %.4f, %.4f, %.4f (солнце %.1f°)" \
+		% [ml.r, ml.g, ml.b, clock.sun_elevation_deg]
+	if el <= 0.0:
+		s += "\nЛуны НЕ ВИДНО потому, что она под горизонтом — это не дефект"
 	return s
 
 ## ЧТО ЧУВСТВУЕТ ТЕЛО. Раньше такого вопроса нельзя было задать вовсе: вода

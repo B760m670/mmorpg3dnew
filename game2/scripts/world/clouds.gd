@@ -23,7 +23,6 @@ const DOME_R := 2500.0
 # энергия луча (WorldClock.SUN_BASE_ENERGY) и рассеянный свет неба в полдень
 # 21 июня в Гатчине (полная горизонтальная 95 клк минус прямая 80 клк).
 const SUN_REF := 4.3
-const SKY_REF_KLX := 14.8
 var _mat: ShaderMaterial
 var _t: float = 0.0
 
@@ -56,6 +55,7 @@ func build() -> void:
 	# НИЗКАЯ частота — крупные связные клубы (высокая давала «крупу»/шум вдоль луча)
 	_mat.set_shader_parameter("shape_tex", _make_noise_3d(false, 0.035, 3))  # форма
 	_mat.set_shader_parameter("detail_tex", _make_noise_3d(true, 0.10, 2))   # эрозия краёв
+	_mat.render_priority = 0             # облака поверх Луны и звёзд (см. night_sky)
 	_mat.set_shader_parameter("coverage", coverage)
 	_mat.set_shader_parameter("wind_x", 0.004)
 	_mat.set_shader_parameter("wind_z", 0.002)
@@ -121,8 +121,13 @@ func _process(delta: float) -> void:
 	if clock != null and sun != null:
 		_mat.set_shader_parameter("sun_energy",
 			clampf(sun.light_energy / SUN_REF, 0.0, 1.3))
-		_mat.set_shader_parameter("sky_energy",
-			clampf(clock.sky_diffuse_klx / SKY_REF_KLX, 0.0, 1.3))
+		# ОДНО ВЫРАЖЕНИЕ НА ЗЕМЛЮ И НА ОБЛАКА. Земля ночью получает добавку
+		# NIGHT_GLOW (воздушное свечение и звёзды, решение ради читаемости).
+		# Если облакам её не дать, выйдет нелепость: земля освещена свечением
+		# неба, а само небо в этом месте — чернильное пятно.
+		var sky_e: float = (clock.sky_diffuse_klx * WeatherSky.AMB_PER_KLX
+			+ WeatherSky.NIGHT_GLOW) / (WeatherSky.SKY_REF_KLX * WeatherSky.AMB_PER_KLX)
+		_mat.set_shader_parameter("sky_energy", clampf(sky_e, 0.0, 1.3))
 		var sc: Array = WeatherSky.sky_colors(
 			WeatherSky.overcast_from_coverage(current_coverage), clock.sun_elevation_deg)
 		var hor: Vector3 = sc[0]
