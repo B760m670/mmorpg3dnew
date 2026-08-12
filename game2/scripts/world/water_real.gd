@@ -329,6 +329,8 @@ const SIM_RECENTER := 6.0       # м смещения наблюдателя д�
 var sim: RefCounted             # ShallowWater, если модуль есть
 var _sim_origin := Vector2(1e9, 1e9)
 var _sim_logged := false
+var _refill_logged := false
+var sim_refill_ms := 0.0        # цена последнего переезда окна расчёта
 
 func sim_available() -> bool:
 	return sim != null
@@ -355,6 +357,11 @@ func sim_center_on(pos: Vector3, force: bool = false) -> void:
 		return
 	_sim_origin = org
 	sim.set_origin(org)
+	# ЦЕНА ПЕРЕЕЗДА ЗАМЕРЯЕТСЯ, а не предполагается: это 16 384 обращения к
+	# батиметрии на GDScript, и происходят они разом, в одном кадре. Если тут
+	# окажутся миллисекунды, ходьба будет дёргаться каждые шесть метров — и
+	# узнать об этом надо числом, а не по ощущению «что-то подтормаживает».
+	var t0 := Time.get_ticks_usec()
 	var d := PackedFloat32Array()
 	d.resize(SIM_SIDE * SIM_SIDE)
 	for j in range(SIM_SIDE):
@@ -363,6 +370,11 @@ func sim_center_on(pos: Vector3, force: bool = false) -> void:
 			var wx := org.x + float(i) * SIM_CELL
 			d[j * SIM_SIDE + i] = depth_at(wx, wz)
 	sim.set_depth(d)
+	sim_refill_ms = float(Time.get_ticks_usec() - t0) / 1000.0
+	if not _refill_logged:
+		_refill_logged = true
+		print("[вода] переезд окна: %d глубин за %.1f мс (бюджет кадра при 90 к/с — 11.1 мс)"
+			% [SIM_SIDE * SIM_SIDE, sim_refill_ms])
 
 ## ПРОВЕРКА РЕШАТЕЛЯ НА НАСТОЯЩЕЙ ВОДЕ ИГРЫ, а не на выдуманном бассейне.
 ## Бросаем возмущение и СЧИТАЕМ, где через заданное время оказался гребень.
