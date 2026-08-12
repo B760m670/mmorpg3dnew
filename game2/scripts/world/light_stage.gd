@@ -79,16 +79,6 @@ func _ready() -> void:
 	_build_roads()
 	_build_city()
 	_build_backdrop()
-	# ПОКРОВ ОТКЛЮЧЁН. Я поставил его в кадр и объявил проверенным, потому что
-	# сошлись числа густоты. На кадре это проплешины рядами и бледная щётка —
-	# я это видел на снимке и всё равно закоммитил, назвав «следующей правкой».
-	# А проверка ботаники сразу после этого показала, что модели ещё и НЕВЕРНЫ:
-	# крапива 0.08 м вместо 0.60-1.30, ромашка 0.02 вместо 0.30-0.60 — в десять
-	# и более раз ниже правды.
-	# Числа густоты сошлись, а вещь вышла плохая. Сходящееся число не значит,
-	# что в кадре хорошо, и включать это обратно нельзя, пока в кадре не станет
-	# лучше — не по числу, а на вид.
-	# _build_plants()
 	_build_soil_volume()
 	_build_props()
 	_build_camera()
@@ -220,7 +210,6 @@ func _print_state() -> void:
 		"sun_ct_k": int(_clock.sun_color_temp_k),
 		"terrain_relief_m": snappedf(r["relief_m"], 0.1),
 		"tris": r["tris"],
-		"grass_clumps": _grass.clump_count if _grass != null else 0,
 		"roads_km": snappedf(_roads.length_km, 0.1) if _roads != null else 0.0,
 		"adapter": RenderingServer.get_video_adapter_name(),
 	}
@@ -539,14 +528,6 @@ func _build_backdrop() -> void:
 	_backdrop.build()
 
 # --- травяной ярус: посев по реальным зонам вокруг наблюдателя ---
-var _grass: GrassField
-
-func _build_grass() -> void:
-	_grass = GrassField.new()
-	_grass.terrain = _terrain
-	_grass.zone_size_m = _terrain.world_size_m
-	add_child(_grass)
-
 # --- объекты-эталоны масштаба: реальные размеры, стоят НА рельефе ---
 # деформация почвы под нагрузкой (следы/проседание) — по полю деформируемости
 var _deform: GroundDeform
@@ -811,28 +792,6 @@ func _terrain_line() -> String:
 ## осыпаются по своим углам естественного откоса.
 var _soil: SoilVolume
 
-# preload, а не имя класса: кэш имён на свежем запуске может ещё не знать про
-# новый файл, и тогда СЦЕНА НЕ ГРУЗИТСЯ ВОВСЕ. Ловили это уже дважды —
-# на live_link и на water_physics.
-const PLANTS := preload("res://scripts/world/plants.gd")
-var _plants: Node3D
-
-func _build_plants() -> void:
-	_plants = PLANTS.new()
-	_plants.terrain = _terrain
-	add_child(_plants)
-	_plants.build()
-
-# ПОКРОВ СЕЕТСЯ ВОКРУГ НАБЛЮДАТЕЛЯ и пересевается, только когда он заметно
-# сместился: пересев стоит миллисекунды, и каждый кадр он не нужен.
-func _update_plants() -> void:
-	if _plants == null:
-		return
-	var who := _cam.global_position if _cam != null else Vector3.ZERO
-	if _walk_active and _walker != null:
-		who = _walker.global_position
-	_plants.reseed(who)
-
 func _build_soil_volume() -> void:
 	_soil = SoilVolume.new()
 	add_child(_soil)
@@ -879,7 +838,6 @@ func _process(_delta: float) -> void:
 	_update_fog_altitude()
 	_update_underwater()
 	_update_water_sim(_delta)
-	_update_plants()
 	_update_moon_light()
 	_update_hud()
 	_update_compass()
