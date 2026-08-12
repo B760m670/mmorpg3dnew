@@ -207,22 +207,6 @@ func _exec(line: String) -> void:
 				_reply("ok %s = %s" % [pk, pa[1]])
 			else:
 				_reply("post on|off | post glare|grain|vignette|ca ЧИСЛО")
-		"env":
-			# ПОКРУТИТЬ СВЕТ РУКАМИ: «env amp 4», «env exp 2.5», «env sky 0.3».
-			# Нужно, чтобы РАЗДЕЛИТЬ причины темноты: мало рассеянного света от
-			# неба или мала экспозиция. Гадать тут нельзя — это разные лечения.
-			if stage == null or stage._env == null:
-				_reply("нет окружения"); return
-			var ea := arg.split(" ")
-			if ea.size() < 2:
-				_reply("env amb|exp|sky ЧИСЛО"); return
-			var ev := float(ea[1])
-			match ea[0]:
-				"amb": stage._env.ambient_light_energy = ev
-				"exp": stage._env.tonemap_exposure = ev
-				"sky": stage._env.ambient_light_sky_contribution = ev
-				_: _reply("env amb|exp|sky ЧИСЛО"); return
-			_reply("ok %s = %.3f" % [ea[0], ev])
 		"weather":
 			# ОБЛАЧНОСТЬ ФИКСИРУЕТСЯ (0 ясно .. 1 сплошь). Без этого «дыхание»
 			# погоды меняет свет между двумя снимками, и сравнивать их нельзя:
@@ -253,6 +237,23 @@ func _exec(line: String) -> void:
 			var dd := water.depth_at(sx, sz)
 			_reply("ok всплеск %.2f м в (%.1f, %.1f), толща %.2f м, круг пойдёт %.2f м/с"
 				% [sa, sx, sz, dd, WP.wave_speed(dd)])
+		"wave":
+			# ПРОВЕРКА РЕШЁННОЙ ЖИДКОСТИ ЧИСЛАМИ: гребень обязан идти со
+			# скоростью sqrt(g·d) по НАШЕЙ батиметрии, а не по выдуманной.
+			if water == null:
+				_reply("нет воды"); return
+			var wv := arg.split(",")
+			var wcx := float(wv[0]) if wv.size() > 0 and wv[0] != "" else 0.0
+			var wcz := float(wv[1]) if wv.size() > 1 else 0.0
+			var rep: Dictionary = water.sim_selftest(Vector3(wcx, 0.0, wcz))
+			if not rep.get("ok", false):
+				_reply("проверка не вышла: %s" % rep.get("why", "?")); return
+			_reply(("толща %.2f м · за %.2f с гребень ушёл на %.2f м (высота %.4f м)\n"
+				+ "скорость %.2f м/с против sqrt(g·d)=%.2f м/с — ошибка %+.1f%%\n"
+				+ "шаг решателя %.0f мкс на %d ячеек")
+				% [rep["depth_m"], rep["t_s"], rep["crest_r_m"], rep["crest_h_m"],
+				rep["v_measured"], rep["v_theory"], rep["err_pct"],
+				rep["step_usec"], rep["cells"]])
 		"body":
 			_reply(_body())
 		"state":

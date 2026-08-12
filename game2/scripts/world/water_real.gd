@@ -346,12 +346,12 @@ func _sim_init() -> void:
 
 ## Переставить окно расчёта под наблюдателя и залить глубины из НАШЕЙ батиметрии.
 ## Глубина — то же число, которым вода нарисована: урез минус земля.
-func sim_center_on(pos: Vector3) -> void:
+func sim_center_on(pos: Vector3, force: bool = false) -> void:
 	if sim == null:
 		return
 	var half := SIM_SIDE * SIM_CELL * 0.5
 	var org := Vector2(pos.x - half, pos.z - half)
-	if _sim_origin.distance_to(org) < SIM_RECENTER:
+	if not force and _sim_origin.distance_to(org) < SIM_RECENTER:
 		return
 	_sim_origin = org
 	sim.set_origin(org)
@@ -363,6 +363,57 @@ func sim_center_on(pos: Vector3) -> void:
 			var wx := org.x + float(i) * SIM_CELL
 			d[j * SIM_SIDE + i] = depth_at(wx, wz)
 	sim.set_depth(d)
+
+## ПРОВЕРКА РЕШАТЕЛЯ НА НАСТОЯЩЕЙ ВОДЕ ИГРЫ, а не на выдуманном бассейне.
+## Бросаем возмущение и СЧИТАЕМ, где через заданное время оказался гребень.
+## Мелкая вода обязана разносить его со скоростью sqrt(g·d) — это единственный
+## способ отличить решённую жидкость от нарисованных кругов, и он не про кадр,
+## а про числа: тут не важно, что видно, важно, что происходит.
+##
+## Шагаем ЗДЕСЬ ЖЕ, а не ждём кадров: решатель стоит сотни микросекунд, и
+## секунда модельного времени считается за десятки миллисекунд.
+func sim_selftest(center: Vector3, t_probe: float = 0.8) -> Dictionary:
+	if sim == null:
+		return {"ok": false, "why": "решателя нет"}
+	# ОКНО СТАВИМ ПРИНУДИТЕЛЬНО: обычная постановка ленива (переезжает раз в 6 м),
+	# и проверка бросала бы возмущение мимо расчётной области.
+	sim_center_on(center, true)
+	sim.clear_waves()
+	var d := depth_at(center.x, center.z)
+	if d < 0.05:
+		return {"ok": false, "why": "в этой точке воды нет (толща %.2f м)" % d}
+	sim.disturb(center, 0.5, 0.05)
+	var dt := 1.0 / 120.0
+	var steps := int(t_probe / dt)
+	var t0 := Time.get_ticks_usec()
+	for i in range(steps):
+		sim.step(dt)
+	var usec := float(Time.get_ticks_usec() - t0) / float(steps)
+	# ГРЕБЕНЬ ищем по лучу, исключая ближнюю зону: в самом центре |h| тоже велик,
+	# и «максимум по всему полю» показал бы ноль-радиус. На этом я уже попадался.
+	var best_r := 0.0
+	var best_h := 0.0
+	var half := SIM_SIDE * SIM_CELL * 0.5 - 1.0
+	var r := 1.0
+	while r < half:
+		var s := 0.0
+		for a in range(16):
+			var ang := TAU * float(a) / 16.0
+			s += absf(sim.height_at(center + Vector3(cos(ang) * r, 0.0, sin(ang) * r)))
+		s /= 16.0
+		if s > best_h:
+			best_h = s
+			best_r = r
+		r += SIM_CELL
+	var v_meas := best_r / t_probe
+	var v_true := sqrt(9.81 * d)
+	return {
+		"ok": true, "depth_m": d, "t_s": t_probe,
+		"crest_r_m": best_r, "crest_h_m": best_h,
+		"v_measured": v_meas, "v_theory": v_true,
+		"err_pct": 100.0 * (v_meas - v_true) / v_true,
+		"step_usec": usec, "cells": SIM_SIDE * SIM_SIDE,
+	}
 
 ## Шаг решателя и передача поля в шейдер. Возвращает отчёт числами или пусто.
 func sim_step(delta: float) -> Dictionary:
