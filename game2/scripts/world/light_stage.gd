@@ -832,8 +832,7 @@ func _clock_line() -> String:
 		int(_clock.time_scale)]
 
 func _process(_delta: float) -> void:
-	if _post_mat != null:
-		_post_mat.set_shader_parameter("t", float(Time.get_ticks_msec()) / 1000.0)
+	_update_post()
 	_update_weather()
 	_update_fog_altitude()
 	_update_underwater()
@@ -841,6 +840,35 @@ func _process(_delta: float) -> void:
 	_update_moon_light()
 	_update_hud()
 	_update_compass()
+
+# --- КИНО-ПОСТ ---
+# Оптике нужно знать, ГДЕ в кадре источник: засветка рождается в стекле, а не
+# в мире, и без экранного положения Солнца её неоткуда взять. Само перекрытие
+# (зашло за здание) шейдер выясняет по яркости кадра — здесь только «Солнце
+# вообще светит и оно перед камерой».
+func _update_post() -> void:
+	if _post_mat == null:
+		return
+	_post_mat.set_shader_parameter("t", float(Time.get_ticks_msec()) / 1000.0)
+	var cam := get_viewport().get_camera_3d()
+	var uv := Vector2(0.5, 0.5)
+	var vis := 0.0
+	if cam != null and _sun != null and _clock != null and not _underwater:
+		var to_sun := _sun.global_transform.basis.z.normalized()
+		var far_pt := cam.global_position + to_sun * 4000.0
+		if not cam.is_position_behind(far_pt):
+			var vs := get_viewport().get_visible_rect().size
+			if vs.x > 0.0 and vs.y > 0.0:
+				var sp := cam.unproject_position(far_pt)
+				uv = Vector2(sp.x / vs.x, sp.y / vs.y)
+				# У горизонта Солнце уже съедено дымкой — засветка нарастает с
+				# высотой. Облачность гасит её прямо пропорционально.
+				vis = smoothstep(0.0, 4.0, _clock.sun_elevation_deg)
+				vis *= clampf(1.0 - _weather_oc * 1.1, 0.0, 1.0)
+				# За краем кадра источник ещё светит в объектив, но слабее.
+				var off := maxf(maxf(-uv.x, uv.x - 1.0), maxf(-uv.y, uv.y - 1.0))
+				vis *= clampf(1.0 - off / 0.6, 0.0, 1.0)
+	_post_mat.set_shader_parameter("sun_uv", Vector3(uv.x, uv.y, vis))
 
 # --- РЕШАТЕЛЬ МЕЛКОЙ ВОДЫ ---
 # Окно расчёта 32 м едет за наблюдателем: считать волны по всей карте 16 км ни

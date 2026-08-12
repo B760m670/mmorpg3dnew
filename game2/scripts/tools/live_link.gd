@@ -28,6 +28,7 @@ extends Node
 ##   body                 что тело чувствует: погружение, брод, плавание
 ##   splash X,Z[,АМПЛ]    бросить в воду — от точки пойдёт круг
 ##   wind М/С             ветер над водой (0 — гладь как стекло)
+##   ground proc|scan     зерно грунта: шум в шейдере или сканы
 ##   hud on|off           убрать надпись, которая закрывает вид
 ##   dbg РЕЖИМ            wire|overdraw|unshaded|normals|lighting|off
 ##   quit                 закрыть игру
@@ -179,6 +180,37 @@ func _exec(line: String) -> void:
 			walker.set_intent(Vector2(float(gp[1]) if gp.size() > 1 else 0.0,
 				-float(gp[0])))
 			_reply("ok намерение %s" % arg)
+		"post":
+			# КИНО-ПОСТ: on|off целиком, либо glare/grain со значением
+			# («post glare 0», «post grain 2»). Нужно ровно за тем же — чтобы
+			# сравнить два кадра, а не спорить о вкусах.
+			if stage == null or stage._post_mat == null:
+				_reply("нет поста"); return
+			var pa := arg.split(" ")
+			var pk := pa[0]
+			if pk == "off" or pk == "on":
+				var v := 1.0 if pk == "on" else 0.0
+				stage._post_mat.set_shader_parameter("glare", v)
+				stage._post_mat.set_shader_parameter("grain", v)
+				stage._post_mat.set_shader_parameter("vignette", 0.28 * v)
+				stage._post_mat.set_shader_parameter("ca", 0.0016 * v)
+				_reply("ok пост %s" % pk)
+			elif pa.size() > 1 and (pk == "glare" or pk == "grain" or pk == "vignette" or pk == "ca"):
+				stage._post_mat.set_shader_parameter(pk, float(pa[1]))
+				_reply("ok %s = %s" % [pk, pa[1]])
+			else:
+				_reply("post on|off | post glare|grain|vignette|ca ЧИСЛО")
+		"weather":
+			# ОБЛАЧНОСТЬ ФИКСИРУЕТСЯ (0 ясно .. 1 сплошь). Без этого «дыхание»
+			# погоды меняет свет между двумя снимками, и сравнивать их нельзя:
+			# разница окажется не от правки, а от туч.
+			if stage == null or stage._clouds == null:
+				_reply("нет облаков"); return
+			var cv := clampf(float(arg), 0.0, 1.0)
+			stage._clouds.weather_enabled = false
+			stage._clouds.coverage = cv
+			stage._clouds.current_coverage = cv
+			_reply("ok облачность %.2f (дыхание погоды выключено)" % cv)
 		"wind":
 			if water == null:
 				_reply("нет воды"); return
