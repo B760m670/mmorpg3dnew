@@ -168,6 +168,7 @@ var _dbg_arg: String = ""
 # preload, а не class_name: имя класса берётся из кэша проекта, а он на свежем
 # запуске может ещё не знать про новый файл — тогда сцена вовсе не грузится.
 const LIVE_LINK := preload("res://scripts/tools/live_link.gd")
+const WATER_VOLUME := preload("res://scripts/world/water_volume.gd")
 # Угол света для ТЕНИ (не для диска в небе). Настоящие 0.53° дают широкую
 # полутень, которая шумит; 0.20° даёт собранную устойчивую тень. Видимый размер
 # Солнца от этого не страдает — его возвращает sun_disk_scale в WeatherSky.
@@ -561,10 +562,33 @@ var _water_real: WaterReal
 
 func _build_water_real() -> void:
 	_water_real = WaterReal.new()
+	_water_real.name = "WaterReal"
 	_water_real.terrain = _terrain
 	_water_real.ssr_steps = int(GFX.get("ssr_steps", 16))
 	add_child(_water_real)
 	_water_real.build()
+	_build_water_volume()
+
+# --- БЛИЖНЯЯ ВОДА — ПОЛЕ, а не плита ---
+# Дальняя вода остаётся запечёнными плитами: это задник, и он таким и задуман.
+# Над игровым срезом поднимается поле состояния (C++), у которого есть уровень,
+# объём и подвижный берег. Порядок важен: поле спрашивает урез у дальней воды,
+# чтобы ближняя и дальняя не разошлись по высоте.
+var _water_vol: Node3D
+
+func _build_water_volume() -> void:
+	_water_vol = WATER_VOLUME.new()
+	_water_vol.name = "WaterVolume"
+	_water_vol.terrain = _terrain
+	add_child(_water_vol)
+	if _water_vol.build():
+		_water_vol.set_ssr_steps(int(GFX.get("ssr_steps", 16)))
+		# ПЛИТЫ ЗАДНИКА В СРЕЗЕ УБИРАЮТСЯ. Две поверхности на почти одной высоте
+		# дерутся за глубину, и на кадре это мерцающая рябь по всему водоёму.
+		_water_real.hide_rect(_water_vol.center, float(_water_vol.SIZE))
+	else:
+		_water_vol.queue_free()
+		_water_vol = null
 
 # --- дороги по реальной сети (эпоха 1894: макадам/грунт, ж/д насыпь) ---
 var _roads: RoadNetwork

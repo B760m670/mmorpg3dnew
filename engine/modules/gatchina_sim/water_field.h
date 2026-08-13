@@ -58,6 +58,13 @@ struct WaterField {
 	// видно, а численно тонкий слой требует крошечного шага по времени.
 	float dry_depth = 1e-3f;
 	float cfl = 0.45f;
+	// ГРАНИЦА ОКНА. Если окно вырезано из БОЛЬШЕГО водоёма, стенка там не
+	// физична: волна отражалась бы от берега, которого нет. Тогда снаружи
+	// ставится «покой на отметке open_level» — волна уходит и не возвращается.
+	// Для замкнутой чаши (или когда отметка не задана) граница остаётся
+	// зеркальной стенкой.
+	bool open_boundary = false;
+	float open_level = 0.0f;
 
 	// --- служебное ---
 	std::vector<float> h2, qx2, qz2;
@@ -273,22 +280,28 @@ private:
 		const float qtL = along_x ? qz[kL] : qx[kL];
 		const float qtR = along_x ? qz[kR] : qx[kR];
 		// зеркало на стенке: нормальная составляющая обратная
-		const float qnL = okL ? qnL_real : -qnR_real;
-		const float qnR = okR ? qnR_real : -qnL_real;
+		float qnL = okL ? qnL_real : -qnR_real;
+		float qnR = okR ? qnR_real : -qnL_real;
+		float hLg = hL, hRg = hR;
+		if (open_boundary) {
+			// открытая граница: снаружи вода стоит на отметке open_level
+			if (!okL) { hLg = std::max(0.0f, open_level - zL); qnL = 0.0f; }
+			if (!okR) { hRg = std::max(0.0f, open_level - zR); qnR = 0.0f; }
+		}
 
 		const float zf = std::max(zL, zR);
-		const float hLs = std::max(0.0f, zL + hL - zf);
-		const float hRs = std::max(0.0f, zR + hR - zf);
-		const float uL = hL > dry_depth ? qnL / hL : 0.0f;
-		const float uR = hR > dry_depth ? qnR / hR : 0.0f;
+		const float hLs = std::max(0.0f, zL + hLg - zf);
+		const float hRs = std::max(0.0f, zR + hRg - zf);
+		const float uL = hLg > dry_depth ? qnL / hLg : 0.0f;
+		const float uR = hRg > dry_depth ? qnR / hRg : 0.0f;
 		const float vL = hL > dry_depth ? qtL / hL : 0.0f;
 		const float vR = hR > dry_depth ? qtR / hR : 0.0f;
 		float fh, fqn, fqt;
 		rusanov(hLs, hLs * uL, hLs * vL, hRs, hRs * uR, hRs * vR, fh, fqn, fqt);
 		// источник по дну — тот, что при постоянной поверхности ТОЧНО
 		// сокращает разность давлений и держит озеро в покое
-		const float SL = 0.5f * G * (hLs * hLs - hL * hL);
-		const float SR = 0.5f * G * (hRs * hRs - hR * hR);
+		const float SL = 0.5f * G * (hLs * hLs - hLg * hLg);
+		const float SR = 0.5f * G * (hRs * hRs - hRg * hRg);
 		if (okL) {
 			h2[kL] -= inv * fh;
 			if (along_x) {

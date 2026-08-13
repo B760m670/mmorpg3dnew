@@ -37,6 +37,9 @@ var _flow_tex: ImageTexture
 var _level: PackedByteArray     # растр уреза воды (int16, см), из carve_water_beds.py
 var _biggest_w := 0.0
 var _biggest := ""
+var _plates_mi: MeshInstance3D          # меш плит-задника (можно перестроить)
+var _hide_center := Vector2.ZERO        # где вырезан срез под поле воды
+var _hide_size := 0.0
 
 ## ПОВЕРХНОСТЬ ВОДЫ БЕРЁТСЯ ГОТОВОЙ (tools/build_water_mesh.py).
 ##
@@ -97,10 +100,50 @@ func build() -> void:
 	mi.material_override = _material(false)
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
+	_plates_mi = mi
 	lakes_built = 1
 	_sim_init()
 	print("[water] поверхность: %d плит (△ %d), площадь %.0f м², урез %.2f..%.2f м — ОДНА сетка вместо 483"
 		% [n, n * 2, area, y_min, y_max])
+
+## ВЫРЕЗАТЬ СРЕЗ ИЗ ЗАДНИКА. Там, где поднято поле воды, плиты не нужны: две
+## поверхности почти на одной высоте дерутся за буфер глубины, и на кадре это
+## мерцающая рябь по всему водоёму. Перестраиваем меш без этих плит.
+func hide_rect(center: Vector2, size_m: float) -> void:
+	_hide_center = center
+	_hide_size = size_m
+	if _plates_mi == null:
+		return
+	var f := FileAccess.open(SURFACE_BIN, FileAccess.READ)
+	if f == null:
+		return
+	var n := int(f.get_32())
+	var half := size_m * 0.5
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var dropped := 0
+	for i in range(n):
+		var x0 := f.get_float()
+		var z0 := f.get_float()
+		var x1 := f.get_float()
+		var z1 := f.get_float()
+		var y := f.get_float()
+		# выбрасываем плиту, если она ХОТЬ ЧАСТЬЮ попадает в срез: оставить
+		# половину плиты нельзя, она прямоугольная и резать её нечем
+		if x1 > center.x - half and x0 < center.x + half \
+				and z1 > center.y - half and z0 < center.y + half:
+			dropped += 1
+			continue
+		var a := Vector3(x0, y, z0)
+		var b := Vector3(x1, y, z0)
+		var c := Vector3(x1, y, z1)
+		var d := Vector3(x0, y, z1)
+		for v in [a, d, c, a, c, b]:
+			st.set_normal(Vector3.UP)
+			st.add_vertex(v)
+	_plates_mi.mesh = st.commit()
+	print("[water] из задника вырезан срез %.0f м у X%.0f Z%.0f: убрано %d плит из %d"
+		% [size_m, center.x, center.y, dropped, n])
 
 func _load_flow() -> void:
 	var f := FileAccess.open(FLOW_BIN, FileAccess.READ)
