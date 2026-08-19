@@ -10,8 +10,10 @@
 
 export const NO_WATER = -32768;
 
-export async function loadSlice(url) {
-	const buf = await (await fetch(url)).arrayBuffer();
+// Срез приезжает либо файлом по адресу, либо уже готовым буфером — второе нужно
+// для сборки в одну страницу, где никакого fetch нет и быть не может.
+export async function loadSlice(src) {
+	const buf = src instanceof ArrayBuffer ? src : await (await fetch(src)).arrayBuffer();
 	const dv = new DataView(buf);
 	const magic = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
 	if (magic !== 'GSL1') throw new Error('не тот формат среза: ' + magic);

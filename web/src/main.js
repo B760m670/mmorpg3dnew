@@ -11,6 +11,7 @@ import { loadSlice } from './slice.js';
 import { buildTerrain } from './terrain.js';
 import { buildWater, buildFarWater, Reflection } from './water.js';
 import { Post } from './post.js';
+import { Controls } from './controls.js';
 import WaterFieldModule from './waterfield.js';
 
 const FIELD_SIDE = 256;      // ячеек
@@ -29,7 +30,17 @@ function say(s) { boot.textContent = s; }
 
 async function main() {
 	say('качаю срез…');
-	const slice = await loadSlice('./data/slice.bin');
+	// В сборке-одностраничнике срез вшит в саму страницу (web/build_single.mjs):
+	// открывать её можно откуда угодно, включая телефон без сервера.
+	const inline = globalThis.__SLICE_B64;
+	let src = './data/slice.bin';
+	if (inline) {
+		const bin = atob(inline);
+		const u8 = new Uint8Array(bin.length);
+		for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+		src = u8.buffer;
+	}
+	const slice = await loadSlice(src);
 
 	say('поднимаю решатель воды (WASM)…');
 	const wf = await WaterFieldModule();
@@ -69,6 +80,20 @@ async function main() {
 
 	const scene = new THREE.Scene();
 	const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.1, 6000);
+	// УГОЛ ЗРЕНИЯ ДЕРЖИТСЯ ПО ГОРИЗОНТАЛИ, А НЕ ПО ВЕРТИКАЛИ.
+	// В three.js fov вертикальный. На телефоне в портрете (440x956) это даёт
+	// по горизонтали 29° — подзорная труба: озеро в кадре есть, а места нет.
+	// Поэтому вертикальный угол растёт так, чтобы горизонтальный не падал ниже
+	// 45°, но не круче 58° в ландшафте — иначе перспектива начинает выгибать
+	// берег.
+	function setFov() {
+		const a = innerWidth / innerHeight;
+		const need = 2 * Math.atan(Math.tan(22.5 * Math.PI / 180) / a) * 180 / Math.PI;
+		camera.fov = Math.min(Math.max(58, need), 92);
+		camera.aspect = a;
+		camera.updateProjectionMatrix();
+	}
+	setFov();
 
 	// НЕБО — купол с градиентом и диском Солнца. Настоящая модель (Рэлей, Ми,
 	// астрономия Meeus) уже написана в game2/scripts/core/world_clock.gd и
@@ -197,44 +222,50 @@ async function main() {
 		'камера', eye.toArray().map(v => v.toFixed(1)).join(','),
 		'смотрит на', at.toArray().map(v => v.toFixed(1)).join(','));
 
-	// --- УПРАВЛЕНИЕ. Те же правила, что выверены на телефоне: без инверсий,
-	// один палец — поворот, два — зум и перенос, скорость ∝ высоте над землёй.
-	const look = { yaw: 0, pitch: 0 };
-	{
-		const d = at.clone().sub(eye).normalize();
-		look.yaw = Math.atan2(-d.x, -d.z);
-		look.pitch = Math.asin(THREE.MathUtils.clamp(d.y, -1, 1));
-	}
-	const keys = new Set();
-	addEventListener('keydown', e => keys.add(e.code));
-	addEventListener('keyup', e => keys.delete(e.code));
-	let drag = null;
-	renderer.domElement.addEventListener('pointerdown', e => {
-		drag = { x: e.clientX, y: e.clientY, moved: 0 };
-		renderer.domElement.setPointerCapture(e.pointerId);
-	});
-	renderer.domElement.addEventListener('pointermove', e => {
-		if (!drag) return;
-		const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-		drag.x = e.clientX; drag.y = e.clientY; drag.moved += Math.abs(dx) + Math.abs(dy);
-		look.yaw -= dx * 0.0032;
-		look.pitch = THREE.MathUtils.clamp(look.pitch - dy * 0.0032, -1.5, 1.5);
-	});
-	renderer.domElement.addEventListener('pointerup', e => {
-		// короткое касание без протяжки — бросить камень: ОБЪЁМ, а не «высота волны»
-		if (drag && drag.moved < 6) {
-			const f = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-			const t = (restLevel - camera.position.y) / (f.y < -1e-3 ? f.y : -1e-3);
-			const p = camera.position.clone().addScaledVector(f, Math.min(Math.max(t, 2), 80));
-			wf._wf_add_volume(p.x, p.z, 1.2, 2.0);
+	// --- УПРАВЛЕНИЕ: два режима, как на телефоне (см. src/controls.js).
+	// СВЕРХУ — свободная камера над парком, ПЕШЕХОД — тело на земле с настоящим
+	// весом, бродом и плаванием (порт walker.gd и water_physics.gd).
+	//
+	// ГЛАДЬ ДЛЯ ТЕЛА БЕРЁТСЯ ИЗ РЕШАТЕЛЯ, А НЕ ИЗ СРЕЗА. Внутри окна расчёта воду
+	// двигают волны, и пешеход должен чувствовать именно их: если спрашивать
+	// неподвижный урез, он пройдёт сквозь волну как сквозь картинку.
+	const fx0 = org.x, fx1 = org.x + FIELD_SIDE * FIELD_CELL;
+	const fz0 = org.y, fz1 = org.y + FIELD_SIDE * FIELD_CELL;
+	function surfaceAt(x, z) {
+		if (x > fx0 && x < fx1 && z > fz0 && z < fz1) {
+			return wf._wf_depth_at(x, z) > 0.02 ? wf._wf_surface_at(x, z) : NaN;
 		}
-		drag = null;
-	});
+		const gi = Math.round((x - slice.ox) / slice.cell);
+		const gj = Math.round((z - slice.oz) / slice.cell);
+		if (gi < 0 || gj < 0 || gi >= slice.n || gj >= slice.n) return NaN;
+		const lv = slice.level[gj * slice.n + gi];
+		return (!Number.isNaN(lv) && lv - slice.bed[gj * slice.n + gi] > 0.02) ? lv : NaN;
+	}
+	// круги по воде считает НАСТОЯЩИЙ решатель: и от камня, и от шага — одним
+	// и тем же способом, объёмом, а не «высотой волны»
+	const disturb = (x, z, v) => wf._wf_add_volume(x, z, 1.0, v);
+
+	const ctl = new Controls(camera, renderer.domElement, slice, surfaceAt, disturb);
+	ctl.setLook(at.clone().sub(eye).normalize());
+	ctl.onStone = () => {
+		const p = ctl.aimWater(restLevel);
+		wf._wf_add_volume(p.x, p.z, 1.2, 2.0);
+	};
+
+	// КНОПКА РЕЖИМА. Открывший ссылку не знает про двойной тап; он увидит воду и
+	// не найдёт, как в неё войти.
+	const btn = document.createElement('button');
+	btn.id = 'mode';
+	const setBtn = () => { btn.textContent = ctl.mode === 'fly' ? 'встать на землю' : 'подняться'; };
+	setBtn();
+	btn.addEventListener('click', () => { ctl.toggle(); setBtn(); });
+	document.body.appendChild(btn);
+	const _tg = ctl.toggle.bind(ctl);
+	ctl.toggle = () => { _tg(); setBtn(); };
 
 	addEventListener('resize', () => {
 		renderer.setSize(innerWidth, innerHeight);
-		camera.aspect = innerWidth / innerHeight;
-		camera.updateProjectionMatrix();
+		setFov();
 		refl.resize(innerWidth, innerHeight);
 		post.resize(innerWidth, innerHeight);
 	});
@@ -253,25 +284,35 @@ async function main() {
 		for (const m of waterMats) m.uniforms.dbg.value = Number(dbg) || 0;
 	}
 	boot.remove();
-	let t = 0, last = performance.now(), acc = 0, frames = 0, fps = 0;
+	// подсказка по тому, чем игрок вообще может управлять на этом устройстве:
+	// «WASD» на телефоне — это строка, которая ничего не значит
+	const touch = matchMedia('(pointer: coarse)').matches;
+	// ПОДСКАЗКА ЗАВИСИТ ОТ РЕЖИМА. В режиме пешехода строка про «два пальца —
+	// идти» не просто лишняя, она неверная: там левая половина экрана это стик.
+	const HINTS = touch ? {
+		fly: 'палец — смотреть · два пальца — вести камеру (развёл = ближе) · касание — камень',
+		walk: 'левая половина — идти (дальше увёл, быстрее) · правая — смотреть · касание — камень',
+	} : {
+		fly: 'WASD вести камеру · Q/E вниз-вверх · тянуть — смотреть · Tab — встать на землю',
+		walk: 'WASD идти · Shift бежать · тянуть — смотреть · Tab — подняться · клик — камень',
+	};
+	// ПРИБОРЫ НЕ ДОЛЖНЫ ЗАСЛОНЯТЬ КАДР. На экране телефона полная телеметрия — это
+	// восемь строк с переносами, треть высоты: смотреть на игру становится нечем.
+	// Поэтому там остаётся одна строка, а всё остальное — по адресу ?hud=full.
+	const fullHud = q.get('hud') === 'full' || (!touch && q.get('hud') !== 'min');
+	// подсказку показываем первые 12 секунд, и заново — при смене режима: правила
+	// там другие, и молча менять их нельзя
+	let hintUntil = 12;
+	const _tg2 = ctl.toggle;
+	ctl.toggle = () => { _tg2(); hintUntil = t + 9; };
+	let t = 0, last = performance.now(), lastReal = last, acc = 0, frames = 0, fps = 0;
 	let msSim = 0, msRefl = 0, msDraw = 0;
 
 	function frame(now) {
 		const dt = Math.min((now - last) / 1000, 0.05);
 		last = now; t += dt;
 
-		// ход камеры: скорость растёт с высотой над землёй, как в game2
-		const gh = slice.bedAt(camera.position.x, camera.position.z);
-		const sp = (1.8 + Math.max(0, camera.position.y - gh) * 1.4) * (keys.has('ShiftLeft') ? 4 : 1) * dt;
-		const fwd = new THREE.Vector3(-Math.sin(look.yaw), 0, -Math.cos(look.yaw));
-		const rgt = new THREE.Vector3(Math.cos(look.yaw), 0, -Math.sin(look.yaw));
-		if (keys.has('KeyW')) camera.position.addScaledVector(fwd, sp);
-		if (keys.has('KeyS')) camera.position.addScaledVector(fwd, -sp);
-		if (keys.has('KeyD')) camera.position.addScaledVector(rgt, sp);
-		if (keys.has('KeyA')) camera.position.addScaledVector(rgt, -sp);
-		if (keys.has('KeyE')) camera.position.y += sp;
-		if (keys.has('KeyQ')) camera.position.y -= sp;
-		camera.quaternion.setFromEuler(new THREE.Euler(look.pitch, look.yaw, 0, 'YXZ'));
+		ctl.update(dt);
 
 		let t0 = performance.now();
 		wf._wf_step(dt);
@@ -300,23 +341,34 @@ async function main() {
 		}
 		msDraw = msDraw * 0.9 + (performance.now() - t0) * 0.1;
 
-		frames++; acc += dt;
+		// ЧАСТОТА КАДРОВ СЧИТАЕТСЯ ПО ЧАСАМ, А НЕ ПО ЗАЖАТОМУ dt.
+		// Было acc += dt, где dt зажат сверху 0.05 с. Как только кадр становится
+		// длиннее 50 мс, сумма растёт медленнее часов, и frames/acc даёт РОВНО 20
+		// при любой настоящей частоте. Из-за этого весь сегодняшний стенд
+		// показывал «20-33 кадр/с», а на деле шёл около 1.5: пешеход за пять
+		// секунд проходил 1.5 м вместо 23 при скорости 4.56 м/с — на этом и
+		// вскрылось. Считать надо то, что происходит, а не то, что подставили.
+		frames++; acc += (now - lastReal) / 1000; lastReal = now;
 		if (acc >= 0.5) { fps = frames / acc; frames = 0; acc = 0; }
-		else if (fps === 0) { fps = 1 / Math.max(dt, 1e-3); }
 
-		hud.textContent =
-			`Гатчина · срез ${slice.size} м · ${(slice.bytes / 1024).toFixed(0)} КБ данных\n` +
-			`${fps.toFixed(0)} кадр/с   вода ${msSim.toFixed(1)} мс   отражение ${msRefl.toFixed(1)} мс   кадр ${msDraw.toFixed(1)} мс\n` +
-			`поле ${FIELD_SIDE}x${FIELD_SIDE} по ${FIELD_CELL} м · подшагов ${wf._wf_substeps()}\n` +
-			`решатель: ${wf._wf_volume().toFixed(0)} м³ на ${wf._wf_wet_area().toFixed(0)} м² · дальняя вода ${far.cells} узлов\n` +
-			`урез ${restLevel.toFixed(2)} м · △ рельеф ${(terr.tris / 1000).toFixed(0)}k · вода ${((water.tris + far.tris) / 1000).toFixed(0)}k\n` +
-			`WASD ходить · Shift быстрее · Q/E вниз-вверх · тянуть — смотреть · клик — бросить камень`;
+		hud.textContent = (fullHud
+			? `Гатчина · срез ${slice.size} м · ${(slice.bytes / 1024).toFixed(0)} КБ данных\n` +
+			  `${fps.toFixed(0)} кадр/с   вода ${msSim.toFixed(1)} мс   отражение ${msRefl.toFixed(1)} мс   кадр ${msDraw.toFixed(1)} мс\n` +
+			  `поле ${FIELD_SIDE}x${FIELD_SIDE} по ${FIELD_CELL} м · подшагов ${wf._wf_substeps()}\n` +
+			  `решатель: ${wf._wf_volume().toFixed(0)} м³ на ${wf._wf_wet_area().toFixed(0)} м² · дальняя вода ${far.cells} узлов\n` +
+			  `урез ${restLevel.toFixed(2)} м · △ рельеф ${(terr.tris / 1000).toFixed(0)}k · вода ${((water.tris + far.tris) / 1000).toFixed(0)}k`
+			  + (ctl.mode === 'walk'
+				? `\nпешеход: ${ctl.walker.speed.toFixed(2)} м/с · погружение ${ctl.walker.submersion.toFixed(2)} м`
+				  + (ctl.walker.swimming ? ' · плывёт' : ctl.walker.submersion > 0.02 ? ' · бредёт' : '')
+				: '')
+			: `Гатчина · ${fps.toFixed(0)} кадр/с · вода ${msSim.toFixed(1)} мс`)
+			+ (t < hintUntil ? '\n' + HINTS[ctl.mode] : '');
 		requestAnimationFrame(frame);
 	}
 	requestAnimationFrame(frame);
 
 	// наружу — чтобы снимать кадры из скрипта
-	window.__scene = { renderer, scene, camera, water, farMesh, farMat, terr, wf, slice, restLevel, waterMats };
+	window.__scene = { renderer, scene, camera, water, farMesh, farMat, terr, wf, slice, restLevel, waterMats, ctl, surfaceAt };
 }
 
 main().catch(e => { say('не поднялось: ' + e.message); console.error(e); });
