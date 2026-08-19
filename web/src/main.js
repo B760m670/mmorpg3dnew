@@ -29,6 +29,8 @@ const boot = document.getElementById('boot');
 function say(s) { boot.textContent = s; }
 
 async function main() {
+	// адрес читаем сразу: им задаются и ракурс, и стиль, и отладка
+	const q = new URLSearchParams(location.search);
 	say('качаю срез…');
 	// В сборке-одностраничнике срез вшит в саму страницу (web/build_single.mjs):
 	// открывать её можно откуда угодно, включая телефон без сервера.
@@ -108,9 +110,9 @@ async function main() {
 	const skyGeo = new THREE.SphereGeometry(4000, 48, 24);
 	const skyMat = new THREE.ShaderMaterial({
 		side: THREE.BackSide, depthWrite: false,
-		uniforms: { sunDir: { value: sunDir }, sunDisc: { value: 1.0 } },
+		uniforms: { sunDir: { value: sunDir }, sunDisc: { value: 1.0 }, anime: { value: 1.0 } },
 		vertexShader: `varying vec3 vD; void main(){ vD = normalize(position); gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
-		fragmentShader: `precision highp float; varying vec3 vD; uniform vec3 sunDir; uniform float sunDisc;
+		fragmentShader: `precision highp float; varying vec3 vD; uniform vec3 sunDir; uniform float sunDisc; uniform float anime;
 			void main(){
 				float up = clamp(vD.y*0.5+0.5, 0.0, 1.0);
 				// ЯРКОСТИ СОРАЗМЕРНЫ, а не «похожи на цвет неба». В линейных единицах,
@@ -118,7 +120,14 @@ async function main() {
 				// горизонта это 0.30, а зенит вчетверо темнее: у настоящего неба зенит
 				// около 6000 кд/м², горизонт 10000, трава 6400. Первый заход я взял
 				// «цвета неба» прямо с экрана (0.62..0.74) и получил кадр в молоке.
-				vec3 c = mix(vec3(0.30,0.31,0.33), vec3(0.075,0.115,0.215), pow(up,0.7));
+				// НЕБО РИСОВАННОЕ — ЭТО ЦВЕТ, А НЕ РАССЕЯНИЕ. Физическое небо у нас
+				// почти серое (так и есть в пасмурной Гатчине), но в аниме небо —
+				// главный носитель настроения сцены, и оно назначается. Тёплый
+				// бледный горизонт, насыщенный зенит: сумма та же по яркости, но
+				// цвет разведён.
+				vec3 c = anime > 0.5
+					? mix(vec3(0.335,0.330,0.290), vec3(0.062,0.130,0.290), pow(up,0.62))
+					: mix(vec3(0.30,0.31,0.33), vec3(0.075,0.115,0.215), pow(up,0.7));
 				// ДИСК НАСТОЯЩЕГО РАЗМЕРА. Солнце с Земли — 0.53° в поперечнике,
 				// то есть 0.0046 рад радиуса. Было pow(s,3000): половина яркости на
 				// 1.5°, диск втрое шире настоящего — на кадре висел ватный шар.
@@ -162,6 +171,8 @@ async function main() {
 	farMat.uniforms.tField.value = far.tex;
 	farMat.uniforms.fieldOrigin.value = new THREE.Vector2(far.origin.x, far.origin.y);
 	farMat.uniforms.fieldSize.value = far.size;
+	farMat.uniforms.holeRect.value = new THREE.Vector4(
+		org.x, org.y, org.x + FIELD_SIDE * FIELD_CELL, org.y + FIELD_SIDE * FIELD_CELL);
 	const farMesh = new THREE.Mesh(far.geo, farMat);
 	farMesh.frustumCulled = false;
 	scene.add(farMesh);
@@ -169,9 +180,18 @@ async function main() {
 	// вода останется на нулевом времени и с чужой матрицей зеркала
 	const waterMats = [water.mat, farMat];
 
+	// СТИЛЬ. Физический кадр никуда не делся — он остаётся источником правды о
+	// свете, и по нему сверяется рисованный. ?style=photo показывает его.
+	const anime = q.get('style') !== 'photo' ? 1.0 : 0.0;
 	const post = new Post(renderer, innerWidth, innerHeight);
+	post.mTone.uniforms.anime.value = anime;
 	const refl = new Reflection(renderer, innerWidth, innerHeight);
-	for (const m of waterMats) m.uniforms.tReflect.value = refl.rt.texture;
+	for (const m of waterMats) {
+		m.uniforms.tReflect.value = refl.rt.texture;
+		m.uniforms.anime.value = anime;
+	}
+	terr.mat.uniforms.anime.value = anime;
+	skyMat.uniforms.anime.value = anime;
 	const reflOverrides = [
 		{ u: terr.mat.uniforms.clipBelow, on: restLevel - 0.02, off: -1e9 },
 		{ u: skyMat.uniforms.sunDisc, on: 0.0, off: 1.0 },
@@ -193,7 +213,6 @@ async function main() {
 	// Это здешний аналог живого канала из game2: смотреть на игру надо часто и
 	// с разных мест, а перезапуск ради ракурса — та самая цена, из-за которой
 	// на телефоне мы смотрели редко.
-	const q = new URLSearchParams(location.search);
 	const V = {
 		// у самой кромки, глаз человека, взгляд на дальний берег
 		shore: [[LAKE.x, 0, sh.z + 3], [LAKE.x, restLevel, sh.z - 30], 1.65],

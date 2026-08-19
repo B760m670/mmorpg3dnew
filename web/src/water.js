@@ -20,6 +20,7 @@
 // Поверхность ставится по полю: вершина сетки — узел решателя, её высота это
 // отметка, которую посчитала физика.
 import * as THREE from 'three';
+import { STYLE_GLSL, PALETTE } from './style.js';
 
 const VERT = /* glsl */`
 precision highp float;
@@ -66,6 +67,10 @@ uniform float drawDepth, windMs, time, viewportH, projY;
 // «бледная вода» может быть и толщей, и отражением, и пеной, и по картинке их
 // не различить. 1 толща · 2 отражение×Френель · 3 Френель · 4 пена · 5 глубина.
 uniform int dbg;
+// прямоугольник выреза под окно решателя (x0,z0,x1,z1) — на его границе
+// глубина обрывается искусственно, и белую ленту кромки там рисовать нельзя
+uniform vec4 holeRect;
+${STYLE_GLSL}
 
 varying vec3 vWorld;
 varying vec2 vSlope;
@@ -193,7 +198,8 @@ void main() {
 	// закрывают соседние гребни.
 	float vh = max(dot(view, h), 1e-4);
 	float G = smithG1(cv, mss) * smithG1(cs, mss);
-	col += sunColor * fresnel(vh) * D * G / (4.0 * cv);
+	float glint = fresnel(vh) * D * G / (4.0 * cv);
+	col += sunColor * glint;
 
 	// ПЕНА У КРОМКИ — УЗКАЯ И РВАНАЯ. Первый заход брал 18 см глубины: на здешнем
 	// пологом берегу (уклон около 1:30) это полоса в пять метров, и на кадре она
@@ -203,6 +209,60 @@ void main() {
 	float fn = 0.55 + 0.45 * sin(vWorld.x * 2.7 + vWorld.z * 1.9 + time * 0.7)
 		* cos(vWorld.x * 1.3 - vWorld.z * 2.3);
 	col = mix(col, vec3(0.62, 0.64, 0.63), fw * fn * 0.30);
+
+	if (anime > 0.5) {
+		// ВОДА В РИСУНКЕ — ЭТО ЗАЛИВКА, ЛЕНТА И ШТРИХИ, а не непрерывная оптика.
+		//
+		// 1. ЗАЛИВКА. Две ступени по глубине вместо плавного затухания: мелководье
+		//    светлее и зеленее, глубина холоднее и темнее. Границу между ними
+		//    художник кладёт как линию по дну — здесь она и получается сама,
+		//    потому что глубина настоящая, из решателя.
+		vec3 shallowC = vec3(0.150, 0.235, 0.205);
+		vec3 deepC    = vec3(0.052, 0.105, 0.150);
+		float dstep = smoothstep(0.30, 0.34, vDepth) * 0.5
+		            + smoothstep(1.05, 1.20, vDepth) * 0.5;
+		vec3 base = mix(shallowC, deepC, dstep);
+
+		// 2. НЕБО ЛОЖИТСЯ ПЛОСКО, ВЫБРАННЫМ ЦВЕТОМ, И ТОЛЬКО У ГОРИЗОНТА.
+		//    Первый заход брал сам зеркальный буфер и добавлял свет неба с
+		//    множителем 2: линейная яркость выходила 0.4, а это после экспозиции
+		//    чистое белое — озеро стало простынёй. И ступенька стояла на F=0.16,
+		//    то есть срабатывала почти на всей глади, потому что на пологом
+		//    взгляде Френель высок везде дальше нескольких метров.
+		//    Теперь: цвет назначен (это решение цветового скрипта, а не расчёт),
+		//    отражение подмешано четвертью — чтобы дальний берег всё же оставил
+		//    на воде свой тон, — а ступенька отодвинута туда, где взгляд
+		//    действительно скользит.
+		vec3 skyFlat = mix(vec3(0.118, 0.152, 0.196), refl, 0.25);
+		float fs = smoothstep(0.42, 0.80, F);
+		base = mix(base, skyFlat, fs);
+
+		// 3. БЛИКИ — ФИГУРЫ, А НЕ ГРАДИЕНТ. Порог по тому же расчётному блику:
+		//    физика решает ГДЕ, рисунок решает ЧЕМ. Две ступени, как на целлулоиде.
+		//    Дальше порог поднимается: у горизонта на пиксель приходятся десятки
+		//    волн, и резкая граница там превращается в муар, а не в блик.
+		float far_ = clamp(dist / 90.0, 0.0, 1.0);
+		float lo = mix(0.9, 6.0, far_), hi = mix(5.0, 40.0, far_);
+		float h1 = smoothstep(lo, lo * 1.7, glint);
+		float h2 = smoothstep(hi, hi * 1.8, glint);
+		base = mix(base, vec3(0.62, 0.70, 0.74), h1 * 0.85);
+		base = mix(base, vec3(0.95, 0.97, 0.99), h2);
+
+		// 4. БЕЛАЯ ЛЕНТА У КРОМКИ. В аниме урез всегда обведён светлой линией —
+		//    именно она говорит, что это вода, а не яма с краской. Ширина берётся
+		//    по глубине, поэтому лента идёт ровно по изолинии берега.
+		// Ширина в САНТИМЕТРАХ ГЛУБИНЫ, а не в метрах берега: на здешнем уклоне
+		// 1:30 полоса в 10 см глубины растягивается на три метра суши, и у ног
+		// это была не линия, а сугроб. 2-5 см дают ленту меньше метра.
+		float ribbon = smoothstep(0.048, 0.026, vDepth) * smoothstep(0.012, 0.020, vDepth);
+		// шов окна: чем ближе к границе выреза, тем меньше веры, что это берег
+		float dh = min(min(vWorld.x - holeRect.x, holeRect.z - vWorld.x),
+		               min(vWorld.z - holeRect.y, holeRect.w - vWorld.z));
+		ribbon *= smoothstep(0.0, 10.0, abs(dh));
+		base = mix(base, vec3(0.94, 0.97, 0.98), ribbon * 0.80);
+
+		col = base;
+	}
 
 	float a = smoothstep(drawDepth, drawDepth + 0.05, vDepth);
 	if (dbg == 1) col = under;
@@ -313,6 +373,7 @@ export function buildWater(origin, side, cell) {
 			fieldOrigin: { value: new THREE.Vector2(origin.x, origin.y) },
 			fieldSize: { value: size },
 			drawDepth: { value: 0.02 },
+			holeRect: { value: new THREE.Vector4(-1e9, -1e9, -1e9, -1e9) },
 			windMs: { value: 2.5 },
 			time: { value: 0 },
 			viewportH: { value: 720 },
@@ -321,6 +382,8 @@ export function buildWater(origin, side, cell) {
 			sunDir: { value: new THREE.Vector3(0.4, 0.55, -0.3).normalize() },
 			sunColor: { value: new THREE.Color(1.0, 0.94, 0.84) },
 			skyLight: { value: new THREE.Color(0.105, 0.130, 0.165) },
+			anime: { value: 1.0 },
+			shadowTint: { value: new THREE.Vector3(...PALETTE.shadowTint) },
 		},
 	});
 	const mesh = new THREE.Mesh(geo, mat);

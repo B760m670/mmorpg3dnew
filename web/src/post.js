@@ -51,8 +51,38 @@ const BLUR_FS = `precision highp float;
 
 const TONE_FS = `precision highp float;
 	varying vec2 vUv;
-	uniform sampler2D tScene, tBloom;
+	uniform sampler2D tScene, tBloom, tDepth;
 	uniform float exposure, vignette, grain, bloom, t;
+	uniform float anime, outline, camNear, camFar;
+	uniform vec2 texel;
+	uniform vec3 inkColor;
+
+	// ЛИНИЯ БЕРЁТСЯ ИЗ ГЛУБИНЫ, А НЕ ИЗ ЯРКОСТИ.
+	// Обводка по перепаду яркости обводит ещё и тени с бликами, и кадр покрывается
+	// грязью там, где никакого края нет. По глубине линия встаёт ровно там, где
+	// один предмет кончается и начинается другой, — то есть где её и рисуют.
+	//
+	// Сравнивается ОТНОСИТЕЛЬНЫЙ перепад: на 300 м разница в метр — это ничто,
+	// а в двух метрах от глаза тот же метр — силуэт.
+	float lin(vec2 uv) {
+		float z = texture2D(tDepth, uv).x * 2.0 - 1.0;
+		return (2.0 * camNear * camFar) / (camFar + camNear - z * (camFar - camNear));
+	}
+	// ПЕРЕПАД ГЛУБИНЫ КРАЕМ НЕ ЯВЛЯЕТСЯ. На глади, уходящей к горизонту, глубина
+	// между соседними пикселями меняется на метры — и порог по разности объявил
+	// краем половину озера: кадр перечеркнуло чёрной полосой. У наклонной
+	// плоскости глубина по экрану растёт ЛИНЕЙНО, поэтому край надо искать во
+	// ВТОРОЙ разности: у плоскости она ноль при любом наклоне, а на силуэте, где
+	// одна поверхность обрывается и начинается другая, — велика.
+	float edge() {
+		float c  = lin(vUv);
+		float l  = lin(vUv - vec2(texel.x, 0.0));
+		float r  = lin(vUv + vec2(texel.x, 0.0));
+		float u  = lin(vUv - vec2(0.0, texel.y));
+		float d  = lin(vUv + vec2(0.0, texel.y));
+		float e = max(abs(l + r - 2.0 * c), abs(u + d - 2.0 * c));
+		return smoothstep(0.006, 0.020, e / max(c, 1.0));
+	}
 	// целочисленный хеш: fract(sin(dot())) на решётке пикселей коррелирует
 	float hash(vec2 p){
 		uvec2 q = uvec2(ivec2(p)) * uvec2(1597334673u, 3812015801u);
@@ -68,10 +98,17 @@ const TONE_FS = `precision highp float;
 		c = (c*(6.2*c+0.5))/(c*(6.2*c+1.7)+0.06);   // фильмическая кривая
 		vec2 d = vUv - 0.5;
 		c *= 1.0 - vignette * smoothstep(0.10, 0.55, dot(d,d));
-		// зерно растёт в тенях, как на настоящей матрице
-		float lum = dot(c, vec3(0.299,0.587,0.114));
-		float n = hash(gl_FragCoord.xy + vec2(floor(t*61.0), floor(t*37.0))) - 0.5;
-		c += n * grain * (0.010 + 0.030 * (1.0 - smoothstep(0.0, 0.26, lum)));
+		if (anime > 0.5) {
+			// ЛИНИЯ КЛАДЁТСЯ ПОСЛЕ КРИВОЙ ТОНА и не осветляется ореолом: у чернил
+			// нет яркости, они закрывают свет, а не добавляют его.
+			c = mix(c, inkColor, edge() * outline);
+		} else {
+			// ЗЕРНО — ФОТОГРАФИЧЕСКИЙ СЛЕД, и в рисунке его быть не должно: это
+			// шум матрицы, а целлулоид не шумит. Оставлено только в режиме ?style=photo.
+			float lum = dot(c, vec3(0.299,0.587,0.114));
+			float n = hash(gl_FragCoord.xy + vec2(floor(t*61.0), floor(t*37.0))) - 0.5;
+			c += n * grain * (0.010 + 0.030 * (1.0 - smoothstep(0.0, 0.26, lum)));
+		}
 		gl_FragColor = vec4(max(c, 0.0), 1.0);
 	}`;
 
@@ -89,6 +126,9 @@ export class Post {
 			type: THREE.HalfFloatType, depthBuffer: true, stencilBuffer: false,
 			minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
 		});
+		// глубина нужна для контура — её сохраняем в текстуру, а не выбрасываем
+		this.rt.depthTexture = new THREE.DepthTexture(w, h);
+		this.rt.depthTexture.type = THREE.UnsignedIntType;
 		this.cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 		this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), null);
 		this.scene = new THREE.Scene();
@@ -116,6 +156,13 @@ export class Post {
 			tScene: { value: this.rt.texture }, tBloom: { value: null },
 			exposure: { value: this.exposure }, vignette: { value: 0.22 },
 			grain: { value: 1.0 }, bloom: { value: 0.05 }, t: { value: 0 },
+			tDepth: { value: this.rt.depthTexture },
+			anime: { value: 1.0 }, outline: { value: 0.85 },
+			camNear: { value: 0.1 }, camFar: { value: 6000 },
+			texel: { value: new THREE.Vector2(1 / w, 1 / h) },
+			// чернила не чёрные: чистый чёрный в рисунке выглядит дырой, линию
+			// кладут тёмным цветом сцены — здесь холодным сине-фиолетовым
+			inkColor: { value: new THREE.Color(0.055, 0.050, 0.080) },
 		});
 		// ЧЕТЫРЕ УРОВНЯ, А НЕ ОДНО РАЗМЫТИЕ. Ореол объектива спадает не по Гауссу,
 		// а гораздо длиннее: у него есть и плотное ядро в пару пикселей, и шлейф
@@ -125,6 +172,7 @@ export class Post {
 	}
 	resize(w, h) {
 		this.rt.setSize(w, h);
+		if (this.mTone) this.mTone.uniforms.texel.value.set(1 / w, 1 / h);
 		for (const l of this.levels) { l.a.dispose(); l.b.dispose(); }
 		this.levels = [];
 		let lw = w >> 1, lh = h >> 1;
@@ -141,6 +189,8 @@ export class Post {
 	}
 	render(scene, camera, t) {
 		this.mTone.uniforms.t.value = t;
+		this.mTone.uniforms.camNear.value = camera.near;
+		this.mTone.uniforms.camFar.value = camera.far;
 		this.renderer.setRenderTarget(this.rt);
 		this.renderer.clear();
 		this.renderer.render(scene, camera);

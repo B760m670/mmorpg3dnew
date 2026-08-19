@@ -6,17 +6,21 @@
 // глянцевее сухого, и полоса эта шириной в десятки сантиметров. Земля знает
 // урез (он приехал в срезе), поэтому считает мокроту сама.
 import * as THREE from 'three';
+import { STYLE_GLSL, PALETTE } from './style.js';
 
 const VERT = /* glsl */`
 varying vec3 vWorld;
 varying float vWet;      // 0 сухо .. 1 под водой
 varying float vDepth;    // на сколько метров земля ВЫШЕ уреза
+varying vec3 vBig;       // нормаль КРУПНОЙ формы (радиус 8 м)
 attribute float wet;
 attribute float depth;
+attribute vec3 nsmooth;
 void main() {
 	vWorld = position;
 	vWet = wet;
 	vDepth = depth;
+	vBig = nsmooth;
 	gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }`;
 
@@ -32,6 +36,8 @@ uniform vec3 skyColor;
 // воды, и дно озера загораживает ей весь дальний берег — отражение получалось
 // пустым, одно небо. В зеркальном проходе всё, что ниже уреза, выбрасывается.
 uniform float clipBelow;
+varying vec3 vBig;
+${STYLE_GLSL}
 
 // Целочисленный хеш: обычный fract(sin(dot())) на решётке коррелирует и кладёт
 // на кадр диагональную рябь вместо шума.
@@ -79,6 +85,29 @@ void main() {
 	float ndl = max(dot(n, sunDir), 0.0);
 	vec3 lit = alb * (sunColor * ndl + skyColor * (0.45 + 0.55 * n.y));
 
+	if (anime > 0.5) {
+		// СВЕТ РЕЖЕТСЯ СТУПЕНЯМИ ПО КРУПНОЙ ФОРМЕ. По геометрической нормали
+		// рельефа с шагом 1 м вышло бы крошево из пятен; художник рисует тень
+		// холма ОДНИМ пятном, поэтому n·l берётся от сглаженной нормали.
+		vec3 nb = normalize(vBig);
+		float nl = max(dot(nb, sunDir), 0.0);
+		// цвет поверхности тоже уплощается: в рисунке трава — это два-три цвета,
+		// а не сплошной шум
+		// ПЯТНА, А НЕ КАМУФЛЯЖ. Первый заход резал два зелёных жёстким step, и
+		// поле покрылось контрастными кляксами. У рисованной травы разброс
+		// значений УЗКИЙ (это одна краска с подмесом), а край пятна мягкий на
+		// ширину мазка. Третья, очень крупная частота даёт полю большую форму —
+		// то, чем художник разводит передний и дальний план.
+		float m3 = vnoise(vWorld.xz * 0.035);
+		vec3 g1 = vec3(0.140, 0.178, 0.092);
+		vec3 g2 = vec3(0.176, 0.208, 0.104);
+		vec3 flat_alb = mix(g1, g2, smoothstep(0.42, 0.58, m1));
+		flat_alb *= 0.88 + 0.24 * m3;
+		flat_alb = mix(flat_alb, vec3(0.186, 0.152, 0.104), smoothstep(0.34, 0.52, slope * 3.2));
+		flat_alb *= mix(1.0, 0.62, wetness);
+		lit = flat_alb * toonLight(nl, sunColor, skyColor);
+	}
+
 	// ВЛАЖНЫЙ ОТЛИВ. У мокрого грунта поверх зёрен стоит плёнка воды, поэтому у
 	// него есть зеркальная составляющая, а у сухого нет.
 	// Было pow(...,90) * 0.55: при низком солнце вектор h вставал почти
@@ -103,6 +132,11 @@ export function buildTerrain(slice, level) {
 	const pos = new Float32Array(n * n * 3);
 	const wet = new Float32Array(n * n);
 	const dep = new Float32Array(n * n);
+	// НОРМАЛЬ КРУПНОЙ ФОРМЫ. Считается по высотам через 8 м, а не через соседний
+	// узел: она описывает склон холма, а не кочку. По ней и режется свет.
+	const nsm = new Float32Array(n * n * 3);
+	const R = 8;
+	const at = (i, j) => bed[Math.min(Math.max(j, 0), n - 1) * n + Math.min(Math.max(i, 0), n - 1)];
 	for (let j = 0; j < n; j++) {
 		for (let i = 0; i < n; i++) {
 			const k = j * n + i;
@@ -113,6 +147,10 @@ export function buildTerrain(slice, level) {
 			// насколько земля выше уреза (отрицательное — земля под водой)
 			dep[k] = Number.isNaN(lv) ? 1.0 : bed[k] - lv;
 			wet[k] = (!Number.isNaN(lv) && lv - bed[k] > 0.0) ? 1.0 : 0.0;
+			const gx = (at(i + R, j) - at(i - R, j)) / (2 * R * cell);
+			const gz = (at(i, j + R) - at(i, j - R)) / (2 * R * cell);
+			const il = 1 / Math.hypot(gx, 1, gz);
+			nsm[k * 3] = -gx * il; nsm[k * 3 + 1] = il; nsm[k * 3 + 2] = -gz * il;
 		}
 	}
 	// ИНДЕКСЫ 32-БИТНЫЕ: 513² узлов это 263 169 вершин, в 16 бит не влезает,
@@ -129,6 +167,7 @@ export function buildTerrain(slice, level) {
 	geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
 	geo.setAttribute('wet', new THREE.BufferAttribute(wet, 1));
 	geo.setAttribute('depth', new THREE.BufferAttribute(dep, 1));
+	geo.setAttribute('nsmooth', new THREE.BufferAttribute(nsm, 3));
 	geo.setIndex(new THREE.BufferAttribute(idx, 1));
 	geo.computeBoundingSphere();
 
@@ -141,6 +180,8 @@ export function buildTerrain(slice, level) {
 			// рассеянный свет неба — та же шкала, что у купола (горизонт 0.30 линейных)
 			skyColor: { value: new THREE.Color(0.105, 0.130, 0.165) },
 			clipBelow: { value: -1e9 },
+			anime: { value: 1.0 },
+			shadowTint: { value: new THREE.Vector3(...PALETTE.shadowTint) },
 		},
 	});
 	const mesh = new THREE.Mesh(geo, mat);
