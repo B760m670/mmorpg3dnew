@@ -382,6 +382,76 @@ def toon(name, color, size=0.55, smooth=0.03, rim=None, sun=None):
     return m
 
 
+def build_clouds(lvl, alt=1400.0, scale=26.0, dens0=0.470, dens1=0.505, em=2.6):
+    """ОБЛАКА. Измерено: структура нашего неба 0.014 против 0.14-0.18 у
+    референса — в десять раз меньше. Голый градиент вместо неба, и это была
+    главная разница, которую я сам не видел.
+
+    Слой облаков — плоскость на 900 м, видимая снизу почти вскользь: перспектива
+    сама сжимает шум к горизонту в полосы, и отдельно вытягивать его не нужно.
+    ПОДСВЕЧЕНЫ СЗАДИ: тонкий край светится, плотная середина тёмно-лиловая. Это
+    обратно обычному облаку и верно именно для заката — солнце за ними.
+    """
+    bm = bmesh.new()
+    # Половина поля зрения по вертикали 9.9°, значит слой на высоте A виден
+    # только дальше A/tg(9.9°) = 5.7·A. При 900 м это 5.2 км, а плоскость
+    # кончалась на 4.2 — облака лежали ЦЕЛИКОМ ПОД КАДРОМ.
+    R = 60000.0
+    vs = [bm.verts.new((SHORE[0] + dx * R, SHORE[1] + dz * R, lvl + alt))
+          for dx, dz in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+    bm.faces.new(vs)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    me = bpy.data.meshes.new('clouds')
+    bm.to_mesh(me); bm.free()
+    ob = bpy.data.objects.new('clouds', me)
+    bpy.context.collection.objects.link(ob)
+
+    m = bpy.data.materials.new('clouds')
+    m.use_nodes = True
+    nt = m.node_tree
+    for nd in list(nt.nodes):
+        if nd.type != 'OUTPUT_MATERIAL':
+            nt.nodes.remove(nd)
+    out = nt.nodes['Material Output']
+    tc = nt.nodes.new('ShaderNodeTexCoord')
+    mp = nt.nodes.new('ShaderNodeMapping')
+    mp.inputs['Scale'].default_value = (5.5, 1.0, 1.0)   # полосы вдоль горизонта
+    nt.links.new(tc.outputs['Generated'], mp.inputs['Vector'])
+    nz = nt.nodes.new('ShaderNodeTexNoise')
+    nz.inputs['Scale'].default_value = scale
+    nz.inputs['Detail'].default_value = 8.0
+    nz.inputs['Roughness'].default_value = 0.62
+    nt.links.new(mp.outputs['Vector'], nz.inputs['Vector'])
+    # плотность: порог с мягким краем — у облака есть кромка, а не туман
+    # КРАЙ У ОБЛАКА РЕЗКИЙ. Мягкий порог (0.36..0.52) давал размытые пятна, и
+    # кадр читался дымом: измеренная структура неба не сдвинулась (0.033 -> 0.037).
+    # Облако — это форма с кромкой, а не градиент плотности.
+    dens = nt.nodes.new('ShaderNodeValToRGB')
+    dens.color_ramp.elements[0].position = dens0
+    dens.color_ramp.elements[1].position = dens1
+    nt.links.new(nz.outputs['Fac'], dens.inputs['Fac'])
+    # цвет: тонкое светится тёплым, плотное уходит в лиловую тень
+    col = nt.nodes.new('ShaderNodeValToRGB')
+    col.color_ramp.elements[0].position = 0.42
+    col.color_ramp.elements[0].color = (1.00, 0.72, 0.42, 1)
+    col.color_ramp.elements[1].position = 0.86
+    col.color_ramp.elements[1].color = (0.16, 0.11, 0.17, 1)
+    nt.links.new(nz.outputs['Fac'], col.inputs['Fac'])
+    emn = nt.nodes.new('ShaderNodeEmission')
+    emn.inputs['Strength'].default_value = em
+    nt.links.new(col.outputs['Color'], emn.inputs['Color'])
+    tr = nt.nodes.new('ShaderNodeBsdfTransparent')
+    mix = nt.nodes.new('ShaderNodeMixShader')
+    nt.links.new(dens.outputs['Color'], mix.inputs['Fac'])
+    nt.links.new(tr.outputs[0], mix.inputs[1])
+    nt.links.new(emn.outputs[0], mix.inputs[2])
+    nt.links.new(mix.outputs[0], out.inputs['Surface'])
+    # облака не должны бросать тень на озеро и попадать в обводку
+    ob.visible_shadow = False
+    ob.data.materials.append(m)
+    return ob
+
+
 def water_mat(rough=0.16):
     """Вода. ЗДЕСЬ ФИЗИКА ВЫИГРЫВАЕТ У СТИЛИЗАЦИИ: солнечная дорожка против
     низкого солнца сама выходит правильной формы, если поверхность настоящая.
@@ -492,6 +562,10 @@ def main():
     # и требуется контровому кадру.
     ground.data.materials.append(toon('ground', (0.040, 0.047, 0.030), size=0.14, smooth=0.02))
 
+    # ДВА ЯРУСА. У настоящего заката облака идут не одним слоем, и именно
+    # разница масштабов даёт небу структуру, а не один ровный ряд полос.
+    build_clouds(lvl)
+    low = build_clouds(lvl, alt=620.0, scale=11.0, dens0=0.545, dens1=0.575, em=1.5)
     wob = build_water(sl, lvl)
     wob.data.materials.append(water_mat())
 
@@ -519,6 +593,12 @@ def main():
 
     # --- КАМЕРА: средний план, фигура в левой трети, дорожка уходит к горизонту
     cam_d = bpy.data.cameras.new('cam')
+    # ДАЛЬНЯЯ ПЛОСКОСТЬ ОТСЕЧЕНИЯ. По умолчанию она около километра, а слой
+    # облаков виден только дальше 10 км (высота 1400 м делённая на тангенс
+    # верхнего края кадра). Облака отрезались камерой, а я искал ошибку в
+    # материале и в размере плоскости.
+    cam_d.clip_start = 0.05
+    cam_d.clip_end = 200000.0
     cam_d.lens = 58
     cam_d.sensor_width = 36
     cam = bpy.data.objects.new('cam', cam_d)
@@ -547,6 +627,10 @@ def main():
     sc.cycles.use_denoising = True
     sc.render.resolution_x, sc.render.resolution_y = 960, 540
     sc.view_settings.view_transform = 'Standard'
+    # ИЗМЕРЕНО: 69% площади кадра лежало в самой светлой ступени тона, у
+    # референса 3-4%. Кадр был выжжен, и никакая работа с формой этого не
+    # исправит, пока масса тона не сядет в середину.
+    sc.view_settings.exposure = -1.9
 
     # КОНТУР ТОЛЬКО ПО СИЛУЭТАМ. Против света внутренних линий почти нет —
     # рисованный кадр в контровом свете и правда почти без линии, одни пятна.
