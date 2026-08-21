@@ -37,15 +37,35 @@ jobs:
           unzip -q godot.zip
           echo "GODOT=$PWD/Godot.app/Contents/MacOS/Godot" >> "$GITHUB_ENV"
 
+      # СБОРКА ЛОМАЛАСЬ САМА СОБОЙ РОВНО ЧЕРЕЗ 30 ДНЕЙ, и это было устроено так
+      # по недосмотру. Здесь брался ПОСЛЕДНИЙ УСПЕШНЫЙ запуск engine-templates
+      # — без проверки, жив ли его artifact. А artifact живёт retention-days
+      # (было 30). 15 июля собрались шаблоны, 14 августа они истекли, и с этого
+      # дня КАЖДЫЙ коммит падал с «no valid artifacts found to download» —
+      # сообщением, по которому не видно, что чинить. Проверено по API:
+      # artifact 8350588486, 114 МБ, expires_at 2026-08-14, expired: true.
+      # Теперь: перебираем последние успешные запуски и берём первый, у
+      # которого artifact НЕ истёк; если живого нет — падаем с внятным текстом.
       - name: Download OUR Metal templates (artifact ios-templates-metal)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RUN_ID=$(gh run list --repo "${{ github.repository }}" \
-            --workflow engine-templates.yml --status success -L 1 \
-            --json databaseId --jq '.[0].databaseId')
+          RUN_ID=""
+          for ID in $(gh run list --repo "${{ github.repository }}" \
+                --workflow engine-templates.yml --status success -L 10 \
+                --json databaseId --jq '.[].databaseId'); do
+            ALIVE=$(gh api "repos/${{ github.repository }}/actions/runs/$ID/artifacts" \
+              --jq '[.artifacts[] | select(.name=="ios-templates-metal" and .expired==false)] | length')
+            echo "запуск $ID: живых артефактов $ALIVE"
+            if [ "$ALIVE" -gt 0 ]; then RUN_ID="$ID"; break; fi
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::Шаблоны iOS (ios-templates-metal) ИСТЕКЛИ у всех последних успешных запусков."
+            echo "::error::Это не поломка кода: artifact хранится ограниченное время и просто устарел."
+            echo "::error::Лечится перезапуском workflow engine-templates.yml — он пересоберёт форк Godot."
+            exit 1
+          fi
           echo "templates run: $RUN_ID"
-          test -n "$RUN_ID"
           gh run download "$RUN_ID" --repo "${{ github.repository }}" \
             --name ios-templates-metal --dir tpl
           ls -la tpl

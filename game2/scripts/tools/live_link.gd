@@ -51,8 +51,6 @@ var _peer: StreamPeerTCP
 var _buf := ""
 var _shot_path := ""
 var _shot_wait := 0
-var _fps_t := 0.0
-var _fps_n := 0
 var _fps := 0.0
 
 func _ready() -> void:
@@ -62,13 +60,16 @@ func _ready() -> void:
 		return
 	print("[live] канал открыт: 127.0.0.1:%d — игра ждёт команд" % PORT)
 
-func _process(dt: float) -> void:
-	_fps_n += 1
-	_fps_t += dt
-	if _fps_t >= 1.0:
-		_fps = float(_fps_n) / _fps_t
-		_fps_t = 0.0
-		_fps_n = 0
+func _process(_dt: float) -> void:
+	# СЧЁТЧИК КАДРОВ ВРАЛ, И ВРАЛ КРУПНО. Здесь стояло накопление dt из
+	# _process — а Godot ЗАЖИМАЕТ этот dt (physics/common/max_physics_steps),
+	# и при настоящем 1 кадре в секунду он приходит как 0.125 с. Счётчик
+	# показывал 15.0 при истинном 1: ошибка в пятнадцать раз, ровно в ту
+	# сторону, в которую приятно ошибаться. Это тот же дефект, что я уже
+	# поймал в веб-версии, — и он снова прошёл незамеченным, потому что число
+	# выглядело правдоподобно. Engine.get_frames_per_second() считает движок,
+	# и подделать его нечем.
+	_fps = Engine.get_frames_per_second()
 
 	# кадр просили — отдаём, когда он ТОЧНО отрисован (иначе поймаем прошлый)
 	if _shot_wait > 0:
