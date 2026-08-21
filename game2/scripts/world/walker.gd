@@ -19,6 +19,23 @@ const EYE := 1.62                 # уровень глаз от ног, м
 @export var walk_speed := 1.6
 @export var run_speed := 6.5
 
+# --- ВИД ЧЕРЕЗ ПЛЕЧО ---
+# Камера была В ГЛАЗАХ, и тела в кадре не было никогда. Между «тело есть» и
+# «тело видно» — вся разница: пока фигуру не видно, её не с чем сравнить и
+# нечего чинить. Числа ниже — из устройства кадра, а не из вкуса:
+#   ПЛЕЧО. Смещение вбок ставит фигуру не по центру, освобождая ту треть кадра,
+#     куда идёт взгляд. Ровно за спиной персонаж закрывает то, на что смотришь.
+#   ВЫСОТА чуть ниже глаз: камера смотрит на мир немного снизу, и это ставит
+#     ближайшую поверхность в полтора-три метра — а разбор чужих кадров дал, что
+#     дальше двух-трёх метров никакая работа над материалом не видна.
+#   ДЛИНА поводка. 2.2 м — фигура занимает около трети высоты кадра: видно
+#     позу и походку, но не превращается в спину во весь экран.
+const CAM_SHOULDER := 0.42        # вбок от оси тела, м
+const CAM_HEIGHT := 1.52          # высота точки прицела, м
+const CAM_DIST := 2.20            # длина поводка, м
+const CAM_MIN := 0.35             # ближе этого камеру не пускаем даже в упор
+@export var third_person := true
+
 ## Вода, в которую можно войти. Пока её тут не было, озеро было наклейкой:
 ## пешеход шёл по дну посуху на полной скорости, а гладь проходила сквозь голову.
 var water: WaterReal
@@ -37,6 +54,10 @@ var _press_time: Dictionary = {}
 var _last_tap_ms: int = -100000
 var _last_tap_pos := Vector2.ZERO
 
+var person: Person
+var lamp: Lantern
+var _phase := 0.0                 # фаза шага, радианы
+
 func _ready() -> void:
 	var col := CollisionShape3D.new()
 	var cap := CapsuleShape3D.new()
@@ -45,11 +66,27 @@ func _ready() -> void:
 	col.shape = cap
 	col.position = Vector3(0, 1.75 / 2.0, 0)      # ноги в origin тела
 	add_child(col)
+
+	# ТЕЛО. Раньше здесь была только капсула коллизии: пешеход существовал для
+	# физики и не существовал для глаза.
+	person = Person.new()
+	add_child(person)
+	person.build()
+
+	# ФОНАРЬ В РУКЕ. Не реквизит: это единственный источник света в ночной
+	# сцене, и он же ставит фигуру в кадре — свет идёт снизу и сбоку, и по нему
+	# читается объём. Керосиновая лампа, 12 кандел, 1900 K.
+	lamp = Lantern.make("лампа10")
+	add_child(lamp)
+
+	# Камера НЕ ребёнок тела: тело крутится по yaw целиком, а камера должна
+	# уметь висеть на поводке и подтягиваться при упоре в стену. Держим её
+	# отдельно и ставим каждый кадр сами.
 	cam = Camera3D.new()
 	cam.fov = 66.0                                 # человеческое поле зрения
 	cam.near = 0.05
 	cam.far = 22000.0
-	cam.position = Vector3(0, EYE, 0)
+	cam.top_level = true
 	add_child(cam)
 
 func activate(world_pos: Vector3, yaw: float) -> void:
@@ -66,7 +103,11 @@ func activate(world_pos: Vector3, yaw: float) -> void:
 	_apply_look()
 
 func deactivate() -> void:
-	visible = false
+	# ТЕЛО ОСТАЁТСЯ ВИДИМЫМ. Раньше здесь стояло visible = false, и при переходе
+	# в полёт персонаж пропадал из мира вовсе. Это неверно по существу: человек
+	# не исчезает оттого, что на него перестали смотреть его глазами. И это
+	# мешало работать — фигуру нельзя было обойти и рассмотреть со стороны,
+	# а судить о ней по виду из-за её же плеча нельзя.
 	set_physics_process(false)
 	set_process_input(false)
 
@@ -81,9 +122,34 @@ func set_intent(v: Vector2) -> void:
 
 func _apply_look() -> void:
 	_pitch = clampf(_pitch, deg_to_rad(-85.0), deg_to_rad(85.0))
-	cam.transform.basis = Basis(Vector3.UP, 0.0)   # yaw несёт тело, pitch — камера
 	rotation = Vector3(0, _yaw, 0)
-	cam.rotation = Vector3(_pitch, 0, 0)
+	_place_camera()
+
+
+## Поставить камеру: от точки прицела на плече — назад по взгляду, но не дальше
+## первой стены. Без этой проверки камера уходит внутрь рельефа, и кадр
+## показывает изнанку земли — на холмистой Гатчине это происходит постоянно.
+func _place_camera() -> void:
+	if cam == null:
+		return
+	if not third_person:
+		cam.global_position = global_position + Vector3(0, EYE, 0)
+		cam.global_rotation = Vector3(_pitch, _yaw, 0)
+		return
+	var basis := Basis(Vector3.UP, _yaw) * Basis(Vector3.RIGHT, _pitch)
+	var aim := global_position + Vector3(0, CAM_HEIGHT, 0) \
+		+ (Basis(Vector3.UP, _yaw) * Vector3.RIGHT) * CAM_SHOULDER
+	var back := basis * Vector3.BACK          # -Z камеры смотрит вперёд
+	var want := aim + back * CAM_DIST
+	var space := get_world_3d().direct_space_state
+	var q := PhysicsRayQueryParameters3D.create(aim, want)
+	q.exclude = [get_rid()]
+	var hit := space.intersect_ray(q)
+	if hit.has("position"):
+		var d: float = (hit["position"] as Vector3).distance_to(aim)
+		want = aim + back * maxf(d - 0.12, CAM_MIN)
+	cam.global_position = want
+	cam.global_rotation = Vector3(_pitch, _yaw, 0)
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
@@ -193,3 +259,67 @@ func _physics_process(delta: float) -> void:
 		else:
 			velocity.y -= GRAVITY * delta
 	move_and_slide()
+	_animate(delta)
+	_place_camera()
+
+
+# --- ПОХОДКА ---
+# Фаза шага ведётся ПРОЙДЕННЫМ ПУТЁМ, а не временем. Разница принципиальная:
+# при ведении временем ноги на месте перебирают в воздухе, а при разгоне
+# скользят по земле — это и есть та самая «плывущая» походка, по которой
+# бесплатные модели узнаются с первого взгляда. Путь такого не даёт: за один
+# шаг длиной STRIDE фаза всегда проходит ровно полкруга, с какой бы скоростью
+# тело ни шло.
+# Длина шага 0.72 м — та же величина, по которой уже считаются круги на воде
+# от шагов; один источник правды.
+const STRIDE := 0.72
+
+func _animate(delta: float) -> void:
+	if person == null or person.skel == null:
+		return
+	var v := Vector2(velocity.x, velocity.z).length()
+	_phase += (v * delta / STRIDE) * PI
+	# На месте фаза мягко возвращается к нулю: ноги сходятся, а не замирают в
+	# полушаге. Без этого остановка выглядит выключенным питанием.
+	if v < 0.05:
+		_phase = lerp_angle(_phase, 0.0, minf(delta * 6.0, 1.0))
+
+	var s := sin(_phase)
+	var c := cos(_phase)
+	# Размах ведёт скорость: шагом руки почти не двигаются, бегом — сильно.
+	var amp := clampf(v / run_speed, 0.0, 1.0)
+	var leg := deg_to_rad(lerpf(11.0, 34.0, amp))
+	var arm := deg_to_rad(lerpf(7.0, 30.0, amp))
+
+	_bone_pitch("thigh.L", s * leg)
+	_bone_pitch("thigh.R", -s * leg)
+	# Колено сгибается только назад и только на заносе — вперёд оно не гнётся.
+	_bone_pitch("shin.L", -maxf(-s, 0.0) * leg * 1.5)
+	_bone_pitch("shin.R", -maxf(s, 0.0) * leg * 1.5)
+	# Руки идут ПРОТИВОХОДОМ к ногам — это не стиль, это равновесие: иначе тело
+	# закручивало бы вокруг вертикали на каждом шаге.
+	_bone_pitch("arm.L", -s * arm)
+	_bone_pitch("arm.R", s * arm)
+
+	# Тело слегка подпрыгивает: две вершины на шаг (по одной на каждую ногу),
+	# поэтому удвоенная частота. Амплитуда 1.5 см на ходьбе — больше выглядит
+	# скачкой.
+	var bob := (1.0 - absf(c)) * lerpf(0.010, 0.032, amp)
+	_bone_shift("hips", Vector3(0, bob, 0))
+
+	# Фонарь — в правой кисти, чуть впереди ладони.
+	if lamp != null:
+		var t := person.hand_transform(true)
+		lamp.global_position = t.origin + Vector3(0, -0.06, 0)
+
+
+func _bone_pitch(nm: String, ang: float) -> void:
+	var id := person.skel.find_bone(nm)
+	if id >= 0:
+		person.skel.set_bone_pose_rotation(id, Quaternion(Vector3.RIGHT, ang))
+
+
+func _bone_shift(nm: String, d: Vector3) -> void:
+	var id := person.skel.find_bone(nm)
+	if id >= 0:
+		person.skel.set_bone_pose_position(id, person.skel.get_bone_rest(id).origin + d)

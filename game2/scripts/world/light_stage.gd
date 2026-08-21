@@ -55,6 +55,19 @@ func _ready() -> void:
 		wc.run_self_test()
 		get_tree().quit()
 		return
+	if "--person-test" in args:
+		# ПРОВЕРКА ФИГУРЫ БЕЗ МИРА. «Тела не видно» — это три разных случая:
+		# сетка не построилась, построилась вырожденной, или построилась и стоит
+		# не там. Различить их в кадре нельзя, поэтому спрашиваем числами.
+		var pr := Person.new()
+		add_child(pr)
+		pr.build()
+		pr.self_test()
+		var ab: AABB = pr.mesh_inst.get_aabb()
+		print("[человек] габарит сетки: от %s до %s, размер %s"
+			% [ab.position, ab.end, ab.size])
+		get_tree().quit()
+		return
 	if "--spectral-test" in args:
 		var wc2 := WorldClock.new()
 		add_child(wc2)

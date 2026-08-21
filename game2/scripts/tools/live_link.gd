@@ -183,16 +183,25 @@ func _exec(line: String) -> void:
 				if stage._walk_active:
 					stage._toggle_walk()
 				_reply("ok полёт"); return
+			# ТРЕТИЙ ПАРАМЕТР — КУДА ЛИЦОМ, в градусах азимута (0 = север).
+			# Без него тело всегда вставало лицом на север, и на кадре лицо
+			# оказывалось в тени: Солнце в Гатчине днём всегда с юга. Я на этом
+			# потерял несколько заходов, разглядывая «голову без лица», которая
+			# на деле была головой в тени.
+			# Связь: fwd = (-sin yaw, 0, -cos yaw), а азимут A даёт направление
+			# (sin A, 0, -cos A). Отсюда yaw = -A.
 			var wp := arg.split(",")
 			var wx := float(wp[0])
 			var wz := float(wp[1]) if wp.size() > 1 else 0.0
+			var waz := float(wp[2]) if wp.size() > 2 else 0.0
 			var gy := terrain.height(wx, wz)
 			terrain.update_collision(Vector3(wx, 0.0, wz))
 			if not stage._walk_active:
 				stage._walk_active = true
 				camera.set_process_input(false)
-			walker.activate(Vector3(wx, gy + 0.6, wz), 0.0)
-			_reply("ok тело в (%.1f, %.2f, %.1f)" % [wx, gy + 0.6, wz])
+			walker.activate(Vector3(wx, gy + 0.6, wz), -deg_to_rad(waz))
+			_reply("ok тело в (%.1f, %.2f, %.1f), лицом на азимут %.0f°"
+				% [wx, gy + 0.6, wz, waz])
 		"go":
 			if walker == null:
 				_reply("нет тела"); return
