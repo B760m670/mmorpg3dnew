@@ -72,11 +72,21 @@ func _process(dt: float) -> void:
 
 	# кадр просили — отдаём, когда он ТОЧНО отрисован (иначе поймаем прошлый)
 	if _shot_wait > 0:
+		# ДИЗЕРИНГ СНИМАЕТСЯ НА ВРЕМЯ СНИМКА, И ВОТ ПОЧЕМУ. use_debanding в
+		# проекте включён — он подмешивает в кадр шахматный шум, чтобы прятать
+		# ступеньки на плавных переходах. На экране это правильно. В ЗАМЕРЕ это
+		# ложь: density.py насчитал 41 «источник света» на чёрном ночном кадре,
+		# где нет ни одного — это были одиночные яркие пиксели дизеринга,
+		# вытянутые ночной экспозицией. Устройства это не касается: снимаем шум
+		# только на кадр замера и тут же возвращаем.
+		get_viewport().use_debanding = false
 		_shot_wait -= 1
 		if _shot_wait == 0:
 			var img := get_viewport().get_texture().get_image()
 			img.save_png(_shot_path)
-			_reply("ok кадр %dx%d -> %s" % [img.get_width(), img.get_height(), _shot_path])
+			get_viewport().use_debanding = true
+			_reply("ok кадр %dx%d -> %s (дизеринг снят на время замера)"
+				% [img.get_width(), img.get_height(), _shot_path])
 
 	if _srv.is_listening() and _srv.is_connection_available():
 		_peer = _srv.take_connection()
@@ -285,16 +295,38 @@ func _exec(line: String) -> void:
 			var p3 := arg.split(",")
 			_reply(_probe(float(p3[0]), float(p3[1]) if p3.size() > 1 else 0.0))
 		"time":
-			var t2 := arg.split(":")
-			clock.set_datetime_utc(2025, 6, 21, int(t2[0]),
+			# ДАТА БЫЛА НАМЕРТВО 21 ИЮНЯ, и это скрывало половину освещения: на
+			# широте Гатчины (59.6°) в июне ночи нет вовсе — Солнце не опускается
+			# ниже -7°, белые ночи. Проверить ночное свечение неба на июньском
+			# кадре нельзя в принципе. Теперь дату можно задать:
+			#   time 21:30            — часы:минуты по UTC (местное = +3)
+			#   time 12-15 21:30      — месяц-день и время
+			var da := arg.split(" ", false)
+			var mon := 6
+			var day := 21
+			if da.size() > 1:
+				var md := da[0].split("-")
+				mon = int(md[0])
+				day = int(md[1]) if md.size() > 1 else 21
+				da.remove_at(0)
+			var t2: PackedStringArray = da[0].split(":") if da.size() > 0 else PackedStringArray(["12"])
+			clock.set_datetime_utc(2025, mon, day, int(t2[0]),
 				int(t2[1]) if t2.size() > 1 else 0, 0)
 			clock.time_scale = 0.0
 			clock._compute_and_apply()
-			_reply("ok время %s, солнце %.1f°" % [arg, clock.sun_elevation_deg])
+			_reply("ok %02d-%02d %s UTC (местное +3), солнце %.1f°"
+				% [mon, day, da[0] if da.size() > 0 else "12:00", clock.sun_elevation_deg])
 		"hud":
 			if hud != null:
 				hud.visible = arg.begins_with("on")
 			_reply("ok надпись %s" % arg)
+		"lamp":
+			# ПОСТАВИТЬ ИСТОЧНИК СВЕТА ЭПОХИ И ПОСМОТРЕТЬ, ЧТО ОН ДЕЛАЕТ.
+			#   lamp                 — каталог: что есть и с какой силой
+			#   lamp свеча           — поставить перед камерой, в 1.2 м
+			#   lamp лампа10 x,y,z   — поставить в точку мира
+			#   lamp off             — убрать все
+			_reply(_lamp(arg))
 		"dbg":
 			RenderingServer.set_debug_generate_wireframes(true)
 			var vp := get_viewport()
@@ -311,6 +343,52 @@ func _exec(line: String) -> void:
 			get_tree().quit()
 		_:
 			_reply("не знаю команды «%s»" % cmd)
+
+## ИСТОЧНИКИ СВЕТА ЭПОХИ — поставить, убрать, спросить каталог.
+##
+## Нужно ровно затем, чтобы «локальный свет меняет кадр» перестало быть моим
+## рассуждением и стало замером: поставил лампу, снял кадр, прогнал density.py,
+## сравнил числа с теми же числами до неё.
+var _lamps: Array[Lantern] = []
+
+func _lamp(arg: String) -> String:
+	if arg == "" or arg == "?":
+		var out := "[каталог] источники Гатчины 1894 (улица — керосин, дуга — только у дворца)\n"
+		for k in Lantern.KINDS:
+			var v: Array = Lantern.KINDS[k]
+			out += "  %-14s %6.1f кд  %5.0f K  дальность %5.1f м\n" % [
+				k, float(v[0]), float(v[1]), sqrt(float(v[0]) / Lantern.CUTOFF_LUX)]
+		return out.strip_edges()
+	if arg.begins_with("off"):
+		var n := _lamps.size()
+		for l in _lamps:
+			if is_instance_valid(l):
+				l.queue_free()
+		_lamps.clear()
+		return "ok убрано источников: %d" % n
+
+	var parts := arg.split(" ", false)
+	var what := parts[0]
+	if not Lantern.KINDS.has(what):
+		return "нет такого источника: «%s» (спроси «lamp» без аргумента)" % what
+	var lamp := Lantern.make(what)
+	get_tree().current_scene.add_child(lamp)
+	if parts.size() > 1:
+		lamp.global_position = _v3(parts[1])
+	elif camera != null:
+		# перед камерой и чуть ниже линии взгляда — как лампу держат в руке
+		var b := camera.global_transform.basis
+		lamp.global_position = camera.global_position - b.z * 1.2 - b.y * 0.35
+	_lamps.append(lamp)
+	return ("ok %s: %.1f кд, %.0f K, энергия %.5f, обратный квадрат, дальность %.1f м\n"
+		+ "   на 1 м %.1f лк, на 3 м %.1f лк, на 10 м %.2f лк\n"
+		+ "   для сравнения: ночное свечение неба заложено как %.1f лк\n"
+		+ "   поставлено в %s, всего источников %d") % [
+			lamp.kind, lamp.cd, float(Lantern.KINDS[what][1]), lamp.light_energy,
+			lamp.omni_range, lamp.lux_at(1.0), lamp.lux_at(3.0), lamp.lux_at(10.0),
+			WeatherSky.NIGHT_GLOW / WeatherSky.AMB_PER_KLX * 1000.0,
+			lamp.global_position, _lamps.size()]
+
 
 ## ЧТО В КАДРЕ — разбор картинки ЧИСЛАМИ, а не глазами.
 ##

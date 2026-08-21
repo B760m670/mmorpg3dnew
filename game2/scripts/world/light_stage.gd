@@ -14,8 +14,13 @@ const ENABLE_METALFX := true
 # «яркая полоса на дали» (за 31 м GI обрывался), и полное отсутствие разницы
 # при включении (проверено на устройстве). 0.06 м — значение для КОМНАТЫ.
 # Исправлено: 1 м при 5 каскадах -> 1024 м покрытия.
-# Локально проверить нельзя: SDFGI только в Forward+, а стенд идёт в
-# GL Compatibility (Vulkan в окружении нет) — проверка только на устройстве.
+# БЫЛО НАПИСАНО «локально проверить нельзя: Vulkan в окружении нет» — ЭТО БОЛЬШЕ
+# НЕ ТАК, и запись стоила нам месяцев слепоты. Vulkan не было потому, что не был
+# поставлен программный драйвер. `apt-get install mesa-vulkan-drivers` даёт
+# lavapipe, и стенд поднимается как «Vulkan 1.4.318 — Forward+ — llvmpipe»
+# (проверено, строка из живого лога). То есть SDFGI, объёмный туман, SSAO и
+# отражения теперь МОЖНО смотреть на стенде. Медленно (около 1 кадра в секунду),
+# но видно — а «медленно» и «нельзя» это разные вещи.
 # ЭФФЕКТЫ БОЛЬШЕ НЕ ЗАШИТЫ ЗДЕСЬ. Их состав задаёт ось качества Core.gfx() —
 # один источник правды. Здесь стояли жёсткие «const ENABLE_* := true», и пока
 # устройство шло на мобильном рендере это было незаметно: половина этих
@@ -125,7 +130,7 @@ func _ready() -> void:
 		link.terrain = _terrain
 		link.water = _water_real
 		link.clock = _clock
-		link.hud = _hud
+		link.hud = _diag
 		link.walker = _walker
 		link.stage = self
 		add_child(link)
@@ -452,7 +457,22 @@ const EXPOSURE_REF_KLX := 100.0      # при этом свете экспози
 const EXPOSURE_BREAK_KLX := 4.0      # граница режимов
 const EXPOSURE_P_DAY := 0.15
 const EXPOSURE_P_NIGHT := 0.62
-const EXPOSURE_MAX := 20.0
+# ПОТОЛОК ПРИСПОСОБЛЕНИЯ. Был 20 — и этого не хватало на порядок с лишним.
+# СЧЁТ, а не вкус. Полуденное солнце даёт поверхности энергию около 3.0 при
+# экспозиции 0.96, то есть в кадре примерно 2.9 — это «белое». Керосиновая
+# лампа (12 кд) на расстоянии метра даёт поверхности 0.0005. Чтобы она вышла
+# на середину шкалы (около 0.3), нужна экспозиция 600, а не 20. С потолком 20
+# освещённая лампой земля давала 0.009 — то есть чёрное, и декабрьский кадр с
+# зажжённой лампой был неотличим от кадра без неё. ПРОВЕРЕНО: снял оба, оба
+# чёрные.
+# Настоящий глаз перекрывает этот диапазон легко: приспособление от полудня к
+# безлунной ночи — около миллиона раз, палочковое зрение. 600 — это всего 1/1700
+# от него, так что потолок остаётся скромным.
+# ЧЕМ ЭТО НЕ ГРОЗИТ: фон ночью не всплывёт. Свечение неба заложено как 1.25e-5,
+# при экспозиции 600 это 0.0075 — по-прежнему чёрное. Экспозиция вытягивает
+# ИСТОЧНИК, а не пустоту, и в этом весь смысл: ночь остаётся ночью, но в ней
+# появляется то, что светит.
+const EXPOSURE_MAX := 600.0
 
 func _apply_skylight() -> void:
 	if _env == null or _clock == null:
@@ -732,9 +752,37 @@ func _build_post_overlay() -> void:
 	rect.material = _post_mat
 	layer.add_child(rect)
 
+## ПРИБОРЫ УБРАНЫ С ЭКРАНА И ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНЫ.
+##
+## Одиннадцать строк характеристик стояли поверх кадра постоянно и занимали
+## верхнюю треть — на снимке декабрьской ночи они закрыли ровно то место, где
+## был силуэт дворца. Приборы нужны, но они не вид из окна: их место — по
+## запросу. Всё, что было (строки, компас, DBG, GI), живёт в _diag; на экране
+## остаётся одна маленькая полупрозрачная точка в углу, по которой это
+## вызывается. Живой канал переключает тем же: «hud on» / «hud off».
+var _diag: Control
+
 func _build_hud(gi_off: bool) -> void:
 	var ui := CanvasLayer.new(); ui.layer = 101
 	add_child(ui)
+	_diag = Control.new()
+	_diag.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_diag.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_diag.visible = false
+	ui.add_child(_diag)
+
+	# Вызов приборов: маленькая точка в углу. Не подпись и не панель — она
+	# ничего не закрывает и не мешает смотреть.
+	var call_btn := Button.new()
+	call_btn.text = "·"
+	call_btn.add_theme_font_size_override("font_size", 34)
+	call_btn.flat = true
+	call_btn.modulate = Color(1, 1, 1, 0.30)
+	call_btn.position = Vector2(8, 8)
+	call_btn.size = Vector2(52, 52)
+	call_btn.pressed.connect(func() -> void: _diag.visible = not _diag.visible)
+	ui.add_child(call_btn)
+
 	_hud = Label.new()
 	_hud.add_theme_font_size_override("font_size", 32)
 	_hud.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.85))
@@ -742,7 +790,7 @@ func _build_hud(gi_off: bool) -> void:
 	_hud.add_theme_constant_override("shadow_offset_y", 2)
 	_hud.position = Vector2(60, 64)
 	_hud.set_meta("gi_off", gi_off)
-	ui.add_child(_hud)
+	_diag.add_child(_hud)
 
 	# КОМПАС: сверху по центру, буквы + азимут; един для полёта и пешехода.
 	# Север мира = −Z (выверено по Солнцу: в полдень оно строго на юге).
@@ -751,7 +799,7 @@ func _build_hud(gi_off: bool) -> void:
 	_compass.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
 	_compass.add_theme_constant_override("shadow_offset_x", 2)
 	_compass.add_theme_constant_override("shadow_offset_y", 2)
-	ui.add_child(_compass)
+	_diag.add_child(_compass)
 
 	# КНОПКА ДИАГНОСТИКИ («спец-возможности»): цикл каркас/overdraw/нормали/свет —
 	# чтобы ВСКРЫТЬ болячки мира (Z-fighting дорог, швы, оверлап «круга») и показать.
@@ -762,7 +810,7 @@ func _build_hud(gi_off: bool) -> void:
 	_dbg_btn.position = Vector2(-260, 64)
 	_dbg_btn.size = Vector2(200, 56)
 	_dbg_btn.pressed.connect(_on_debug_pressed)
-	ui.add_child(_dbg_btn)
+	_diag.add_child(_dbg_btn)
 
 	# ПЕРЕКЛЮЧАТЕЛЬ GI на устройстве: проверять гипотезу вживую, а не верить
 	# комментарию. Локально (GL Compatibility) SDFGI недоступен — только здесь.
@@ -773,7 +821,7 @@ func _build_hud(gi_off: bool) -> void:
 	_gi_btn.position = Vector2(-260, 130)
 	_gi_btn.size = Vector2(200, 56)
 	_gi_btn.pressed.connect(_on_gi_pressed)
-	ui.add_child(_gi_btn)
+	_diag.add_child(_gi_btn)
 	_update_hud()
 
 func _on_debug_pressed() -> void:
