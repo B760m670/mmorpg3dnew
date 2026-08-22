@@ -117,8 +117,16 @@ def append_body():
 # подвернуть, ткань уплотнить.
 # ---------------------------------------------------------------------------
 
-def cut(body, name, keep, offset=0.008):
-    """Скроить деталь: оставить вершины, где keep(co) истинно, и отодвинуть."""
+def cut(body, name, keep, offset=0.008, relax=0):
+    """Скроить деталь: оставить вершины, где keep(co) истинно, и отодвинуть.
+
+    RELAX — ЧИСЛО ПРОХОДОВ РАЗГЛАЖИВАНИЯ, и без него выкройка не одежда.
+    Первый заход дал пальто, облегающее как гидрокостюм: сквозь сукно
+    просвечивали грудные мышцы и кубики пресса. Это прямое следствие способа —
+    выкройка есть копия тела, и она наследует ВСЮ его анатомию. Настоящая
+    ткань висит: она перекрывает впадины и ложится по крупной форме. Здесь это
+    и делает разглаживание — оно стирает мелкий рельеф, оставляя объём.
+    """
     me = body.data.copy()
     ob = bpy.data.objects.new(name, me)
     bpy.context.scene.collection.objects.link(ob)
@@ -133,10 +141,18 @@ def cut(body, name, keep, offset=0.008):
         v.co += v.normal * offset
     doomed = [v for v in bm.verts if not keep(v.co)]
     bmesh.ops.delete(bm, geom=doomed, context='VERTS')
+    for _ in range(relax):
+        bmesh.ops.smooth_vert(bm, verts=list(bm.verts), factor=0.6,
+                              use_axis_x=True, use_axis_y=True, use_axis_z=True)
+    if relax:
+        # разглаживание стягивает оболочку внутрь тела — возвращаем наружу
+        bm.normal_update()
+        for v in bm.verts:
+            v.co += v.normal * offset * 0.7
     bm.to_mesh(me)
     bm.free()
     me.update()
-    print("[крой] %-10s вершин %d" % (name, len(me.vertices)))
+    print("[крой] %-12s вершин %d" % (name, len(me.vertices)))
     return ob
 
 
@@ -155,11 +171,16 @@ def hem_down(ob, levels, name="подол"):
     if not edges:
         bm.free()
         return
-    # берём только НИЖНЮЮ кромку: у пальто есть ещё горловина и проймы
+    # ВЫБОР КРОМКИ. Первый заход вытянул вместе с подолом и РУКАВА: срез рукава
+    # у пальто оказался ровно на той же высоте, что и низ полы, и фильтр «самая
+    # нижняя кромка» захватил обе. Рукава уехали вниз до колен и фигура стала
+    # монахом. Различает их не высота, а УДАЛЁННОСТЬ ОТ ОСИ ТЕЛА: срез рукава
+    # висит в стороне (|x| велик), пола идёт вокруг оси.
     zs = [v.co.z for e in edges for v in e.verts]
     z_lo = min(zs)
     edges = [e for e in edges
-             if all(v.co.z < z_lo + 0.06 for v in e.verts)]
+             if all(v.co.z < z_lo + 0.06 for v in e.verts)
+             and all(abs(v.co.x) < 0.16 for v in e.verts)]
     if not edges:
         bm.free()
         return
@@ -177,6 +198,38 @@ def hem_down(ob, levels, name="подол"):
     bm.to_mesh(me)
     bm.free()
     me.update()
+
+
+def shaft_up(ob, levels):
+    """Вытянуть ВЕРХНЮЮ кромку вверх: голенище сапога.
+
+    У сапога голенище растёт от щиколотки ВВЕРХ по голени. hem_down тянул
+    нижнюю кромку и делал из сапога ласту: подошва уезжала вниз, а голенища
+    не появлялось вовсе.
+    """
+    me = ob.data
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bm.edges.ensure_lookup_table()
+    edges = [e for e in bm.edges if len(e.link_faces) == 1]
+    if not edges:
+        bm.free(); return
+    zs = [v.co.z for e in edges for v in e.verts]
+    z_hi = max(zs)
+    edges = [e for e in edges if all(v.co.z > z_hi - 0.05 for v in e.verts)]
+    if not edges:
+        bm.free(); return
+    for z_to, widen in levels:
+        cx = sum(v.co.x for e in edges for v in e.verts) / (2 * len(edges))
+        cy = sum(v.co.y for e in edges for v in e.verts) / (2 * len(edges))
+        r = bmesh.ops.extrude_edge_only(bm, edges=edges)
+        for v in [g for g in r["geom"] if isinstance(g, bmesh.types.BMVert)]:
+            v.co.x = cx + (v.co.x - cx) * widen
+            v.co.y = cy + (v.co.y - cy) * widen
+            v.co.z = z_to
+        edges = [g for g in r["geom"] if isinstance(g, bmesh.types.BMEdge)
+                 and len(g.link_faces) == 1]
+    bm.to_mesh(me); bm.free(); me.update()
 
 
 def solidify(ob, thickness=0.006):
@@ -201,103 +254,177 @@ def smooth(ob, levels=1):
 # МАТЕРИАЛЫ
 # ---------------------------------------------------------------------------
 
+MAT_DIR = os.environ.get("MAT_DIR", "/tmp/claude-live/mat")
+RES = "1K-PNG"
+
+
+def _map(asset, kind):
+    return os.path.join(MAT_DIR, asset, "%s_%s_%s.png" % (asset, RES, kind))
+
+
+def _img(path, non_color=False):
+    if not os.path.exists(path):
+        raise SystemExit("нет карты %s — запусти studio/fetch_materials.py" % path)
+    im = bpy.data.images.load(path, check_existing=True)
+    if non_color:
+        # НЕ ЦВЕТ, А ЧИСЛО. Карты нормалей и шероховатости хранят величины, а не
+        # цвета; если движок прогонит их через гамму sRGB, рельеф станет вдвое
+        # мягче, а шероховатость поедет вся. Это самая частая тихая ошибка при
+        # подключении сканов, и она не видна иначе как по сравнению с эталоном.
+        im.colorspace_settings.name = 'Non-Color'
+    return im
+
+
 def _nodes(m):
     m.use_nodes = True
     return m.node_tree, m.node_tree.nodes["Principled BSDF"]
 
 
-def mat_wool(name, rgb):
-    """СУКНО: валяная шерсть. Саржа плюс ворс.
+def _uv_scale(tree, scale):
+    """Сколько раз скан укладывается на метр поверхности.
 
-    Ткань узнаётся не цветом, а двумя вещами: диагональным переплетением
-    (саржа) и ворсом. Ворс в Principled — это Sheen: светлый ободок по краю
-    силуэта, там где смотришь на ткань вскользь. Без него сукно неотличимо
-    от крашеного пластика, каким бы тёмным его ни сделать.
+    Величина не декоративная: скан снят с куска ткани известного размера, и
+    если положить его не в том масштабе, нитка окажется толщиной с палец. У
+    сукна шаг переплетения около миллиметра, поэтому квадрат скана — это
+    примерно 20 см ткани, то есть 5 укладок на метр.
+    """
+    n = tree.nodes
+    tex = n.new("ShaderNodeTexCoord")
+    mp = n.new("ShaderNodeMapping")
+    mp.inputs["Scale"].default_value = (scale, scale, scale)
+    tree.links.new(tex.outputs["UV"], mp.inputs["Vector"])
+    return mp
+
+
+def mat_scan(name, asset, scale=5.0, tint=None, rough_shift=0.0, sheen=0.0):
+    """МАТЕРИАЛ ИЗ НАСТОЯЩЕГО СКАНА, а не из формулы.
+
+    До этого ткань я писал процедурно: волна для саржи, шум для ворса. Это
+    похоже на ткань ровно настолько, насколько формула похожа на нитку.
+    Здесь — фотограмметрический скан с ambientCG (лицензия CC0): карта цвета с
+    неровностями крашения, карта нормалей с каждой ниткой переплетения, карта
+    шероховатости, где ворс блестит иначе, чем впадины между нитями, и карта
+    затенения складок.
+
+    TINT перекрашивает скан, не трогая рельеф: сукно 1890-х глухого тёмного
+    тона, а снятый образец светлее. Умножение на цвет сохраняет всю мелкую
+    неровность крашения и только смещает общий тон — так и красят ткань.
     """
     m = bpy.data.materials.new(name)
     tree, b = _nodes(m)
     n = tree.nodes
-    b.inputs["Base Color"].default_value = (*rgb, 1.0)
-    b.inputs["Roughness"].default_value = 0.88
-    b.inputs["Metallic"].default_value = 0.0
-    if "Sheen Weight" in b.inputs:
-        b.inputs["Sheen Weight"].default_value = 0.35
-        b.inputs["Sheen Roughness"].default_value = 0.45
-    if "Specular IOR Level" in b.inputs:
-        b.inputs["Specular IOR Level"].default_value = 0.25
+    mp = _uv_scale(tree, scale)
 
-    # САРЖА: две волны под углом дают диагональный рубчик. Шаг 0.9 мм —
-    # настоящий шаг переплетения у грубого сукна.
-    tex = n.new("ShaderNodeTexCoord")
-    wav = n.new("ShaderNodeTexWave")
-    wav.wave_type = 'BANDS'
-    wav.bands_direction = 'DIAGONAL'
-    wav.inputs["Scale"].default_value = 380.0
-    wav.inputs["Distortion"].default_value = 2.0
-    wav.inputs["Detail"].default_value = 2.0
-    tree.links.new(tex.outputs["Object"], wav.inputs["Vector"])
-    # ВОРС: мелкий шум поверх переплетения — шерсть не гладкая нигде
+    col = n.new("ShaderNodeTexImage")
+    col.image = _img(_map(asset, "Color"))
+    tree.links.new(mp.outputs["Vector"], col.inputs["Vector"])
+    src = col.outputs["Color"]
+    if tint is not None:
+        mul = n.new("ShaderNodeMix")
+        mul.data_type = 'RGBA'
+        mul.blend_type = 'MULTIPLY'
+        mul.inputs["Factor"].default_value = 1.0
+        tree.links.new(col.outputs["Color"], mul.inputs[6])
+        mul.inputs[7].default_value = (*tint, 1.0)
+        src = mul.outputs[2]
+    # ЗАТЕНЕНИЕ СКЛАДОК идёт в цвет, а не отдельным входом: у Principled нет
+    # входа AO, а без него ткань выглядит выглаженной утюгом.
+    ao_p = _map(asset, "AmbientOcclusion")
+    if os.path.exists(ao_p):
+        ao = n.new("ShaderNodeTexImage")
+        ao.image = _img(ao_p, non_color=True)
+        tree.links.new(mp.outputs["Vector"], ao.inputs["Vector"])
+        mix = n.new("ShaderNodeMix")
+        mix.data_type = 'RGBA'
+        mix.blend_type = 'MULTIPLY'
+        mix.inputs["Factor"].default_value = 0.75
+        tree.links.new(src, mix.inputs[6])
+        tree.links.new(ao.outputs["Color"], mix.inputs[7])
+        src = mix.outputs[2]
+    tree.links.new(src, b.inputs["Base Color"])
+
+    ro = n.new("ShaderNodeTexImage")
+    ro.image = _img(_map(asset, "Roughness"), non_color=True)
+    tree.links.new(mp.outputs["Vector"], ro.inputs["Vector"])
+    if rough_shift:
+        add = n.new("ShaderNodeMath")
+        add.operation = 'ADD'
+        add.inputs[1].default_value = rough_shift
+        add.use_clamp = True
+        tree.links.new(ro.outputs["Color"], add.inputs[0])
+        tree.links.new(add.outputs["Value"], b.inputs["Roughness"])
+    else:
+        tree.links.new(ro.outputs["Color"], b.inputs["Roughness"])
+
+    nr = n.new("ShaderNodeTexImage")
+    nr.image = _img(_map(asset, "NormalGL"), non_color=True)
+    tree.links.new(mp.outputs["Vector"], nr.inputs["Vector"])
+    nm = n.new("ShaderNodeNormalMap")
+    nm.inputs["Strength"].default_value = 1.0
+    tree.links.new(nr.outputs["Color"], nm.inputs["Color"])
+    tree.links.new(nm.outputs["Normal"], b.inputs["Normal"])
+
+    if sheen and "Sheen Weight" in b.inputs:
+        # ВОРС шерсти: светлый ободок по краю силуэта, там где смотришь на
+        # ткань вскользь. Скан его не содержит — это свойство объёма волокна,
+        # а не поверхности, и задаётся отдельно.
+        b.inputs["Sheen Weight"].default_value = sheen
+        b.inputs["Sheen Roughness"].default_value = 0.4
+    return m
+
+
+def mat_skin():
+    """КОЖА ЧЕЛОВЕКА. Сканов человеческой кожи под CC0 нет — поэтому здесь не
+    подделка фотографии, а разбор кожи на то, из чего она состоит.
+
+    ПОДПОВЕРХНОСТНОЕ РАССЕЯНИЕ. Свет уходит под кожу и выходит рядом, и уходит
+    на разную глубину по цветам: красный примерно на 36 мм, зелёный на 14,
+    синий на 8. Эти три числа — не вкус, а измеренные длины свободного пробега
+    в человеческой ткани; они и делают уши и пальцы на просвет красными.
+
+    ПОРА. Кожа не гладкая: у неё сетка пор шагом около 0.3 мм. Настоящий
+    рельеф взят из скана мелкозернистой кожи (Leather029), и берётся ТОЛЬКО
+    КАРТА НОРМАЛЕЙ — цвет чужой, а размер зерна тот.
+
+    НЕРАВНОМЕРНОСТЬ ТОНА. Ровно окрашенная кожа выглядит резиной. Настоящая
+    краснее там, где сосуды ближе: нос, уши, скулы, костяшки. Здесь это ведёт
+    крупный шум — не портрет конкретного человека, но и не пластик.
+    """
+    m = bpy.data.materials.new("кожа")
+    tree, b = _nodes(m)
+    n = tree.nodes
+
+    base = n.new("ShaderNodeRGB")
+    base.outputs[0].default_value = (0.58, 0.42, 0.34, 1.0)
+    red = n.new("ShaderNodeRGB")
+    red.outputs[0].default_value = (0.62, 0.34, 0.28, 1.0)
     noi = n.new("ShaderNodeTexNoise")
-    noi.inputs["Scale"].default_value = 220.0
-    noi.inputs["Detail"].default_value = 6.0
-    tree.links.new(tex.outputs["Object"], noi.inputs["Vector"])
+    noi.inputs["Scale"].default_value = 5.0
+    noi.inputs["Detail"].default_value = 4.0
     mix = n.new("ShaderNodeMix")
     mix.data_type = 'RGBA'
-    mix.inputs["Factor"].default_value = 0.45
-    tree.links.new(wav.outputs["Color"], mix.inputs[6])
-    tree.links.new(noi.outputs["Color"], mix.inputs[7])
-    bump = n.new("ShaderNodeBump")
-    bump.inputs["Strength"].default_value = 0.22
-    bump.inputs["Distance"].default_value = 0.0008     # рубчик высотой 0.8 мм
-    tree.links.new(mix.outputs[2], bump.inputs["Height"])
-    tree.links.new(bump.outputs["Normal"], b.inputs["Normal"])
-    return m
+    tree.links.new(noi.outputs["Fac"], mix.inputs["Factor"])
+    tree.links.new(base.outputs[0], mix.inputs[6])
+    tree.links.new(red.outputs[0], mix.inputs[7])
+    tree.links.new(mix.outputs[2], b.inputs["Base Color"])
 
-
-def mat_leather(name, rgb):
-    """КОЖА ВАКСЁНАЯ: мелкая мерея (зерно) и блеск.
-
-    Сапоги чистят, поэтому они бликуют — шероховатость 0.36 против 0.88 у
-    сукна. Разница в блеске между сапогом и пальто важнее разницы в цвете:
-    в кадре именно она разделяет эти две чёрные поверхности.
-    """
-    m = bpy.data.materials.new(name)
-    tree, b = _nodes(m)
-    n = tree.nodes
-    b.inputs["Base Color"].default_value = (*rgb, 1.0)
-    b.inputs["Roughness"].default_value = 0.36
-    if "Specular IOR Level" in b.inputs:
-        b.inputs["Specular IOR Level"].default_value = 0.6
-    tex = n.new("ShaderNodeTexCoord")
-    vor = n.new("ShaderNodeTexVoronoi")     # мерея: ячейки кожи
-    vor.feature = 'DISTANCE_TO_EDGE'
-    vor.inputs["Scale"].default_value = 900.0
-    tree.links.new(tex.outputs["Object"], vor.inputs["Vector"])
-    bump = n.new("ShaderNodeBump")
-    bump.inputs["Strength"].default_value = 0.30
-    bump.inputs["Distance"].default_value = 0.0004
-    tree.links.new(vor.outputs["Distance"], bump.inputs["Height"])
-    tree.links.new(bump.outputs["Normal"], b.inputs["Normal"])
-    # неровный износ блеска: голенище тускнее носка
-    ro = n.new("ShaderNodeTexNoise")
-    ro.inputs["Scale"].default_value = 14.0
-    tree.links.new(tex.outputs["Object"], ro.inputs["Vector"])
-    rmap = n.new("ShaderNodeMapRange")
-    rmap.inputs["To Min"].default_value = 0.28
-    rmap.inputs["To Max"].default_value = 0.52
-    tree.links.new(ro.outputs["Fac"], rmap.inputs["Value"])
-    tree.links.new(rmap.outputs["Result"], b.inputs["Roughness"])
-    return m
-
-
-def mat_skin(name):
-    m = bpy.data.materials.new(name)
-    tree, b = _nodes(m)
-    b.inputs["Base Color"].default_value = (0.60, 0.44, 0.36, 1.0)
-    b.inputs["Roughness"].default_value = 0.58
+    b.inputs["Roughness"].default_value = 0.52
     if "Subsurface Weight" in b.inputs:
-        b.inputs["Subsurface Weight"].default_value = 0.22
+        b.inputs["Subsurface Weight"].default_value = 0.28
         b.inputs["Subsurface Radius"].default_value = (0.036, 0.014, 0.008)
+        if "Subsurface Scale" in b.inputs:
+            b.inputs["Subsurface Scale"].default_value = 0.012
+    if "Specular IOR Level" in b.inputs:
+        b.inputs["Specular IOR Level"].default_value = 0.45
+
+    mp = _uv_scale(tree, 26.0)          # шаг поры около 0.3 мм
+    nr = n.new("ShaderNodeTexImage")
+    nr.image = _img(_map("Leather029", "NormalGL"), non_color=True)
+    tree.links.new(mp.outputs["Vector"], nr.inputs["Vector"])
+    nm = n.new("ShaderNodeNormalMap")
+    nm.inputs["Strength"].default_value = 0.30
+    tree.links.new(nr.outputs["Color"], nm.inputs["Color"])
+    tree.links.new(nm.outputs["Normal"], b.inputs["Normal"])
     return m
 
 
@@ -321,53 +448,74 @@ def put(ob, m):
 def dress(body):
     made = []
 
-    # ПАЛЬТО: от основания шеи до бёдер по телу, дальше подол свободно вниз.
-    # Верхнюю границу ведём НЕ по высоте, а по высоте минус расстояние от оси:
-    # горловина у шеи выше, чем срез у плеча, иначе пальто «съедает» шею.
-    def keep_coat(c):
-        if c.z > Y_CHIN - 0.045:
-            return False
-        if c.z > Y_SHOULDER + 0.02 and math.hypot(c.x, c.y) > 0.075:
-            return False
-        return c.z > Y_CROTCH - 0.02
-    coat = cut(body, "Пальто", keep_coat, offset=0.011)
-    # подол: до середины голени, слегка расходясь
-    hem_down(coat, [(Y_CROTCH - 0.10, 1.06),
-                    (Y_KNEE + 0.06, 1.10),
-                    (Y_KNEE - 0.10, 1.12),
-                    (Y_KNEE - 0.115, 1.12)])   # ступень вплотную: острый обрез
-    solidify(coat, 0.007)
-    smooth(coat, 1)
-    put(coat, mat_wool("сукно пальто", (0.052, 0.050, 0.048)))
-    made.append(coat)
+    # ШТАНЫ. Между подолом пальто и голенищем сапога был голый участок ноги —
+    # человек в пальто на босу ногу. Штаны кроятся от пояса до щиколотки и
+    # почти целиком скрыты, но именно этот просвет в 15 см их и требует.
+    def keep_trousers(c):
+        return c.z < Y_WAIST + 0.02
+    trousers = cut(body, "Штаны", keep_trousers, offset=0.010, relax=6)
+    solidify(trousers, 0.005)
+    smooth(trousers, 1)
+    put(trousers, mat_scan("шерсть штанов", "Fabric030", scale=6.0,
+                           tint=(0.30, 0.29, 0.27), sheen=0.25))
+    made.append(trousers)
 
-    # САПОГИ: от подъёма до середины голени, голенище не расширяется.
+    # САПОГИ: стопа по телу, дальше голенище ВВЕРХ по голени до середины.
     def keep_boot(c):
-        return c.z < Y_ANKLE + 0.02
-    boots = cut(body, "Сапоги", keep_boot, offset=0.006)
-    hem_down(boots, [(Y_ANKLE + 0.16, 1.02), (Y_KNEE - 0.30, 1.00)])
+        return c.z < Y_ANKLE + 0.03
+    boots = cut(body, "Сапоги", keep_boot, offset=0.008, relax=3)
+    shaft_up(boots, [(Y_ANKLE + 0.14, 1.03),
+                     (Y_KNEE - 0.16, 1.02),
+                     (Y_KNEE - 0.14, 1.02)])   # ступень вплотную: жёсткий край
     solidify(boots, 0.005)
     smooth(boots, 1)
-    put(boots, mat_leather("кожа сапог", (0.020, 0.017, 0.015)))
+    put(boots, mat_scan("кожа сапог", "Leather027", scale=9.0,
+                        tint=(0.55, 0.52, 0.50), rough_shift=-0.12))
     made.append(boots)
 
     # КОСОВОРОТКА: виден только край у горла, но без него в вырезе пальто
     # чернота, и шея висит в пустоте.
     def keep_shirt(c):
-        return Y_SHOULDER - 0.10 < c.z < Y_CHIN - 0.030
-    shirt = cut(body, "Косоворотка", keep_shirt, offset=0.005)
+        return Y_SHOULDER - 0.14 < c.z < Y_CHIN - 0.020
+    shirt = cut(body, "Косоворотка", keep_shirt, offset=0.006, relax=4)
     solidify(shirt, 0.003)
     smooth(shirt, 1)
-    put(shirt, mat_wool("холст рубахи", (0.42, 0.40, 0.36)))
+    put(shirt, mat_scan("холст рубахи", "Fabric066", scale=10.0,
+                        tint=(0.85, 0.83, 0.76), sheen=0.15))
     made.append(shirt)
 
-    # КАРТУЗ: тулья по черепу, козырёк — дуга вперёд.
+    # ПАЛЬТО. РУКАВ КОНЧАЕТСЯ У ЗАПЯСТЬЯ, а не у колена: в первом заходе я
+    # обрезал всю выкройку по одной высоте, и рукав уехал вниз вместе с полой.
+    # Запястье находится примерно на высоте паха — но отличить его от полы
+    # можно только по удалённости от оси, потому и условие двойное.
+    def keep_coat(c):
+        if c.z > Y_CHIN - 0.055:
+            return False
+        if c.z > Y_SHOULDER + 0.015 and math.hypot(c.x, c.y) > 0.085:
+            return False
+        far = abs(c.x) > 0.15                      # рука, а не корпус
+        if far:
+            return c.z > Y_CROTCH + 0.055          # обрез рукава у запястья
+        return c.z > Y_CROTCH - 0.02
+    coat = cut(body, "Пальто", keep_coat, offset=0.016, relax=10)
+    hem_down(coat, [(Y_CROTCH - 0.12, 1.05),
+                    (Y_KNEE + 0.04, 1.10),
+                    (Y_KNEE - 0.12, 1.13),
+                    (Y_KNEE - 0.135, 1.13)])   # ступень вплотную: острый обрез
+    solidify(coat, 0.008)
+    smooth(coat, 1)
+    put(coat, mat_scan("сукно пальто", "Fabric039", scale=5.0,
+                       tint=(0.26, 0.25, 0.25), sheen=0.35))
+    made.append(coat)
+
+    # КАРТУЗ: тулья по черепу до линии бровей, козырёк отдельной деталью.
     def keep_cap(c):
-        return c.z > Y_TOP - 0.075
-    cap = cut(body, "Картуз", keep_cap, offset=0.012)
-    solidify(cap, 0.005)
+        return c.z > Y_TOP - 0.098
+    cap = cut(body, "Картуз", keep_cap, offset=0.016, relax=4)
+    solidify(cap, 0.006)
     smooth(cap, 1)
-    put(cap, mat_wool("сукно картуза", (0.045, 0.044, 0.046)))
+    put(cap, mat_scan("сукно картуза", "Fabric039", scale=9.0,
+                      tint=(0.22, 0.22, 0.23), sheen=0.35))
     made.append(cap)
     made.append(_visor())
 
@@ -397,7 +545,8 @@ def _visor():
     ob = bpy.data.objects.new("Козырёк", me)
     bpy.context.scene.collection.objects.link(ob)
     solidify(ob, 0.004)
-    put(ob, mat_wool("сукно козырька", (0.040, 0.039, 0.041)))
+    put(ob, mat_scan("сукно козырька", "Fabric039", scale=12.0,
+                     tint=(0.20, 0.20, 0.21), sheen=0.30))
     return ob
 
 
@@ -409,8 +558,8 @@ def hair_and_face():
     for s in (1.0, -1.0):        # бакенбарды
         bmesh.ops.create_uvsphere(
             bm, u_segments=8, v_segments=6, radius=1.0,
-            matrix=Matrix.Translation(Vector((s * 0.070, -0.010, Y_CHIN + 0.075)))
-            @ Matrix.Diagonal(Vector((0.012, 0.022, 0.032)).to_4d()))
+            matrix=Matrix.Translation(Vector((s * 0.064, -0.030, Y_CHIN + 0.070)))
+            @ Matrix.Diagonal(Vector((0.010, 0.020, 0.030)).to_4d()))
     bmesh.ops.create_uvsphere(   # усы
         bm, u_segments=10, v_segments=6, radius=1.0,
         matrix=Matrix.Translation(Vector((0.0, -0.082, Y_CHIN + 0.070)))
@@ -430,9 +579,15 @@ def hair_and_face():
 # ---------------------------------------------------------------------------
 
 def _look_at(frm, to):
-    d = to - frm
-    up = 'Y' if abs(d.normalized().y) < 0.98 else 'Z'
-    return d.to_track_quat('-Z', up).to_euler()
+    """Направить камеру. Вектор «вверх» ВСЕГДА Z — это мир, а не взгляд.
+
+    Здесь стояло 'Y', и вид со спины выходил ВВЕРХ НОГАМИ: при направлении
+    взгляда вдоль оси Y ось «вверх» совпадала с осью взгляда, кватернион
+    вырождался и камера переворачивалась. Подпорка «если смотрим вдоль Y, то
+    брать Z» лечила симптом: правильный вертикальный вектор в этой сцене — Z,
+    всегда, потому что фигура стоит по Z.
+    """
+    return (to - frm).to_track_quat('-Z', 'Z').to_euler()
 
 
 def stage():
@@ -487,7 +642,7 @@ def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     clear()
     body = append_body()
-    put(body, mat_skin("кожа"))
+    put(body, mat_skin())
     dress(body)
     hair_and_face()
 
