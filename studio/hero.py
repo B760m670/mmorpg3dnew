@@ -38,7 +38,9 @@ import os
 import sys
 
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 ADDON = "bl_ext.user_default.mpfb"
 DATA = "/root/.config/blender/4.5/extensions/.user/user_default/mpfb/data"
@@ -77,11 +79,195 @@ SKIN = ("skins/jartur69_middleage_slavic_male_with_genitals_and_beard/"
         "jartur69_middleage_slavic_male_with_genitals_and_beard.mhmat")
 
 
+# КОСТЮМ ЭПОХИ ИЗ ГОТОВЫХ АССЕТОВ.
+#
+# Свои выкройки я выбросил, и правильно. Крой «копия кожи, отодвинутая наружу»
+# даёт оболочку, а не одежду: она облегает тело, у неё нет ни швов, ни складок,
+# ни настоящей текстуры — только процедурная. В кадре это читалось водолазным
+# костюмом, и никакая подгонка чисел этого не меняла.
+#
+# Одежда в наборах сделана людьми ПОД ЭТОТ МЕШ: с развёрткой, с картами цвета,
+# нормалей и блика, с правильными складками. Я отбросил её раньше по названию,
+# не взглянув ни на одну миниатюру, — и это та же ошибка, из-за которой я
+# трижды строил руками готовое.
+#
+# ЧТО НАШЛОСЬ ПОД НАШУ ЭПОХУ (смотрел 174 миниатюры, не названия):
+#   elvs_male_boho_top1  — русская рубаха с вышитым воротом. Это косоворотка,
+#     и она попала точно: вышивка по вороту и обшлагам — как раз то, что
+#     отличает её от любой другой рубахи.
+#   elvs_male_flat_cap1  — мягкая кепка с козырьком, то есть картуз. Головной
+#     убор городского обывателя; шляпа означала бы другое сословие.
+#   rehmanpolanski_viking_boots — высокие кожаные сапоги. Названы «викингскими»,
+#     но крой у высокого сапога с тех пор не менялся: голенище до середины
+#     голени, мягкая кожа.
+#   mindfront_cardigan_long_open_front — длинное пальто нараспашку.
+#   mindfront_male_trousers_1 — тёмные штаны.
+# ПОРЯДОК ВАЖЕН: каждый следующий слой отодвигается дальше от тела, иначе
+# нижний лезет сквозь верхний. Третий столбец — на сколько миллиметров.
+# ЦВЕТ: ассеты сняты в своих цветах, и пальто пришло бледно-голубым — это
+# женский кардиган. Перекрашиваем УМНОЖЕНИЕМ на тон: так сохраняется вся
+# фактура вязки и складок, а меняется только тон, ровно как красят ткань.
+# Сукно городского обывателя 1890-х — глухое тёмное; яркий цвет в эту эпоху
+# у простого сословия означал бы праздничную одежду, а не повседневную.
+WEAR = [
+    ("Косоворотка", "clothes/elvs_male_boho_top1/elvs_male_boho_top1.mhclo",
+     0.000, None),
+    ("Штаны", "clothes/mindfront_male_trousers_1/mindfront_male_trousers_1.mhclo",
+     0.002, (0.30, 0.29, 0.28)),
+    ("Сапоги", "clothes/rehmanpolanski_viking_boots/rehmanpolanski_viking_boots.mhclo",
+     0.003, (0.30, 0.26, 0.22)),
+    ("Пальто", "clothes/mindfront_cardigan_long_open_front/"
+               "mindfront_cardigan_long_open_front.mhclo",
+     0.011, (0.17, 0.16, 0.15)),
+    ("Картуз", "clothes/elvs_male_flat_cap1/elvs_male_flat_cap1.mhclo",
+     0.004, (0.24, 0.23, 0.23)),
+]
+
+
+def tint(ob, rgb):
+    """Перекрасить готовый ассет, не тронув его фактуру.
+
+    Умножение карты цвета на тон сохраняет всю мелкую неровность — вязку,
+    швы, потёртости — и смещает только общий тон. Замена цвета всё это стёрла
+    бы, и ткань снова стала бы крашеным пластиком.
+    """
+    for m in ob.data.materials:
+        if m is None or not m.use_nodes:
+            continue
+        nt = m.node_tree
+        b = next((n for n in nt.nodes if n.type == 'BSDF_PRINCIPLED'), None)
+        if b is None:
+            continue
+        link = next((l for l in nt.links if l.to_socket == b.inputs["Base Color"]), None)
+        mix = nt.nodes.new("ShaderNodeMix")
+        mix.data_type = 'RGBA'
+        mix.blend_type = 'MULTIPLY'
+        mix.inputs["Factor"].default_value = 1.0
+        mix.inputs[7].default_value = (*rgb, 1.0)
+        if link is not None:
+            src = link.from_socket
+            nt.links.remove(link)
+            nt.links.new(src, mix.inputs[6])
+        else:
+            mix.inputs[6].default_value = b.inputs["Base Color"].default_value
+        nt.links.new(mix.outputs[2], b.inputs["Base Color"])
+
+
+def push_out(ob, mm):
+    """Отодвинуть слой одежды от тела: нижний перестаёт лезть сквозь верхний.
+
+    Рубаха проступала сквозь пальто чёрными пятнами — два предмета сидели на
+    одной глубине, и кто где, решала точность чисел. Смещение по нормали на
+    несколько миллиметров разводит слои так же, как это происходит на живом
+    человеке: под пальто есть воздух.
+    """
+    if mm <= 0:
+        return
+    d = ob.modifiers.new("слой", 'DISPLACE')
+    d.mid_level = 0.0
+    d.strength = mm
+    d.direction = 'NORMAL' 
+
+
+def wardrobe(body):
+    HumanService = svc("humanservice").HumanService
+    n = 0
+    for name, rel, off, rgb in WEAR:
+        p = os.path.join(DATA, rel)
+        if not os.path.exists(p):
+            print("[костюм] НЕТ %-14s %s" % (name, rel))
+            continue
+        before = set(bpy.data.objects)
+        HumanService.add_mhclo_asset(p, body, asset_type='Clothes',
+                                     material_type='MAKESKIN')
+        new = [o for o in set(bpy.data.objects) - before if o.type == 'MESH']
+        for o in new:
+            o.name = name
+            push_out(o, off)
+            if rgb:
+                tint(o, rgb)
+        print("[костюм] надето: %-14s отступ %.0f мм%s"
+              % (name, off * 1000, ", перекрашено" if rgb else ""))
+        n += 1
+    print("[костюм] предметов: %d" % n)
+
+
+def landmarks(me):
+    """Измерить тело: где у НЕГО лодыжка, колено, пах, плечи, подбородок.
+
+    ПЕРВЫЙ ЗАМЕР СОВРАЛ, И ВРАНЬЁ БЫЛО ВИДНО ПО ЧИСЛАМ: колено 0.499 при
+    пахе 0.543. Так не бывает. Причина — Т-ПОЗА: руки раскинуты в стороны, и
+    «самая широкая точка среза» на любой высоте выше пояса показывает руки, а
+    не корпус. Поэтому корпус меряется в узкой полосе у оси, а руки в замер не
+    попадают вовсе.
+
+    ПАХ ищется не по ширине, а по РАЗРЫВУ: ниже паха срез распадается на две
+    ноги, и между ними в сечении зияет дыра. Самая нижняя высота, где дыры уже
+    нет, и есть пах. Ширина этого не различает — две ноги врозь и один таз
+    могут давать одинаковый габарит.
+    """
+    zs = [v.co.z for v in me.vertices]
+    lo, hi = min(zs), max(zs)
+    H = hi - lo
+    N = 260
+    sl = {}
+    for v in me.vertices:
+        i = min(N - 1, int((v.co.z - lo) / H * N))
+        sl.setdefault(i, []).append(v.co.x)
+
+    def z_of(i):
+        return lo + (i + 0.5) / N * H
+
+    def gap(i):
+        """Наибольший разрыв в сечении по X, в долях полуширины тела."""
+        xs = sorted(sl.get(i, []))
+        if len(xs) < 8:
+            return 0.0
+        g = max((b - a) for a, b in zip(xs, xs[1:]))
+        span = xs[-1] - xs[0]
+        return g / span if span > 1e-6 else 0.0
+
+    def torso_w(i):
+        """Ширина ТОЛЬКО корпуса: руки в Т-позе отсекаются полосой у оси."""
+        xs = [x for x in sl.get(i, []) if abs(x) < 0.22 * H]
+        return (max(xs) - min(xs)) if len(xs) > 6 else 0.0
+
+    # ПАХ: снизу вверх — первая высота, где ноги слились (разрыв исчез)
+    crotch_i = int(N * 0.50)
+    for i in range(int(N * 0.20), int(N * 0.70)):
+        if gap(i) < 0.06 and gap(i - 1) >= 0.06:
+            crotch_i = i
+            break
+    # ПЛЕЧИ: выше паха, где ширина корпуса наибольшая
+    sh_i = max(range(crotch_i + int(N * 0.10), int(N * 0.92)), key=torso_w)
+    # ШЕЯ: над плечами ширина корпуса минимальна
+    neck_i = min(range(sh_i + 2, int(N * 0.96)), key=torso_w)
+
+    lm = {
+        "Y_ANKLE": lo + 0.055 * H,
+        "Y_KNEE": lo + (z_of(crotch_i) - lo) * 0.53,   # колено — чуть выше середины бедра
+        "Y_CROTCH": z_of(crotch_i),
+        "Y_WAIST": z_of(crotch_i) + (z_of(sh_i) - z_of(crotch_i)) * 0.42,
+        "Y_SHOULDER": z_of(sh_i),
+        "Y_CHIN": z_of(neck_i) + 0.018 * H,
+        "Y_TOP": hi,
+    }
+    # ПРОВЕРКА ПОРЯДКА. Замер, который дал колено выше паха, обязан кричать, а
+    # не молча уехать в крой.
+    order = ["Y_ANKLE", "Y_KNEE", "Y_CROTCH", "Y_WAIST", "Y_SHOULDER",
+             "Y_CHIN", "Y_TOP"]
+    for a, b in zip(order, order[1:]):
+        if not lm[a] < lm[b]:
+            print("[замер] ПОРЯДОК НАРУШЕН: %s %.3f не ниже %s %.3f"
+                  % (a, lm[a], b, lm[b]))
+    return lm
+
+
 def svc(name):
     return importlib.import_module("%s.services.%s" % (ADDON, name))
 
 
-def build():
+def build(skip_clothes=False):
     bpy.ops.preferences.addon_enable(module=ADDON)
     for o in list(bpy.data.objects):
         bpy.data.objects.remove(o, do_unlink=True)
@@ -115,6 +301,9 @@ def build():
         print("[герой] кожа: %s" % os.path.basename(SKIN))
     else:
         print("[герой] НЕТ кожи:", SKIN)
+
+    if not skip_clothes:
+        wardrobe(body)
 
     n = sum(len(o.data.vertices) for o in bpy.data.objects if o.type == 'MESH')
     print("[герой] всего вершин: %d, объектов: %d"
@@ -173,7 +362,7 @@ def shoot(body, out, face):
 
 def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-    body = build()
+    body = build(skip_clothes=("--nude" in argv))
     if "--face" in argv:
         stage((760, 760))
         shoot(body, argv[argv.index("--face") + 1], True)
