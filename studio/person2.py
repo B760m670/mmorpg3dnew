@@ -574,30 +574,43 @@ POINTS = 6            # точек на волос: меньше — ломан�
 
 def _scalp(co):
     """Волосистая часть головы: от линии роста волос назад и вниз до затылка."""
-    if co.z < Y_CHIN + 0.115:
+    if co.z < Y_CHIN + 0.108:
         return False
-    # линия роста волос: спереди выше, к вискам опускается
-    front = -0.055 + 0.6 * abs(co.x)
+    front = -0.070 + 0.5 * abs(co.x)     # линия роста: спереди ниже, к вискам поднимается
     return co.y > front
 
 
 def _beard(co):
-    """Борода: подбородок, щёки до уровня уха, шея под челюстью."""
-    if not (Y_CHIN - 0.055 < co.z < Y_CHIN + 0.095):
+    """Борода: подбородок, щёки до линии «угол рта — козелок уха», шея под
+    челюстью. Верхняя граница наклонная — так борода и растёт."""
+    if not (Y_CHIN - 0.050 < co.z < Y_CHIN + 0.085):
         return False
-    if co.y > -0.015:
+    if co.y > -0.010:
         return False
-    # выше линии «угол рта — козелок уха» щетины уже нет
-    return co.z < Y_CHIN + 0.075 - 0.35 * abs(co.x)
+    return co.z < Y_CHIN + 0.070 - 0.42 * abs(co.x)
+
+
+def _beard_len(co):
+    """Длина бороды от точки: у скул коротко, к подбородку вдвое длиннее.
+    Ровная по длине борода читается приклеенным щитом."""
+    d = math.hypot(co.x * 1.6, co.z - (Y_CHIN + 0.010))
+    return 1.0 + 1.1 * max(0.0, 1.0 - d / 0.075)
+
+
+def _stache(co):
+    """Усы: над верхней губой, до уголков рта. У мужчины 1890-х борода почти
+    всегда с усами; голая губа при бороде выглядит нарочно."""
+    return (Y_CHIN + 0.058 < co.z < Y_CHIN + 0.082
+            and co.y < -0.055 and abs(co.x) < 0.030)
 
 
 def _brow(co):
-    return (Y_CHIN + 0.150 < co.z < Y_CHIN + 0.172
-            and co.y < -0.060 and 0.012 < abs(co.x) < 0.055)
+    return (Y_CHIN + 0.150 < co.z < Y_CHIN + 0.170
+            and co.y < -0.060 and 0.010 < abs(co.x) < 0.050)
 
 
 def grow(body, name, region, length, droop, spread, thick, dens=90000,
-         seed=1, curl=0.0):
+         seed=1, curl=0.0, lay=0.0, lay_dir=(0.0, 0.0, -1.0), taper=None):
     """Вырастить волосы на области тела.
 
     СЕЕМ ПО ГРАНЯМ, А НЕ ПО ВЕРШИНАМ. Первый заход сажал по одному волосу на
@@ -612,6 +625,17 @@ def grow(body, name, region, length, droop, spread, thick, dens=90000,
     Каждый волос идёт по нормали, на каждом шаге заваливаясь вниз: DROOP —
     это вес. Короткая щетина почти не гнётся, длинная прядь падает. Только
     поэтому стрижка и борода выглядят по-разному при одном направлении роста.
+
+    LAY — НАСКОЛЬКО ВОЛОС ЛЕЖИТ, А НЕ ТОРЧИТ, и без этого причёски не будет.
+    Первый заход растил строго по нормали к коже: волосы встали перпендикулярно
+    черепу и разошлись венцом во все стороны — солома, воткнутая в голову.
+    Настоящий волос выходит из кожи под острым углом и сразу ложится по ней.
+    Здесь направление роста — смесь нормали и заданного направления (вниз и
+    назад для стрижки, вниз для бороды).
+
+    TAPER — функция длины от точки. Борода не одной длины: у скул щетина
+    короткая, к подбородку прядь удлиняется вдвое. Без этого борода выходит
+    нагрудником — ровным щитом поперёк груди.
     """
     import random
     rnd = random.Random(seed)
@@ -645,10 +669,14 @@ def grow(body, name, region, length, droop, spread, thick, dens=90000,
     bpy.context.scene.collection.objects.link(ob)
     cu.add_curves([POINTS] * len(seeds))
 
+    ld = Vector(lay_dir).normalized()
     flat, rad = [], []
     for p0, n in seeds:
         L = length * rnd.uniform(0.6, 1.3)
-        d = (n + Vector((rnd.gauss(0, spread), rnd.gauss(0, spread),
+        if taper is not None:
+            L *= taper(p0)
+        d = n.lerp(ld, lay)
+        d = (d + Vector((rnd.gauss(0, spread), rnd.gauss(0, spread),
                          rnd.gauss(0, spread)))).normalized()
         p = p0.copy()
         vel = d * (L / (POINTS - 1))
@@ -699,18 +727,27 @@ def hair_and_face(body):
     одного человека одного цвета, разница только в длине и толщине."""
     RUS = (0.055, 0.032, 0.020)        # тёмно-русый
     made = []
-    head = grow(body, "Стрижка", _scalp, length=0.030, droop=0.45,
-                spread=0.14, thick=0.00006, dens=260000, seed=1, curl=0.10)
+    head = grow(body, "Стрижка", _scalp, length=0.032, droop=0.30,
+                spread=0.10, thick=0.00006, dens=300000, seed=1, curl=0.06,
+                lay=0.78, lay_dir=(0.0, 0.55, -1.0))
     if head:
         put(head, mat_hair("волос головы", RUS))
         made.append(head)
-    beard = grow(body, "Борода", _beard, length=0.028, droop=0.60,
-                 spread=0.20, thick=0.00008, dens=200000, seed=2, curl=0.14)
+    beard = grow(body, "Борода", _beard, length=0.022, droop=0.30,
+                 spread=0.16, thick=0.00008, dens=240000, seed=2, curl=0.10,
+                 lay=0.62, lay_dir=(0.0, 0.30, -1.0), taper=_beard_len)
     if beard:
         put(beard, mat_hair("волос бороды", RUS, rough=0.34))
         made.append(beard)
-    brow = grow(body, "Брови", _brow, length=0.011, droop=0.9,
-                spread=0.26, thick=0.00008, dens=900000, seed=3)
+    stache = grow(body, "Усы", _stache, length=0.019, droop=0.35,
+                  spread=0.18, thick=0.00009, dens=700000, seed=4, curl=0.08,
+                  lay=0.80, lay_dir=(0.0, -0.35, -1.0))
+    if stache:
+        put(stache, mat_hair("волос усов", RUS, rough=0.32))
+        made.append(stache)
+    brow = grow(body, "Брови", _brow, length=0.011, droop=0.5,
+                spread=0.20, thick=0.00008, dens=900000, seed=3,
+                lay=0.75, lay_dir=(0.35, -0.5, -0.2))
     if brow:
         put(brow, mat_hair("волос брови", RUS, rough=0.36))
         made.append(brow)
