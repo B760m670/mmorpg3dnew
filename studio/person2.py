@@ -77,35 +77,111 @@ def clear():
 # ---------------------------------------------------------------------------
 
 def append_body():
+    """Приложить болванку — И ВСЁ, ЧТО К НЕЙ ПРИЛАГАЕТСЯ.
+
+    ГЛАВНАЯ ОШИБКА ЭТОГО ЗАХОДА БЫЛА ЗДЕСЬ. Я брал из набора один объект —
+    тело — и всё остальное строил руками поверх. А в наборе рядом лежат
+    ГЛАЗНЫЕ ЯБЛОКИ этого самого тела: GEO-body_male_realistic.eye.L и .eye.R,
+    по 546 вершин, с готовой развёрткой. Я их не загрузил, глазницы остались
+    пустыми, и потом я разглядывал рендер и писал «глаза мёртвые». Глаз там
+    не было вовсе.
+    Там же лежат отдельная голова с анимационной топологией (3242 вершины),
+    склера и радужка отдельными объектами, полный скелет. Инвентаризацию
+    набора надо было сделать первым делом, а не после трёх заходов.
+
+    Все части приходят в одной системе координат, поэтому масштабируются и
+    ставятся на пол ОДНИМ преобразованием — иначе глаза уедут из глазниц.
+    """
     if not os.path.exists(BUNDLE):
         raise SystemExit("нет набора болванок: %s" % BUNDLE)
+    want = [BODY, BODY + ".eye.L", BODY + ".eye.R"]
     with bpy.data.libraries.load(BUNDLE, link=False) as (src, dst):
-        names = [n for n in src.objects if BODY in n]
-        if not names:
+        have = [n for n in want if n in src.objects]
+        missing = [n for n in want if n not in src.objects]
+        if BODY not in have:
             raise SystemExit("в наборе нет «%s»" % BODY)
-        dst.objects = names[:1]
-    ob = dst.objects[0]
-    if ob is None or ob.type != 'MESH':
-        raise SystemExit("приложился не тот объект: %s" % ob)
-    bpy.context.scene.collection.objects.link(ob)
-    bpy.context.view_layer.objects.active = ob
-    ob.name = "Тело"
+        dst.objects = have
+    if missing:
+        print("[человек] в наборе не нашлось:", ", ".join(missing))
 
-    # Преобразование по САМИМ ВЕРШИНАМ, а не операторами: bpy.ops требуют, чтобы
-    # объект уже лежал в активном слое вида, и падают на только что приложенном.
-    me = ob.data
-    me.transform(ob.matrix_world)
-    ob.matrix_world = Matrix.Identity(4)
-    zs = [v.co.z for v in me.vertices]
+    parts = [o for o in dst.objects if o is not None and o.type == 'MESH']
+    for o in parts:
+        bpy.context.scene.collection.objects.link(o)
+    body = [o for o in parts if o.name.startswith(BODY) and "eye" not in o.name][0]
+    eyes = [o for o in parts if "eye" in o.name]
+    body.name = "Тело"
+
+    # ОДНО преобразование на все части. Считаем его по ТЕЛУ и применяем ко
+    # всем: если пересчитывать для каждой части отдельно, глаз встанет по
+    # своему габариту и вылезет из глазницы.
+    zs = [(body.matrix_world @ v.co).z for v in body.data.vertices]
     was = max(zs) - min(zs)
     k = TARGET_H / was
-    me.transform(Matrix.Diagonal(Vector((k, k, k)).to_4d()))
-    me.transform(Matrix.Translation(Vector((0, 0, -min(v.co.z for v in me.vertices)))))
-    me.update()
+    lo = min(zs) * k
+    M = (Matrix.Translation(Vector((0, 0, -lo)))
+         @ Matrix.Diagonal(Vector((k, k, k)).to_4d()))
+    for o in parts:
+        me = o.data
+        me.transform(M @ o.matrix_world)
+        o.matrix_world = Matrix.Identity(4)
+        me.update()
+    bpy.context.view_layer.objects.active = body
     bpy.context.view_layer.update()
     print("[человек] болванка: вершин %d, рост %.3f -> %.3f м"
-          % (len(me.vertices), was, ob.dimensions.z))
-    return ob
+          % (len(body.data.vertices), was, body.dimensions.z))
+    for e in eyes:
+        print("[человек] глаз «%s»: вершин %d, поперечник %.1f мм"
+              % (e.name.split(".", 1)[1], len(e.data.vertices),
+                 e.dimensions.x * 1000))
+    return body, eyes
+
+
+def mat_eye():
+    """ГЛАЗ. Три вещи, без которых он мёртвый, и все три — не про цвет.
+
+    ВЛАЖНОСТЬ. Роговица покрыта слёзной плёнкой, это зеркало. Шероховатость
+    0.05 против 0.5 у кожи — именно поэтому в глазу видно отражение окна, а в
+    щеке нет. Один этот блик и оживляет взгляд.
+    РАДУЖКА ТЁМНАЯ ПО КРАЮ. У неё есть лимб — тёмное кольцо по границе с
+    белком. Без него радужка выглядит наклейкой.
+    БЕЛОК НЕ БЕЛЫЙ. Склера сероватая и краснеет к углам: там сосуды. Чисто
+    белый белок — первое, что выдаёт куклу.
+    """
+    m = bpy.data.materials.new("глаз")
+    m.use_nodes = True
+    tree = m.node_tree
+    b = tree.nodes["Principled BSDF"]
+    n = tree.nodes
+
+    tex = n.new("ShaderNodeTexCoord")
+    # расстояние от оси взгляда: по нему разделяются радужка, лимб и белок
+    sep = n.new("ShaderNodeSeparateXYZ")
+    tree.links.new(tex.outputs["Object"], sep.inputs["Vector"])
+    dist = n.new("ShaderNodeVectorMath")
+    dist.operation = 'LENGTH'
+    tree.links.new(tex.outputs["Object"], dist.inputs[0])
+
+    ramp = n.new("ShaderNodeValToRGB")
+    ramp.color_ramp.interpolation = 'CONSTANT'
+    e = ramp.color_ramp.elements
+    e[0].position = 0.0
+    e[0].color = (0.045, 0.030, 0.020, 1)      # зрачок
+    e[1].position = 0.30
+    e[1].color = (0.28, 0.20, 0.10, 1)          # радужка, карий
+    e2 = ramp.color_ramp.elements.new(0.52)
+    e2.color = (0.10, 0.07, 0.04, 1)            # лимб — тёмное кольцо
+    e3 = ramp.color_ramp.elements.new(0.58)
+    e3.color = (0.72, 0.68, 0.66, 1)            # склера: сероватая, не белая
+    tree.links.new(dist.outputs["Value"], ramp.inputs["Fac"])
+    tree.links.new(ramp.outputs["Color"], b.inputs["Base Color"])
+
+    b.inputs["Roughness"].default_value = 0.05  # слёзная плёнка — зеркало
+    if "Specular IOR Level" in b.inputs:
+        b.inputs["Specular IOR Level"].default_value = 0.8
+    if "Coat Weight" in b.inputs:
+        b.inputs["Coat Weight"].default_value = 0.5
+        b.inputs["Coat Roughness"].default_value = 0.02
+    return m
 
 
 # ---------------------------------------------------------------------------
@@ -373,56 +449,133 @@ def mat_scan(name, asset, scale=5.0, tint=None, rough_shift=0.0, sheen=0.0):
     return m
 
 
+def paint_skin(body, eyes):
+    """РАСКРАСИТЬ КОЖУ ПО АНАТОМИИ. Тон пишется в вершины, а не берётся из
+    тайловой картинки, и вот почему это правильнее.
+
+    Свободных фотосканов ЛИЦА под открытой лицензией нет — есть тайловые
+    заплатки кожи. Заплатка не знает, где губы и где нос: она повторяется. А
+    кожа человека не однотонная, и неоднотонна она НЕ СЛУЧАЙНО.
+
+    ПРАВИЛО ТРЁХ ЗОН — то, чему учат портретистов, и оно про анатомию:
+      ЛОБ И ВИСКИ — желтее: кость близко к поверхности, крови мало.
+      СЕРЕДИНА ЛИЦА (нос, скулы, уши) — краснее всего: капилляры густые и
+        поверхностные. Кончик носа и уши на просвет красные.
+      ПОДБОРОДОК И ЧЕЛЮСТЬ — холоднее, в синеву: кожа толще, а у мужчины ещё
+        и тень от щетины даже сразу после бритья.
+    Плюс губы, где кожа переходит в слизистую, и веки, где она тоньше всего.
+    Ровно окрашенная кожа выглядит парафином — именно это и было в кадре.
+
+    ЖИРНОСТЬ ТОЖЕ ПО ЗОНАМ. Лоб и нос блестят (сальные железы гуще), щёки
+    матовые. Разница в блеске между Т-зоной и щекой заметнее, чем разница в
+    цвете, и без неё лицо выглядит вылепленным из одного вещества.
+    """
+    me = body.data
+    if "тон" not in me.color_attributes:
+        me.color_attributes.new(name="тон", type='FLOAT_COLOR', domain='POINT')
+    if "жир" not in me.attributes:
+        me.attributes.new(name="жир", type='FLOAT', domain='POINT')
+    col = me.color_attributes["тон"]
+    oil = me.attributes["жир"]
+
+    BASE = Vector((0.60, 0.435, 0.355))
+    WARM = Vector((0.115, -0.030, -0.055))   # добавка «краснее»
+    YELL = Vector((0.035, 0.020, -0.045))    # добавка «желтее»
+    COOL = Vector((-0.075, -0.055, 0.010))   # добавка «холоднее»
+
+    for i, v in enumerate(me.vertices):
+        c = v.co
+        t = BASE.copy()
+        o = 0.0
+        # --- лицо ---
+        if c.z > Y_CHIN - 0.06:
+            h = (c.z - Y_CHIN) / 0.233          # доля высоты головы от подбородка
+            face = max(0.0, -c.y) / 0.10        # насколько это перёд лица
+            if h > 0.62:                        # лоб и виски
+                t += YELL * min(1.0, (h - 0.62) / 0.25) * face
+                o += 0.55 * face
+            if 0.28 < h < 0.68:                 # середина: нос, скулы
+                t += WARM * (1.0 - abs(h - 0.46) / 0.22) * face
+            if h < 0.30:                        # подбородок и челюсть
+                t += COOL * (1.0 - h / 0.30)
+            # кончик носа — самая красная точка лица
+            d = (c - Vector((0.0, -0.088, Y_CHIN + 0.100))).length
+            if d < 0.030:
+                t += WARM * 1.4 * (1.0 - d / 0.030)
+                o += 0.7 * (1.0 - d / 0.030)
+            # уши — на просвет красные
+            if abs(c.x) > 0.062 and Y_CHIN + 0.06 < c.z < Y_CHIN + 0.17:
+                t += WARM * 1.2
+            # губы: кожа переходит в слизистую
+            dl = (c - Vector((0.0, -0.075, Y_CHIN + 0.045))).length
+            if dl < 0.026:
+                k = 1.0 - dl / 0.026
+                t = t.lerp(Vector((0.46, 0.235, 0.215)), k)
+                o += 0.9 * k
+            # веки — тончайшая кожа, синеет
+            for sx in (1.0, -1.0):
+                de = (c - Vector((sx * 0.032, -0.070, Y_CHIN + 0.148))).length
+                if de < 0.024:
+                    t += COOL * 0.9 * (1.0 - de / 0.024)
+        # --- кисти: костяшки краснеют ---
+        if c.z < Y_CROTCH + 0.10 and abs(c.x) > 0.20:
+            t += WARM * 0.55
+        col.data[i].color = (t.x, t.y, t.z, 1.0)
+        oil.data[i].value = min(1.0, o)
+    print("[кожа] тон и жирность расписаны по %d вершинам" % len(me.vertices))
+
+
 def mat_skin():
-    """КОЖА ЧЕЛОВЕКА. Сканов человеческой кожи под CC0 нет — поэтому здесь не
-    подделка фотографии, а разбор кожи на то, из чего она состоит.
+    """КОЖА. Тон берётся из вершин (см. paint_skin), а не задан одним цветом.
 
-    ПОДПОВЕРХНОСТНОЕ РАССЕЯНИЕ. Свет уходит под кожу и выходит рядом, и уходит
-    на разную глубину по цветам: красный примерно на 36 мм, зелёный на 14,
-    синий на 8. Эти три числа — не вкус, а измеренные длины свободного пробега
-    в человеческой ткани; они и делают уши и пальцы на просвет красными.
+    ПОДПОВЕРХНОСТНОЕ РАССЕЯНИЕ. Свет уходит под кожу и выходит рядом, на
+    разную глубину по цветам: красный около 36 мм, зелёный 14, синий 8. Это
+    измеренные длины свободного пробега в человеческой ткани, а не подбор.
 
-    ПОРА. Кожа не гладкая: у неё сетка пор шагом около 0.3 мм. Настоящий
-    рельеф взят из скана мелкозернистой кожи (Leather029), и берётся ТОЛЬКО
-    КАРТА НОРМАЛЕЙ — цвет чужой, а размер зерна тот.
-
-    НЕРАВНОМЕРНОСТЬ ТОНА. Ровно окрашенная кожа выглядит резиной. Настоящая
-    краснее там, где сосуды ближе: нос, уши, скулы, костяшки. Здесь это ведёт
-    крупный шум — не портрет конкретного человека, но и не пластик.
+    ПОРА шагом около 0.3 мм — рельеф из скана мелкозернистой кожи, берётся
+    только карта нормалей: цвет чужой, а размер зерна тот.
     """
     m = bpy.data.materials.new("кожа")
     tree, b = _nodes(m)
     n = tree.nodes
 
-    base = n.new("ShaderNodeRGB")
-    base.outputs[0].default_value = (0.58, 0.42, 0.34, 1.0)
-    red = n.new("ShaderNodeRGB")
-    red.outputs[0].default_value = (0.62, 0.34, 0.28, 1.0)
+    tone = n.new("ShaderNodeVertexColor")
+    tone.layer_name = "тон"
+    # мелкая пятнистость поверх зон: кожа неровна и внутри зоны
     noi = n.new("ShaderNodeTexNoise")
-    noi.inputs["Scale"].default_value = 5.0
-    noi.inputs["Detail"].default_value = 4.0
-    mix = n.new("ShaderNodeMix")
-    mix.data_type = 'RGBA'
-    tree.links.new(noi.outputs["Fac"], mix.inputs["Factor"])
-    tree.links.new(base.outputs[0], mix.inputs[6])
-    tree.links.new(red.outputs[0], mix.inputs[7])
-    tree.links.new(mix.outputs[2], b.inputs["Base Color"])
+    noi.inputs["Scale"].default_value = 28.0
+    noi.inputs["Detail"].default_value = 5.0
+    hue = n.new("ShaderNodeMix")
+    hue.data_type = 'RGBA'
+    hue.blend_type = 'OVERLAY'
+    hue.inputs["Factor"].default_value = 0.10
+    tree.links.new(tone.outputs["Color"], hue.inputs[6])
+    tree.links.new(noi.outputs["Color"], hue.inputs[7])
+    tree.links.new(hue.outputs[2], b.inputs["Base Color"])
 
-    b.inputs["Roughness"].default_value = 0.52
+    # ЖИРНОСТЬ: лоб и нос блестят, щёки матовые
+    oil = n.new("ShaderNodeAttribute")
+    oil.attribute_name = "жир"
+    rng = n.new("ShaderNodeMapRange")
+    rng.inputs["To Min"].default_value = 0.62      # матовая щека
+    rng.inputs["To Max"].default_value = 0.26      # блестящий нос
+    tree.links.new(oil.outputs["Fac"], rng.inputs["Value"])
+    tree.links.new(rng.outputs["Result"], b.inputs["Roughness"])
+
     if "Subsurface Weight" in b.inputs:
-        b.inputs["Subsurface Weight"].default_value = 0.28
+        b.inputs["Subsurface Weight"].default_value = 0.30
         b.inputs["Subsurface Radius"].default_value = (0.036, 0.014, 0.008)
         if "Subsurface Scale" in b.inputs:
-            b.inputs["Subsurface Scale"].default_value = 0.012
+            b.inputs["Subsurface Scale"].default_value = 0.010
     if "Specular IOR Level" in b.inputs:
-        b.inputs["Specular IOR Level"].default_value = 0.45
+        b.inputs["Specular IOR Level"].default_value = 0.5
 
-    mp = _uv_scale(tree, 26.0)          # шаг поры около 0.3 мм
+    mp = _uv_scale(tree, 26.0)
     nr = n.new("ShaderNodeTexImage")
     nr.image = _img(_map("Leather029", "NormalGL"), non_color=True)
     tree.links.new(mp.outputs["Vector"], nr.inputs["Vector"])
     nm = n.new("ShaderNodeNormalMap")
-    nm.inputs["Strength"].default_value = 0.30
+    nm.inputs["Strength"].default_value = 0.35
     tree.links.new(nr.outputs["Color"], nm.inputs["Color"])
     tree.links.new(nm.outputs["Normal"], b.inputs["Normal"])
     return m
@@ -796,7 +949,7 @@ def stage():
         bpy.context.collection.objects.link(lo)
 
 
-def turnaround():
+def turnaround(face_only=False):
     sc = bpy.context.scene
     stage()
     cd = bpy.data.cameras.new("cam")
@@ -804,7 +957,7 @@ def turnaround():
     cam = bpy.data.objects.new("cam", cd)
     bpy.context.collection.objects.link(cam)
     sc.camera = cam
-    for i, ang in enumerate((0.0, 40.0, 90.0, 180.0)):
+    for i, ang in enumerate(() if face_only else (0.0, 40.0, 90.0, 180.0)):
         a = math.radians(ang)
         d = 3.4
         cam.location = (d * math.sin(a), -d * math.cos(a), 0.95)
@@ -825,16 +978,20 @@ def turnaround():
 def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     clear()
-    body = append_body()
+    body, eyes = append_body()
+    paint_skin(body, eyes)
     put(body, mat_skin())
+    em = mat_eye()
+    for e in eyes:
+        put(e, em)
     dress(body)
     hair_and_face(body)
 
     n = sum(len(o.data.vertices) for o in bpy.data.objects if o.type == 'MESH')
     print("[человек] всего вершин в фигуре: %d" % n)
 
-    if "--render" in argv:
-        turnaround()
+    if "--render" in argv or "--face" in argv:
+        turnaround("--face" in argv)
         return
     out = argv[argv.index("--out") + 1] if "--out" in argv \
         else "game2/assets/models/person.glb"
