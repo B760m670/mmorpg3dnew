@@ -550,28 +550,171 @@ def _visor():
     return ob
 
 
-def hair_and_face():
-    """Волосы, бакенбарды и усы. Усы у взрослого мужчины 1890-х — норма, а не
-    характер: гладко выбритое лицо в эту эпоху скорее исключение."""
-    me = bpy.data.meshes.new("Волосы")
-    bm = bmesh.new()
-    for s in (1.0, -1.0):        # бакенбарды
-        bmesh.ops.create_uvsphere(
-            bm, u_segments=8, v_segments=6, radius=1.0,
-            matrix=Matrix.Translation(Vector((s * 0.064, -0.030, Y_CHIN + 0.070)))
-            @ Matrix.Diagonal(Vector((0.010, 0.020, 0.030)).to_4d()))
-    bmesh.ops.create_uvsphere(   # усы
-        bm, u_segments=10, v_segments=6, radius=1.0,
-        matrix=Matrix.Translation(Vector((0.0, -0.082, Y_CHIN + 0.070)))
-        @ Matrix.Diagonal(Vector((0.028, 0.014, 0.008)).to_4d()))
-    bm.normal_update()
-    bm.to_mesh(me)
-    bm.free()
-    ob = bpy.data.objects.new("Волосы", me)
+# ---------------------------------------------------------------------------
+# ВОЛОСЫ — КРИВЫМИ, А НЕ ШАРАМИ
+#
+# До этого я лепил бакенбарды и усы из эллипсоидов. Это не волосы, и никакая
+# доводка чисел этого не исправит: волос — это НИТЬ, и всё, по чему глаз узнаёт
+# причёску, живёт в нитях. Направление роста, изгиб под своим весом, разная
+# длина, торчащие пряди, просвет у корней.
+#
+# В играх волосы почти всегда делают КАРТАМИ-ПОЛОСКАМИ: низкополигональные
+# плоскости с текстурой прядей и прозрачностью, уложенные слоями. Здесь взяты
+# КРИВЫЕ — настоящая грумерская система Блендера, где каждый волос это кривая.
+# Для кадра она честнее; для телефона её потом придётся запечь в те же карты, и
+# это отдельная работа, которую надо будет сделать.
+#
+# ПРИЧЁСКА МУЖЧИНЫ 30–40 ЛЕТ ПРОСТОГО СОСЛОВИЯ, 1894 ГОД: коротко стриженые
+# волосы под картуз, борода. Бритое лицо в это время у простого сословия
+# скорее исключение, чем правило.
+# ---------------------------------------------------------------------------
+
+POINTS = 6            # точек на волос: меньше — ломаная, больше — впустую
+
+
+def _scalp(co):
+    """Волосистая часть головы: от линии роста волос назад и вниз до затылка."""
+    if co.z < Y_CHIN + 0.115:
+        return False
+    # линия роста волос: спереди выше, к вискам опускается
+    front = -0.055 + 0.6 * abs(co.x)
+    return co.y > front
+
+
+def _beard(co):
+    """Борода: подбородок, щёки до уровня уха, шея под челюстью."""
+    if not (Y_CHIN - 0.055 < co.z < Y_CHIN + 0.095):
+        return False
+    if co.y > -0.015:
+        return False
+    # выше линии «угол рта — козелок уха» щетины уже нет
+    return co.z < Y_CHIN + 0.075 - 0.35 * abs(co.x)
+
+
+def _brow(co):
+    return (Y_CHIN + 0.150 < co.z < Y_CHIN + 0.172
+            and co.y < -0.060 and 0.012 < abs(co.x) < 0.055)
+
+
+def grow(body, name, region, length, droop, spread, thick, dens=90000,
+         seed=1, curl=0.0):
+    """Вырастить волосы на области тела.
+
+    СЕЕМ ПО ГРАНЯМ, А НЕ ПО ВЕРШИНАМ. Первый заход сажал по одному волосу на
+    вершину и дал 94 волоса на всю голову — это не стрижка, а редкие торчащие
+    прутья. Вершин у болванки на темени просто мало, и никакая настройка этого
+    не изменит. Точки надо брать СЛУЧАЙНО ВНУТРИ ГРАНЕЙ: тогда густота
+    задаётся числом волос на квадратный метр кожи и не зависит от сетки.
+    Настоящая густота на голове около 200 волос на см², то есть два миллиона
+    на квадратный метр; столько нам не нужно и не потянуть — здесь порядка
+    90 тысяч, что для кадра достаточно, потому что волос толще настоящего.
+
+    Каждый волос идёт по нормали, на каждом шаге заваливаясь вниз: DROOP —
+    это вес. Короткая щетина почти не гнётся, длинная прядь падает. Только
+    поэтому стрижка и борода выглядят по-разному при одном направлении роста.
+    """
+    import random
+    rnd = random.Random(seed)
+    me = body.data
+    me.calc_loop_triangles()
+
+    seeds = []
+    total_area = 0.0
+    for t in me.loop_triangles:
+        c = t.center
+        if not region(c):
+            continue
+        a, b2, c3 = (me.vertices[i].co for i in t.vertices)
+        area = (b2 - a).cross(c3 - a).length * 0.5
+        total_area += area
+        n = dens * area
+        k = int(n) + (1 if rnd.random() < (n - int(n)) else 0)
+        for _ in range(k):
+            u, v = rnd.random(), rnd.random()
+            if u + v > 1.0:
+                u, v = 1.0 - u, 1.0 - v
+            p = a + (b2 - a) * u + (c3 - a) * v
+            seeds.append((p, t.normal.copy()))
+
+    if not seeds:
+        print("[волосы] %-12s область пуста" % name)
+        return None
+
+    cu = bpy.data.hair_curves.new(name)
+    ob = bpy.data.objects.new(name, cu)
     bpy.context.scene.collection.objects.link(ob)
-    smooth(ob, 1)
-    put(ob, mat_plain("волос", (0.055, 0.038, 0.026), 0.72))
+    cu.add_curves([POINTS] * len(seeds))
+
+    flat, rad = [], []
+    for p0, n in seeds:
+        L = length * rnd.uniform(0.6, 1.3)
+        d = (n + Vector((rnd.gauss(0, spread), rnd.gauss(0, spread),
+                         rnd.gauss(0, spread)))).normalized()
+        p = p0.copy()
+        vel = d * (L / (POINTS - 1))
+        ph = rnd.uniform(0.0, 6.28)
+        for k in range(POINTS):
+            flat.extend((p.x, p.y, p.z))
+            rad.append(thick * (1.0 - 0.75 * k / (POINTS - 1)))
+            vel.z -= droop * (L / (POINTS - 1))
+            if curl:
+                # ВОЛОС НЕ ПРЯМОЙ. Даже у прямых волос прядь вьётся; без этого
+                # причёска выглядит соломой, воткнутой в череп.
+                vel.x += curl * math.cos(ph + k * 1.7) * (L / (POINTS - 1))
+                vel.y += curl * math.sin(ph + k * 1.7) * (L / (POINTS - 1))
+            p = p + vel
+    cu.attributes['position'].data.foreach_set('vector', flat)
+    if 'radius' in cu.attributes:
+        cu.attributes['radius'].data.foreach_set('value', rad)
+    cu.update_tag()
+    print("[волосы] %-12s волос %d на %.1f см² кожи, длина %.0f мм, толщина %.0f мкм"
+          % (name, len(seeds), total_area * 10000, length * 1000, thick * 1e6))
     return ob
+
+
+def mat_hair(name, rgb, rough=0.28):
+    """ВОЛОС — НЕ ПОВЕРХНОСТЬ, А ЦИЛИНДР. Свет в нём идёт вдоль и выходит
+    сбоку, отсюда двойной блик и просвет на кончиках. Обычный Principled этого
+    не даёт вовсе — нужен отдельный узел для волоса."""
+    m = bpy.data.materials.new(name)
+    m.use_nodes = True
+    nt = m.node_tree
+    for n in list(nt.nodes):
+        if n.type != 'OUTPUT_MATERIAL':
+            nt.nodes.remove(n)
+    out = [n for n in nt.nodes if n.type == 'OUTPUT_MATERIAL'][0]
+    h = nt.nodes.new("ShaderNodeBsdfHairPrincipled")
+    if "Color" in h.inputs:
+        h.inputs["Color"].default_value = (*rgb, 1.0)
+    if "Roughness" in h.inputs:
+        h.inputs["Roughness"].default_value = rough
+    if "Radial Roughness" in h.inputs:
+        h.inputs["Radial Roughness"].default_value = 0.55
+    nt.links.new(h.outputs[0], out.inputs["Surface"])
+    return m
+
+
+def hair_and_face(body):
+    """Стрижка, борода, брови. Цвет один на всё: волос на голове и в бороде у
+    одного человека одного цвета, разница только в длине и толщине."""
+    RUS = (0.055, 0.032, 0.020)        # тёмно-русый
+    made = []
+    head = grow(body, "Стрижка", _scalp, length=0.030, droop=0.45,
+                spread=0.14, thick=0.00006, dens=260000, seed=1, curl=0.10)
+    if head:
+        put(head, mat_hair("волос головы", RUS))
+        made.append(head)
+    beard = grow(body, "Борода", _beard, length=0.028, droop=0.60,
+                 spread=0.20, thick=0.00008, dens=200000, seed=2, curl=0.14)
+    if beard:
+        put(beard, mat_hair("волос бороды", RUS, rough=0.34))
+        made.append(beard)
+    brow = grow(body, "Брови", _brow, length=0.011, droop=0.9,
+                spread=0.26, thick=0.00008, dens=900000, seed=3)
+    if brow:
+        put(brow, mat_hair("волос брови", RUS, rough=0.36))
+        made.append(brow)
+    return made
 
 
 # ---------------------------------------------------------------------------
@@ -587,7 +730,11 @@ def _look_at(frm, to):
     брать Z» лечила симптом: правильный вертикальный вектор в этой сцене — Z,
     всегда, потому что фигура стоит по Z.
     """
-    return (to - frm).to_track_quat('-Z', 'Z').to_euler()
+    # Ось взгляда '-Z', ось «вверх» 'Y' — это КАМЕРНОЕ пространство Блендера, а
+    # не мировое. Я пытался «починить» переворот, поставив сюда 'Z', и сломал
+    # хуже: ось взгляда и ось «вверх» совпали, кватернион выродился, и фигура
+    # легла набок. Правильная пара для камеры именно ('-Z', 'Y').
+    return (to - frm).to_track_quat('-Z', 'Y').to_euler()
 
 
 def stage():
@@ -644,7 +791,7 @@ def main():
     body = append_body()
     put(body, mat_skin())
     dress(body)
-    hair_and_face()
+    hair_and_face(body)
 
     n = sum(len(o.data.vertices) for o in bpy.data.objects if o.type == 'MESH')
     print("[человек] всего вершин в фигуре: %d" % n)
