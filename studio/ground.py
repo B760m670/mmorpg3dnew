@@ -222,20 +222,32 @@ def report(body, arm, frames, title=""):
         print("  опорная подошва в среднем: %+.1f мм от пола%s"
               % (m * 1000, "" if abs(m) < 0.005 else
                  ("  — ПАРИТ" if m > 0 else "  — ТОНЕТ")))
-    # проскальзывание: сумма сдвигов опорной точки, пока опорная нога та же
-    slip = 0.0
-    prev = None
-    for i in range(len(frames)):
-        st = None
-        for s in ("L", "R"):
-            if con[s][i] and res[s][i][1] is not None:
-                if st is None or res[s][i][0] < res[st][i][0]:
-                    st = s
-        if st and prev and prev[0] == st:
-            slip += (res[st][i][1] - prev[1]).length
-        prev = (st, res[st][i][1]) if st else None
-    print("  проскальзывание опорной подошвы: %.1f мм за цикл%s"
-          % (slip * 1000, "" if slip < 0.05 else "  — КОНЬКОБЕЖЕЦ"))
+    # ПРОСКАЛЬЗЫВАНИЕ МЕРЯЕТСЯ СНОСОМ, А НЕ ДЛИНОЙ ПУТИ.
+    #
+    # Прежняя версия складывала покадровые сдвиги точки опоры. На ходьбе это
+    # работало, а на стоянии дало 692 мм «проскальзывания» там, где стопа
+    # никуда не уходит: у стоящего человека тело качается, подошва при этом
+    # чуть перекатывается, и середина пятна опоры дрожит на пару миллиметров
+    # в кадре. За триста кадров дрожь и набежала. Сумма дрожи — не
+    # проскальзывание; проскальзывание — это когда стопа ОКАЗАЛАСЬ В ДРУГОМ
+    # МЕСТЕ. Поэтому считается снос от начала опоры до конца и наибольший
+    # уход от среднего положения за эту опору.
+    slip = wander = 0.0
+    for s in ("L", "R"):
+        run = []
+        for i in range(len(frames) + 1):
+            on = i < len(frames) and con[s][i] and res[s][i][1] is not None
+            if on:
+                run.append(res[s][i][1])
+            elif run:
+                if len(run) > 2:
+                    slip = max(slip, (run[-1] - run[0]).length)
+                    mid = sum(run, Vector()) / len(run)
+                    wander = max(wander, max((p - mid).length for p in run))
+                run = []
+    print("  снос опорной подошвы: %.1f мм (разброс %.1f мм)%s"
+          % (slip * 1000, wander * 1000,
+             "" if slip < 0.02 else "  — КОНЬКОБЕЖЕЦ"))
     fly = min(z for s in ("L", "R") for z, _ in res[s] if z is not None)
     print("  зазор под самой низкой подошвой: %+.1f мм%s"
           % (fly * 1000, "" if abs(fly) < 0.005 else
@@ -252,6 +264,83 @@ def report(body, arm, frames, title=""):
               % (len(deep), 2 * len(frames), w[1], -w[2] * 1000, w[0]))
     print("-" * 66)
     return res, ground, con, slip, spread
+
+
+LEG = {"L": ("LeftUpLeg", "LeftLeg", "LeftFoot"),
+       "R": ("RightUpLeg", "RightLeg", "RightFoot")}
+
+
+def foot_ik(body, arm, frames, lift_limit=0.06):
+    """ОБРАТНАЯ КИНЕМАТИКА НОГ: обе стопы на землю, а не только нижняя.
+
+    ПОЧЕМУ БЕЗ ЭТОГО НЕ ОБОЙТИСЬ. Поправка таза — одна на две ноги. Она может
+    поставить на пол только ту стопу, что ниже; вторая остаётся висеть. На
+    стоянии это 34 мм под одной ногой, на ходьбе — до 20 мм под полом в
+    двойной опоре. Ни то ни другое не лечится сдвигом корня в принципе: чтобы
+    достать до земли РАЗНЫМИ ногами, ноги должны менять длину, то есть гнуть
+    колено. Это и есть обратная кинематика.
+
+    КАК СДЕЛАНО. Для каждой стопы в каждом кадре считается, насколько её
+    подошва не достаёт до пола, и цель ставится ровно на эту величину ниже
+    текущего положения щиколотки. Дальше решает штатная обратная кинематика
+    Блендера по цепочке из двух костей (бедро и голень), после чего поза
+    ЗАПЕКАЕТСЯ в обычные ключи, а связи снимаются: в игру уезжает простая
+    анимация костей, без всяких решателей.
+
+    ОГРАНИЧЕНИЕ НА ПОДЪЁМ (6 см по умолчанию) — защита от глупости: если
+    замер вдруг соврёт, нога не должна вывернуться. Всё, что больше предела,
+    обрезается, и об этом печатается предупреждение.
+    """
+    res = measure(body, frames)
+    sc = bpy.context.scene
+    empties = {}
+    for s, (up, low, foot) in LEG.items():
+        if foot not in arm.pose.bones:
+            continue
+        e = bpy.data.objects.new("цель_%s" % s, None)
+        e.empty_display_size = 0.05
+        bpy.context.collection.objects.link(e)
+        empties[s] = e
+    if not empties:
+        return
+    clipped = 0
+    W = arm.matrix_world
+    for i, f in enumerate(frames):
+        sc.frame_set(f)
+        dg = bpy.context.evaluated_depsgraph_get()
+        a = arm.evaluated_get(dg)
+        for s, e in empties.items():
+            z = res[s][i][0]
+            if z is None:
+                continue
+            lift = -z
+            if abs(lift) > lift_limit:
+                lift = lift_limit if lift > 0 else -lift_limit
+                clipped += 1
+            p = W @ a.pose.bones[LEG[s][2]].head
+            e.location = (p.x, p.y, p.z + lift)
+            e.keyframe_insert("location", frame=f)
+    if clipped:
+        print("[ноги] подъём обрезан пределом в %d кадрах из %d"
+              % (clipped, 2 * len(frames)))
+
+    for s, e in empties.items():
+        pb = arm.pose.bones[LEG[s][1]]
+        c = pb.constraints.new('IK')
+        c.target = e
+        c.chain_count = 2
+
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.mode_set(mode='POSE')
+    bpy.ops.pose.select_all(action='SELECT')
+    bpy.ops.nla.bake(frame_start=frames[0], frame_end=frames[-1], step=1,
+                     only_selected=False, visual_keying=True,
+                     clear_constraints=True, clear_parents=False,
+                     use_current_action=True, bake_types={'POSE'})
+    bpy.ops.object.mode_set(mode='OBJECT')
+    for e in empties.values():
+        bpy.data.objects.remove(e, do_unlink=True)
+    print("[ноги] обратная кинематика запечена на %d кадрах" % len(frames))
 
 
 def cycle(body, arm, frames, fps=None, root="Hips"):

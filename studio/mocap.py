@@ -37,7 +37,7 @@ import math
 import os
 import re
 
-from mathutils import Euler, Matrix, Vector
+from mathutils import Euler, Matrix, Quaternion, Vector
 
 # ASF-имя -> имя кости в риге cmu_mb. Совпало всё, 31 из 31: рига в MPFB так и
 # называется — «CMU MotionBuilder».
@@ -151,6 +151,70 @@ def _R(bone, vals):
     for name, v in zip(bone["dof"] or ["rx", "ry", "rz"], vals):
         e[slot[name]] = math.radians(v)
     return e.to_matrix()
+
+
+def offset(arm, bone, axis, deg):
+    """Добавить ПОСТОЯННЫЙ доворот кости во всех кадрах записи.
+
+    ЗАЧЕМ ЭТО НУЖНО И ПОЧЕМУ ЭТО НЕ ПОДДЕЛКА. Записанный человек стоял так,
+    как стоял он: стопы почти вместе, руки прижаты к бокам. Наш герой —
+    другой человек, и стойка у него должна быть своя. Сравнение силуэтов с
+    фотографией стоящего мужчины дало числа: у него стопы врозь на 0.198
+    роста и просвет под рукой 0.055 роста, у нас 0.110 и ноль.
+    Постоянный доворот бедра и плеча меняет ИМЕННО стойку, не трогая ни
+    покачивания, ни переноса веса, ни дыхания — всё живое из записи остаётся.
+    Величина доворота не выдумана, а решена под замеренную цель.
+    """
+    pb = arm.pose.bones.get(bone)
+    if pb is None or arm.animation_data is None:
+        return
+    q = Quaternion(axis, math.radians(deg))
+    act = arm.animation_data.action
+    path = pb.path_from_id("rotation_quaternion")
+    fcs = [fc for fc in act.fcurves if fc.data_path == path]
+    if not fcs:
+        return
+    by_index = {fc.array_index: fc for fc in fcs}
+    frames = sorted({int(round(kp.co.x)) for fc in fcs for kp in fc.keyframe_points})
+    for f in frames:
+        cur = Quaternion([by_index[i].evaluate(f) if i in by_index else
+                          (1.0 if i == 0 else 0.0) for i in range(4)])
+        new = cur @ q
+        for i in range(4):
+            fc = by_index.get(i)
+            if fc is None:
+                continue
+            for kp in fc.keyframe_points:
+                if int(round(kp.co.x)) == f:
+                    kp.co.y = new[i]
+                    kp.handle_left.y = kp.handle_right.y = new[i]
+    for fc in fcs:
+        fc.update()
+
+
+# СТОЙКА НАШЕГО ГЕРОЯ, решённая под замеренную цель.
+#
+# Записанный человек в клипе стояния держал стопы почти вместе (0.110 роста) и
+# руки вплотную к телу (просвет ноль). Фотография спокойно стоящего мужчины
+# даёт 0.198 и 0.055. Разница видна сразу: узкая стойка читается как «человек
+# позирует», а не «человек стоит».
+#
+# Отведение бедра и плеча подобрано ПО СИЛУЭТУ, а не на глаз: перебором сняты
+# зависимости (нога: 26.5 мм разведения стоп на градус; рука: 0.010 роста
+# просвета на градус) и решено под цель. ИЗМЕРЕНО после: стопы 0.194 против
+# 0.198 у образца, просвет 0.067 против 0.055.
+#
+# Ось Z — та, что разводит, и это тоже проверено перебором, а не выведено:
+# по оси X доворот даёт другое движение (стопы 332 против 402 мм).
+STANCE = {"LeftUpLeg": -6.5, "RightUpLeg": 6.5, "LeftArm": 5.5, "RightArm": -5.5}
+
+
+def stance(arm, k=1.0):
+    """Поставить герою его собственную стойку поверх записи."""
+    for bone, deg in STANCE.items():
+        offset(arm, bone, (0, 0, 1), deg * k)
+    print("[стойка] отведение: бедро %.1f°, плечо %.1f°"
+          % (STANCE["LeftUpLeg"] * k, STANCE["LeftArm"] * k))
 
 
 def load_cmu(arm, asf_path, amc_path, start=1, count=0, fps=120, step=1,

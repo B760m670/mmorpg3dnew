@@ -34,6 +34,7 @@ FIT = {
     "обхват груди":     "measure-bust-circ",
     "обхват талии":     "measure-waist-circ",
     "обхват бедра":     "measure-thigh-circ",
+    "обхват таза":      "measure-hips-circ",
     "обхват голени":    "measure-calf-circ",
     # ШЕЯ ТЯНЕТ ЗА ДВА ПОЛЗУНКА СРАЗУ. Одной цели measure-neck-circ не
     # хватило: она упёрлась в предел −1.0, а обхват остался на 15% больше

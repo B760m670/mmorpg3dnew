@@ -112,3 +112,64 @@ def face(arm, cam, out, frame=None):
     bpy.ops.render.render(write_still=True)
     cam.data.lens = 60.0
     print("[кадр] %s (лицо)" % out)
+
+
+def silhouette_stage(res=(667, 1000)):
+    """Сцена для ОБМЕРА, а не для красоты: чёрная фигура на белом.
+
+    Первый заход мерил обычный кадр на белом фоне, и прибор не нашёл тела
+    вовсе: белый фон светил на кожу, она стала почти белой, и порог по яркости
+    отсекал вместе с фоном половину человека. Для силуэта нужен не свет, а
+    контраст — поэтому всем мешам ставится чёрное свечение, а миру белое.
+    Тогда граница тела определяется однозначно, с точностью до пикселя.
+
+    ДЛИННЫЙ ОБЪЕКТИВ (135 мм с девяти метров) — чтобы перспектива не искажала
+    пропорции: с близкого широкого объектива ближняя нога всегда шире дальней,
+    и любое сравнение с фотографией теряет смысл.
+    """
+    sc = bpy.context.scene
+    sc.render.engine = 'BLENDER_EEVEE_NEXT'
+    sc.render.resolution_x, sc.render.resolution_y = res
+    sc.render.film_transparent = False
+    sc.view_settings.view_transform = 'Standard'
+    w = bpy.data.worlds.new("белый")
+    w.use_nodes = True
+    w.node_tree.nodes["Background"].inputs[0].default_value = (1, 1, 1, 1)
+    w.node_tree.nodes["Background"].inputs[1].default_value = 1.0
+    sc.world = w
+    m = bpy.data.materials.new("силуэт")
+    m.use_nodes = True
+    nt = m.node_tree
+    for n in list(nt.nodes):
+        if n.type != 'OUTPUT_MATERIAL':
+            nt.nodes.remove(n)
+    e = nt.nodes.new("ShaderNodeEmission")
+    e.inputs[0].default_value = (0, 0, 0, 1)
+    e.inputs[1].default_value = 1.0
+    nt.links.new(e.outputs[0], nt.nodes["Material Output"].inputs["Surface"])
+    for o in bpy.data.objects:
+        if o.type == 'MESH':
+            o.data.materials.clear()
+            o.data.materials.append(m)
+    cd = bpy.data.cameras.new("обмерная")
+    cd.lens = 135.0
+    cam = bpy.data.objects.new("обмерная", cd)
+    bpy.context.collection.objects.link(cam)
+    sc.camera = cam
+    return cam
+
+
+def silhouette_shot(arm, cam, out, frame=None, dist=9.0, height=0.86):
+    sc = bpy.context.scene
+    if frame is not None:
+        sc.frame_set(frame)
+    dg = bpy.context.evaluated_depsgraph_get()
+    a = arm.evaluated_get(dg)
+    f = facing(a)
+    h = a.pose.bones["Hips"].head
+    aim = Vector((h.x, h.y, height))
+    cam.location = aim + f * dist
+    cam.rotation_euler = (aim - cam.location).to_track_quat('-Z', 'Y').to_euler()
+    sc.render.filepath = out
+    bpy.ops.render.render(write_still=True)
+    print("[силуэт] %s" % out)
