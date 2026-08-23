@@ -308,16 +308,22 @@ def build(skip_clothes=False):
         bpy.data.objects.remove(o, do_unlink=True)
     HumanService = svc("humanservice").HumanService
 
-    # МАСШТАБ. MPFB меряет в дециметрах (scale=0.1 — «метры»), поэтому рост
-    # приходит около 1.66 м; наш герой 1.75, доводим множителем и печатаем оба
-    # числа, чтобы подгонка была видна, а не подразумевалась.
+    # РОСТ ЗАДАЁТСЯ ПАРАМЕТРОМ, А НЕ МАСШТАБОМ ОБЪЕКТА. Здесь стояло
+    # body.scale = k, и это порвало персонажа на ходу: у тела оказался
+    # масштаб 1.0135, а у скелета 1.0, и при деформации сетка разъезжалась —
+    # торс уезжал, ноги растягивались в невидимое, стопы отваливались.
+    # Обнаружилось замером: длины костей при движении сохранялись до
+    # миллиметра, то есть скелет был исправен, а рвалась именно привязка.
+    # У MakeHuman рост — один из макропараметров, им и надо пользоваться.
     body = HumanService.create_human(macro_detail_dict=dict(PHENOTYPE))
-    was = body.dimensions.z
-    k = TARGET_H / was
-    body.scale = (k, k, k)
     bpy.context.view_layer.update()
-    print("[герой] тело: вершин %d, рост %.3f -> %.3f м"
-          % (len(body.data.vertices), was, body.dimensions.z))
+    print("[герой] тело: вершин %d, рост %.3f м (масштаб объекта %.3f)"
+          % (len(body.data.vertices), body.dimensions.z, body.scale.z))
+
+    # СКЕЛЕТ СТАВИТСЯ ДО ОДЕЖДЫ И ЧАСТЕЙ ТЕЛА. В прошлом заходе он шёл
+    # последним, и всё надетое осталось без привязки: на прогоне одетая
+    # фигура стояла на месте, а голое тело уходило вперёд.
+    add_rig(body)
 
     for kind, rel in PARTS:
         p = os.path.join(DATA, rel)
@@ -339,7 +345,6 @@ def build(skip_clothes=False):
 
     if not skip_clothes:
         wardrobe(body)
-    add_rig(body)
 
     n = sum(len(o.data.vertices) for o in bpy.data.objects if o.type == 'MESH')
     print("[герой] всего вершин: %d, объектов: %d"
