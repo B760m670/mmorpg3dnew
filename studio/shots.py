@@ -30,10 +30,23 @@ def facing(arm):
 
 
 def stage(res=(560, 900), ground=True, back=(0.33, 0.36, 0.40)):
+    """Свет для РАЗГЛЯДЫВАНИЯ фигуры, а не для красоты.
+
+    Прежняя раскладка была пересвечена: три источника по 400/130/220 Вт при
+    передаче 'Standard' выбивали кожу в белое, и тело читалось гладким мешком
+    — я по таким кадрам судил об анатомии и ошибался. Форму показывает не
+    яркость, а ПЕРЕПАД: главный источник сбоку и сверху, заполняющий втрое
+    слабее, контровой по краю. Передача AgX с мягким сведением светов не даёт
+    коже выбиваться в белое.
+    """
     sc = bpy.context.scene
     sc.render.engine = 'BLENDER_EEVEE_NEXT'
     sc.render.resolution_x, sc.render.resolution_y = res
-    sc.view_settings.view_transform = 'Standard'
+    try:
+        sc.view_settings.view_transform = 'AgX'
+        sc.view_settings.look = 'AgX - Medium Contrast'
+    except Exception:
+        sc.view_settings.view_transform = 'Filmic'
     w = bpy.data.worlds.new("w")
     w.use_nodes = True
     w.node_tree.nodes["Background"].inputs[0].default_value = (*back, 1)
@@ -48,11 +61,12 @@ def stage(res=(560, 900), ground=True, back=(0.33, 0.36, 0.40)):
         bpy.context.object.data.materials.append(m)
     # трёхточечный свет: рисующий сбоку-сверху, заполняющий слабее с другой
     # стороны, контровой сзади — он отделяет фигуру от фона
-    for pos, en in (((2.4, -2.6, 2.8), 400.0), ((-2.6, -1.8, 2.2), 130.0),
-                    ((0.5, 2.8, 2.6), 220.0)):
+    for pos, en, sz in (((2.2, -2.4, 2.6), 260.0, 1.2),
+                        ((-2.6, -1.8, 1.8), 60.0, 2.5),
+                        ((0.4, 2.6, 2.4), 180.0, 1.0)):
         lt = bpy.data.lights.new("свет", 'AREA')
         lt.energy = en
-        lt.size = 2.0
+        lt.size = sz
         lo = bpy.data.objects.new("свет", lt)
         lo.location = pos
         lo.rotation_euler = (Vector((0, 0, 1.0)) - Vector(pos)) \
