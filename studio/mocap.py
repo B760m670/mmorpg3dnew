@@ -128,18 +128,33 @@ def _C(bone):
 
 
 def _R(bone, vals):
-    """Матрица поворота кадра. Порядок осей — тот, в каком перечислены dof."""
+    """Матрица поворота кадра.
+
+    ЗДЕСЬ БЫЛА ОШИБКА, КОТОРАЯ ПРЯТАЛАСЬ ДВЕ НЕДЕЛИ. Я складывал повороты в
+    порядке Rx·Ry·Rz, а в ASF порядок обратный: Rz·Ry·Rx (углы перечислены
+    как rx, ry, rz, но применяются к неподвижным осям — сначала X, потом Y,
+    потом Z). У субъекта 07 углы корня меньше 6°, и разницы между двумя
+    свёртками почти не было — ошибка сидела тихо и портила позу понемногу.
+    Видно её стало на записи, содержание которой известно заранее: человек
+    СТОИТ. При моём порядке его стопы улетали на 1.75 м вверх при неподвижном
+    тазе, при правильном остались на полу (−18..+9 мм). Проверять надо на
+    том, чей ответ известен, — иначе неверное и правдоподобное неотличимы.
+
+    Соседняя функция _C всё это время считала ПРАВИЛЬНО, потому что
+    пользовалась Эйлером Блендера, где порядок 'XYZ' и означает Rz·Ry·Rx.
+    Две функции в одном файле противоречили друг другу.
+    """
     if not vals:
         return Matrix.Identity(3)
-    r = Matrix.Identity(3)
-    dof = bone["dof"] if bone["dof"] else ["rx", "ry", "rz"]
-    axis = {"rx": 'X', "ry": 'Y', "rz": 'Z'}
-    for name, v in zip(dof, vals):
-        r = r @ Matrix.Rotation(math.radians(v), 3, axis[name])
-    return r
+    e = Euler((0.0, 0.0, 0.0), bone["order"])
+    slot = {"rx": 0, "ry": 1, "rz": 2}
+    for name, v in zip(bone["dof"] or ["rx", "ry", "rz"], vals):
+        e[slot[name]] = math.radians(v)
+    return e.to_matrix()
 
 
-def load_cmu(arm, asf_path, amc_path, start=1, count=0, fps=120, step=1):
+def load_cmu(arm, asf_path, amc_path, start=1, count=0, fps=120, step=1,
+             align=True):
     """Надеть запись движения на арматуру.
 
     ПЕРЕНОС ИДЁТ ЧЕРЕЗ ЛОКАЛЬНЫЙ ПОВОРОТ, а не через мировую матрицу. Мировая
@@ -206,7 +221,7 @@ def load_cmu(arm, asf_path, amc_path, start=1, count=0, fps=120, step=1):
         R = bb.matrix_local.to_3x3()
         rest[asf_n] = R
         d = bones.get(asf_n, {}).get("dir", Vector())
-        if d.length > 1e-6:
+        if align and d.length > 1e-6:
             want = (CV @ d.normalized())
             axis = R @ Vector((0.0, 1.0, 0.0))
             base[asf_n] = axis.rotation_difference(want).to_matrix() @ R

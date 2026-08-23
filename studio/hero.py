@@ -56,13 +56,63 @@ TARGET_H = 1.75
 PHENOTYPE = {
     "gender": 0.9,        # 0 женщина, 1 мужчина
     "age": 0.62,          # 0.5 — 25 лет, 1.0 — старик; 0.62 даёт около 35
-    "muscle": 0.55,
-    "weight": 0.55,
+    # МЫШЦЫ И ВЕС ПОДОБРАНЫ ПЕРЕБОРОМ ПО ОБМЕРУ, а не на глаз: девять пар
+    # значений, у каждой посчитан средний промах от антропометрии живых
+    # мужчин. При 0.55/0.55 голень была тоньше человеческой на 29%, и фигура
+    # читалась подростком — заказчик это и увидел. При 0.70/0.75 промах
+    # наименьший.
+    "muscle": 0.70,
+    "weight": 0.75,
     "height": 0.52,
     "proportions": 0.5,
     "cupsize": 0.0,
     "firmness": 0.5,
     "race": {"african": 0.05, "asian": 0.10, "caucasian": 0.85},
+}
+
+# ТОЧНАЯ ПОДГОНКА ПО ПРОМЕРАМ. Крупных ползунков мало: они двигают всё тело
+# разом, и после них плечи оставались на 11% уже человеческих, а рука на 10%
+# короче. У MakeHuman для этого есть отдельные цели measure-*, а к какому
+# числу вести — известно из ANSUR II (4082 мужчины). Значения ниже НАЙДЕНЫ
+# ПОДГОНЩИКОМ studio/fit_body.py, а не подобраны руками; пересчитать их можно
+# в любой момент, запустив его снова.
+# ИЗМЕРЕНО после подгонки (отклонение от цели): плечи −1.2%, грудь +0.1%,
+# талия +0.5%, бедро +1.6%, голень −0.7%, шея +3.9%, голова +0.9%.
+# ПОРЯДОК ВАЖЕН: значения пересчитаны УЖЕ ПОСЛЕ добавления мышц. Мышцы сами
+# добавляют объёма — голень с ними ушла на +30%, грудь на +7%, — поэтому
+# сначала ставится анатомия, потом подгоняются размеры, а не наоборот.
+SHAPE = {
+    "measure-shoulder-dist": 0.80,
+    "measure-bust-circ": -0.14,
+    "measure-waist-circ": 0.40,
+    "measure-thigh-circ": 0.40,
+    "measure-calf-circ": -0.26,
+    "measure-neck-circ": -1.00,
+    "neck-scale-horiz": -1.00,
+    "neck-scale-depth": -1.00,
+    "measure-upperarm-length": 0.40,
+    "measure-lowerarm-length": 0.40,
+}
+
+# АНАТОМИЯ. Размеры сошлись, а тело всё равно читалось гладкой трубой: не было
+# ни ключицы, ни дельты, ни грудных, ни икры — только правильные обхваты.
+# Обмером это не ловится, потому что это не размер, а форма. У MakeHuman для
+# формы отдельные цели мышц, и их надо ставить руками — числа тут судить
+# нечем, судит глаз. Значения умеренные: у работника видна мускулатура, но он
+# не атлет.
+MUSCLE = {
+    "torso-muscle-pectoral": 0.45,      # грудные
+    "torso-muscle-dorsi": 0.40,         # широчайшие, отсюда очертание спины
+    "l-upperarm-shoulder-muscle": 0.60, # дельта — от неё «плечо» в кадре
+    "r-upperarm-shoulder-muscle": 0.60,
+    "l-upperarm-muscle": 0.45,
+    "r-upperarm-muscle": 0.45,
+    "l-lowerarm-muscle": 0.45,          # предплечье у работника заметное
+    "r-lowerarm-muscle": 0.45,
+    "l-upperleg-muscle": 0.40,
+    "r-upperleg-muscle": 0.40,
+    "l-lowerleg-muscle": 0.50,          # икра
+    "r-lowerleg-muscle": 0.50,
 }
 
 # Что на нём и в нём. Тип важен: MPFB по нему знает, куда сажать ассет и как
@@ -319,7 +369,14 @@ def svc(name):
     return importlib.import_module("%s.services.%s" % (ADDON, name))
 
 
-def build(skip_clothes=False):
+def build(skip_clothes=False, pheno=None, bare=False, skip_shape=False):
+    """Собрать героя.
+
+    pheno — заменить крупные ползунки, bare — только тело со скелетом (без
+    глаз, волос, кожи и одежды): так подбирается фигура перебором,
+    skip_shape — не применять точную подгонку SHAPE (нужно самому подгонщику,
+    иначе он будет подгонять уже подогнанное).
+    """
     bpy.ops.preferences.addon_enable(module=ADDON)
     for o in list(bpy.data.objects):
         bpy.data.objects.remove(o, do_unlink=True)
@@ -332,17 +389,28 @@ def build(skip_clothes=False):
     # Обнаружилось замером: длины костей при движении сохранялись до
     # миллиметра, то есть скелет был исправен, а рвалась именно привязка.
     # У MakeHuman рост — один из макропараметров, им и надо пользоваться.
-    body = HumanService.create_human(macro_detail_dict=dict(PHENOTYPE))
+    body = HumanService.create_human(macro_detail_dict=dict(pheno or PHENOTYPE))
     bpy.context.view_layer.update()
     print("[герой] тело: вершин %d, рост %.3f м (масштаб объекта %.3f)"
           % (len(body.data.vertices), body.dimensions.z, body.scale.z))
+
+    # ТОЧНАЯ ПОДГОНКА ИДЁТ ДО СКЕЛЕТА. Кости считаются по форме тела один раз,
+    # при постановке скелета, и за ключами формы потом не следуют. Если
+    # подогнать фигуру после — плечи разъедутся с суставами.
+    if not skip_shape:
+        import fit_body
+        for name, v in list(SHAPE.items()) + list(MUSCLE.items()):
+            fit_body._apply(body, name, v)
+        bpy.context.view_layer.update()
+        print("[герой] сложение по промерам: %d целей, мышцы: %d целей"
+              % (len(SHAPE), len(MUSCLE)))
 
     # СКЕЛЕТ СТАВИТСЯ ДО ОДЕЖДЫ И ЧАСТЕЙ ТЕЛА. В прошлом заходе он шёл
     # последним, и всё надетое осталось без привязки: на прогоне одетая
     # фигура стояла на месте, а голое тело уходило вперёд.
     add_rig(body)
 
-    for kind, rel in PARTS:
+    for kind, rel in ([] if bare else PARTS):
         p = os.path.join(DATA, rel)
         if not os.path.exists(p):
             print("[герой] НЕТ %-10s %s" % (kind, rel))
@@ -352,7 +420,7 @@ def build(skip_clothes=False):
         print("[герой] надето: %-10s %s" % (kind, os.path.basename(rel)))
 
     sp = os.path.join(DATA, SKIN)
-    if os.path.exists(sp):
+    if os.path.exists(sp) and not bare:
         # ENHANCED_SSS — шейдер кожи самого MPFB поверх фотоскана. Рассеяние
         # текстура содержать не может: это свойство объёма, а не поверхности.
         HumanService.set_character_skin(sp, body, skin_type='ENHANCED_SSS')
@@ -360,7 +428,7 @@ def build(skip_clothes=False):
     else:
         print("[герой] НЕТ кожи:", SKIN)
 
-    if not skip_clothes:
+    if not skip_clothes and not bare:
         wardrobe(body)
 
     n = sum(len(o.data.vertices) for o in bpy.data.objects if o.type == 'MESH')

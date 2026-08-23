@@ -80,21 +80,29 @@ def measure(body, frames):
     gi = _sole_groups(body)
     M = body.matrix_world
     res = {"L": [], "R": []}
+    # НОМЕРА ВЕРШИН СТОПЫ ИЩУТСЯ ОДИН РАЗ. Веса от кадра не зависят, а маска
+    # выбрасывает всегда одни и те же вершины, поэтому и порядок вершин в
+    # вычисленной сетке от кадра к кадру один и тот же. Перебирать все 26 тысяч
+    # вершин с их группами на каждом кадре — это и было то, из-за чего один
+    # замер занимал минуты.
+    idx = None
     for f in frames:
         bpy.context.scene.frame_set(f)
         dg = bpy.context.evaluated_depsgraph_get()
         ev = body.evaluated_get(dg)
         me = ev.to_mesh()
-        pts = {"L": [], "R": []}
-        for v in me.vertices:
-            w = {}
-            for g in v.groups:
-                for s, idx in gi.items():
-                    if g.group in idx:
-                        w[s] = w.get(s, 0.0) + g.weight
-            for s, ww in w.items():
-                if ww > 0.5:
-                    pts[s].append(M @ v.co)
+        if idx is None:
+            idx = {"L": [], "R": []}
+            for i, v in enumerate(me.vertices):
+                w = {}
+                for g in v.groups:
+                    for s, gg in gi.items():
+                        if g.group in gg:
+                            w[s] = w.get(s, 0.0) + g.weight
+                for s, ww in w.items():
+                    if ww > 0.5:
+                        idx[s].append(i)
+        pts = {s: [M @ me.vertices[i].co for i in idx[s]] for s in ("L", "R")}
         ev.to_mesh_clear()
         for s in ("L", "R"):
             p = sorted(pts[s], key=lambda q: q.z)[:NLOW]
@@ -244,6 +252,75 @@ def report(body, arm, frames, title=""):
               % (len(deep), 2 * len(frames), w[1], -w[2] * 1000, w[0]))
     print("-" * 66)
     return res, ground, con, slip, spread
+
+
+def cycle(body, arm, frames, fps=None, root="Hips"):
+    """Найти в записи ЦЕЛЫЙ ЦИКЛ ШАГА и сказать, годится ли он для игры.
+
+    Игре нужен не отрезок записи, а петля: от постановки левой пятки до
+    следующей постановки левой. Тогда клип можно крутить бесконечно, а по
+    длине цикла и пройденному пути получается СКОРОСТЬ — то самое число, от
+    которого потом заводится походка от скорости персонажа.
+
+    Здесь же честная проверка на человека: цикл ходьбы у взрослого — это
+    1.0–1.2 с, шаг 1.4–1.6 м, скорость 1.2–1.4 м/с. Если наши числа не
+    попадают в эти рамки, значит перенос где-то врёт, сколько бы ровно ни
+    стояли стопы.
+
+    ШОВ. Начало и конец цикла обязаны совпадать по позе, иначе на стыке будет
+    рывок. Меряем угол между кватернионами каждой кости в первом и последнем
+    кадре: пока он мал, петля сойдётся сама.
+    """
+    import math
+    if fps is None:
+        fps = bpy.context.scene.render.fps
+    res = measure(body, frames)
+    _, con = _contacts(res, len(frames))
+    starts = [i for i in range(1, len(frames))
+              if con["L"][i] and not con["L"][i - 1]]
+    if len(starts) < 2:
+        print("[цикл] постановок левой стопы меньше двух — цикл не выделить")
+        return None
+    # берём самую длинную пару подряд идущих постановок: короткие — это сбои
+    k = max(range(len(starts) - 1), key=lambda i: starts[i + 1] - starts[i])
+    i0, i1 = starts[k], starts[k + 1]
+    f0, f1 = frames[i0], frames[i1]
+    dur = (i1 - i0) / fps
+
+    pts = []
+    for f in (f0, f1):
+        bpy.context.scene.frame_set(f)
+        dg = bpy.context.evaluated_depsgraph_get()
+        pts.append(arm.evaluated_get(dg).pose.bones[root].head.copy())
+    d = pts[1] - pts[0]
+    dist = math.hypot(d.x, d.y)
+
+    seam = []
+    q0 = {}
+    bpy.context.scene.frame_set(f0)
+    for pb in arm.pose.bones:
+        q0[pb.name] = pb.rotation_quaternion.copy()
+    bpy.context.scene.frame_set(f1)
+    for pb in arm.pose.bones:
+        a = q0[pb.name].rotation_difference(pb.rotation_quaternion).angle
+        seam.append((math.degrees(min(a, 2 * math.pi - a)), pb.name))
+    seam.sort(reverse=True)
+
+    print("-" * 66)
+    print("ЦИКЛ ШАГА: кадры %d..%d, %d кадров при %d к/с = %.2f с"
+          % (f0, f1, i1 - i0, fps, dur))
+    print("  путь за цикл %.3f м, скорость %.2f м/с%s"
+          % (dist, dist / dur if dur else 0,
+             "" if 0.9 <= (dist / dur if dur else 0) <= 1.7 else
+             "  — НЕ ПОХОЖЕ НА ХОДЬБУ ЧЕЛОВЕКА"))
+    print("  длительность %s (человеку свойственно 1.0–1.2 с)"
+          % ("в норме" if 0.85 <= dur <= 1.35 else "НЕ В НОРМЕ"))
+    print("  шов петли: худшая кость %s %.1f°, средний %.1f°"
+          % (seam[0][1], seam[0][0], sum(s for s, _ in seam) / len(seam)))
+    print("  крупнейшие расхождения: %s"
+          % ", ".join("%s %.0f°" % (n, s) for s, n in seam[:5]))
+    print("-" * 66)
+    return f0, f1, dist, dur, seam[0][0]
 
 
 def lock(body, arm, frames, root="Hips"):

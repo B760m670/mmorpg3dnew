@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""СЪЁМКА ПЕРСОНАЖА: свет, пол и три ракурса, которые не надо выставлять руками.
+
+ЗАЧЕМ. Я трижды подряд фотографировал затылок, будучи уверенным, что снимаю
+лицо, и один раз положил фигуру набок неверной осью «вверх». Ракурс нельзя
+задавать наугад: направление взгляда надо ВЫЧИСЛЯТЬ. Здесь оно берётся по
+стопам — стопа смотрит туда же, куда человек: от пятки к носку.
+
+Три ракурса — это минимум, по которому видно фигуру: анфас (пропорции и
+симметрия), три четверти (объём) и профиль (осанка, вынос головы, прогиб).
+"""
+import math
+
+import bpy
+from mathutils import Vector
+
+
+def facing(arm):
+    """Куда смотрит человек. По стопам: от пятки (кость) к носку."""
+    d = Vector((0.0, 0.0, 0.0))
+    for a, b in (("LeftFoot", "LeftToeBase"), ("RightFoot", "RightToeBase")):
+        if a in arm.pose.bones and b in arm.pose.bones:
+            v = arm.pose.bones[b].head - arm.pose.bones[a].head
+            v.z = 0.0
+            if v.length > 1e-6:
+                d += v.normalized()
+    if d.length < 1e-6:
+        return Vector((0.0, -1.0, 0.0))
+    return d.normalized()
+
+
+def stage(res=(560, 900), ground=True, back=(0.33, 0.36, 0.40)):
+    sc = bpy.context.scene
+    sc.render.engine = 'BLENDER_EEVEE_NEXT'
+    sc.render.resolution_x, sc.render.resolution_y = res
+    sc.view_settings.view_transform = 'Standard'
+    w = bpy.data.worlds.new("w")
+    w.use_nodes = True
+    w.node_tree.nodes["Background"].inputs[0].default_value = (*back, 1)
+    sc.world = w
+    if ground:
+        bpy.ops.mesh.primitive_plane_add(size=24, location=(0, 0, 0))
+        m = bpy.data.materials.new("пол")
+        m.use_nodes = True
+        b = m.node_tree.nodes["Principled BSDF"]
+        b.inputs["Base Color"].default_value = (0.21, 0.20, 0.18, 1)
+        b.inputs["Roughness"].default_value = 0.92
+        bpy.context.object.data.materials.append(m)
+    # трёхточечный свет: рисующий сбоку-сверху, заполняющий слабее с другой
+    # стороны, контровой сзади — он отделяет фигуру от фона
+    for pos, en in (((2.4, -2.6, 2.8), 400.0), ((-2.6, -1.8, 2.2), 130.0),
+                    ((0.5, 2.8, 2.6), 220.0)):
+        lt = bpy.data.lights.new("свет", 'AREA')
+        lt.energy = en
+        lt.size = 2.0
+        lo = bpy.data.objects.new("свет", lt)
+        lo.location = pos
+        lo.rotation_euler = (Vector((0, 0, 1.0)) - Vector(pos)) \
+            .to_track_quat('-Z', 'Y').to_euler()
+        bpy.context.collection.objects.link(lo)
+    cd = bpy.data.cameras.new("камера")
+    cd.lens = 60.0
+    cam = bpy.data.objects.new("камера", cd)
+    bpy.context.collection.objects.link(cam)
+    sc.camera = cam
+    return cam
+
+
+def shoot(arm, cam, out, frame=None, angle=0.0, dist=3.6, height=0.92,
+          up=0.25, lens=None):
+    """Снять с поворотом angle градусов от лица (0 — анфас, 180 — спина)."""
+    sc = bpy.context.scene
+    if frame is not None:
+        sc.frame_set(frame)
+    if lens:
+        cam.data.lens = lens
+    dg = bpy.context.evaluated_depsgraph_get()
+    a = arm.evaluated_get(dg)
+    f = facing(a)
+    h = a.pose.bones["Hips"].head
+    r = math.radians(angle)
+    d = Vector((f.x * math.cos(r) - f.y * math.sin(r),
+                f.x * math.sin(r) + f.y * math.cos(r), 0.0))
+    aim = Vector((h.x, h.y, height))
+    cam.location = aim + d * dist + Vector((0, 0, up))
+    cam.rotation_euler = (aim - cam.location).to_track_quat('-Z', 'Y').to_euler()
+    sc.render.filepath = out
+    bpy.ops.render.render(write_still=True)
+    print("[кадр] %s (кадр %s, %.0f°)" % (out, frame, angle))
+
+
+def turnaround(arm, cam, prefix, frame=None, angles=(0, 40, 90, 180)):
+    for a in angles:
+        shoot(arm, cam, "%s_%03d.png" % (prefix, a), frame=frame, angle=a)
+
+
+def face(arm, cam, out, frame=None):
+    """Лицо крупно: 85 мм от глаз, как в портрете."""
+    sc = bpy.context.scene
+    if frame is not None:
+        sc.frame_set(frame)
+    dg = bpy.context.evaluated_depsgraph_get()
+    a = arm.evaluated_get(dg)
+    f = facing(a)
+    head = a.pose.bones["Head"].head if "Head" in a.pose.bones else None
+    z = (head.z + 0.10) if head else 1.60
+    aim = Vector((head.x, head.y, z)) if head else Vector((0, 0, z))
+    cam.data.lens = 85.0
+    cam.location = aim + f * 0.75 + Vector((0.10, 0, 0.02))
+    cam.rotation_euler = (aim - cam.location).to_track_quat('-Z', 'Y').to_euler()
+    sc.render.filepath = out
+    bpy.ops.render.render(write_still=True)
+    cam.data.lens = 60.0
+    print("[кадр] %s (лицо)" % out)
