@@ -169,6 +169,41 @@ def push_out(ob, mm):
     d.direction = 'NORMAL' 
 
 
+# СКЕЛЕТ.
+#
+# Их в MPFB восемь, и выбор не про вкус, а про то, ОТКУДА БРАТЬ ДВИЖЕНИЕ:
+#   cmu_mb      — под базу захвата движения университета Карнеги-Меллон.
+#                 Это 2500+ записей движения живых людей: ходьба, бег,
+#                 повороты, лестница, переноска груза. Снято на людях.
+#   mixamo      — под библиотеку Mixamo (нужен вход в аккаунт Adobe).
+#   game_engine — «чистый» скелет под движки.
+#   rigify      — полная управляющая система для ручной анимации.
+#
+# Берём cmu_mb: анимация — самая дорогая часть работы, и разумно взять тот
+# скелет, под который уже есть тысячи записей НАСТОЯЩЕГО человеческого
+# движения. Перевод на игровой скелет потом механический; придумать походку
+# заново — нет.
+RIG = "cmu_mb"
+
+
+def add_rig(body):
+    HumanService = svc("humanservice").HumanService
+    HumanService.add_builtin_rig(body, RIG, import_weights=True)
+    arm = next((o for o in bpy.data.objects if o.type == 'ARMATURE'), None)
+    if arm is None:
+        print("[скелет] НЕ ПОСТАВИЛСЯ")
+        return None
+    nb = len(arm.data.bones)
+    # Веса — не мелочь: без них сетка не поедет за костью вовсе. Проверяем,
+    # что группы вершин появились, а не верим на слово.
+    ngroups = len(body.vertex_groups)
+    print("[скелет] %s: костей %d, весовых групп на теле %d"
+          % (RIG, nb, ngroups))
+    named = [b.name for b in arm.data.bones][:12]
+    print("[скелет] кости: %s ..." % ", ".join(named))
+    return arm
+
+
 def wardrobe(body):
     HumanService = svc("humanservice").HumanService
     n = 0
@@ -304,6 +339,7 @@ def build(skip_clothes=False):
 
     if not skip_clothes:
         wardrobe(body)
+    add_rig(body)
 
     n = sum(len(o.data.vertices) for o in bpy.data.objects if o.type == 'MESH')
     print("[герой] всего вершин: %d, объектов: %d"
