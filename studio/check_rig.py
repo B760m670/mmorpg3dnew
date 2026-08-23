@@ -61,9 +61,19 @@ def _verts(ob):
     return out
 
 
-def stretch(ob, rest, frames):
-    """Насколько рвётся сетка. Возвращает худшее растяжение по всем кадрам."""
-    worst = 1.0
+def stretch(ob, rest, frames, mm_limit=0.012):
+    """Насколько рвётся сетка.
+
+    СУДИМ ПО МИЛЛИМЕТРАМ, А НЕ ПО ОТНОШЕНИЮ, и это исправление собственной
+    ошибки. Первая версия мерила во сколько раз выросло ребро, и объявила
+    «РВЁТСЯ» при худшем 14×. Но у сетки тела медиана ребра 5.9 мм, а самое
+    мелкое 0.35 мм: на таком ребре и десятикратное растяжение — это три
+    миллиметра, то есть ничто. Отношение без размера ничего не значит.
+    Порог 12 мм взят от толщины кожной складки: настоящая кожа в паху и
+    подмышке на полном шаге тянется, но не на сантиметр с лишним.
+    """
+    worst_k = 1.0
+    worst_mm = 0.0
     worst_f = 0
     over = 0
     for f in frames:
@@ -73,11 +83,13 @@ def stretch(ob, rest, frames):
             if r < 1e-6:
                 continue
             k = c / r
-            if k > worst:
-                worst, worst_f = k, f
-            if k > 1.6:
+            d = c - r
+            worst_k = max(worst_k, k)
+            if d > worst_mm:
+                worst_mm, worst_f = d, f
+            if d > mm_limit:
                 over += 1
-    return worst, worst_f, over
+    return worst_k, worst_mm, worst_f, over
 
 
 def bone_travel(arm, name, frames):
@@ -141,10 +153,10 @@ def report(body, arm, frames, clothes=()):
         arm.animation_data.action = act
     bpy.context.view_layer.update()
 
-    w, wf, over = stretch(body, rest, frames)
-    verdict = "ЦЕЛА" if w < 1.6 else "РВЁТСЯ"
-    print("  сетка тела:      худшее растяжение ребра %.2f× (кадр %d), "
-          "рёбер сверх 1.6×: %d — %s" % (w, wf, over, verdict))
+    wk, wmm, wf, over = stretch(body, rest, frames)
+    verdict = "ЦЕЛА" if over == 0 else ("ТЯНЕТСЯ" if over < 40 else "РВЁТСЯ")
+    print("  сетка тела: худшее ребро выросло на %.1f мм (в %.1f×, кадр %d), "
+          "рёбер сверх 12 мм: %d — %s" % (wmm * 1000, wk, wf, over, verdict))
 
     for hand in ("LeftHand", "RightHand"):
         if hand in arm.pose.bones:

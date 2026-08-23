@@ -201,6 +201,23 @@ def add_rig(body):
           % (RIG, nb, ngroups))
     named = [b.name for b in arm.data.bones][:12]
     print("[скелет] кости: %s ..." % ", ".join(named))
+
+    # ИСПРАВЛЯЮЩЕЕ РАЗГЛАЖИВАНИЕ. Замер показал классическую беду скиннинга:
+    # в паху и подмышке на полном шаге рёбра сетки 13–25 мм растягивались до
+    # 29–41, то есть больше чем вдвое. Кожа там тянется, но не настолько —
+    # это «фантик от конфеты», сжатие оболочки на сгибе.
+    # Лечится не подбором весов вручную: у MPFB для этого есть свой оператор,
+    # и он делает именно то, что нужно — возвращает деформированную сетку к
+    # форме, близкой исходной, сохраняя движение.
+    try:
+        bpy.ops.object.select_all(action='DESELECT')
+        body.select_set(True)
+        bpy.context.view_layer.objects.active = body
+        bpy.ops.mpfb.add_corrective_smooth()
+        cs = [m for m in body.modifiers if m.type == 'CORRECTIVE_SMOOTH']
+        print("[скелет] исправляющее разглаживание: %s" % (cs[0].name if cs else "НЕ ДОБАВИЛОСЬ"))
+    except Exception as e:
+        print("[скелет] разглаживание не встало:", str(e)[:80])
     return arm
 
 
