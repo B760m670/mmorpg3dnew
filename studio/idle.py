@@ -128,37 +128,39 @@ def apply_base(arm, extra=None, verbose=False):
             pb = arm.pose.bones.get(side + part)
             if pb is not None:
                 aim(pb, lat * (a * sgn) + fwd * b + up * c)
-        if PALM_INWARD:
-            # КРУТИТЬ НАДО ПЛЕЧО, А НЕ ПРЕДПЛЕЧЬЕ. Первый вариант искал
-            # разворот ладони кручением предплечья, и решение вышло 175° —
-            # то есть пол-оборота. Живое предплечье столько не поворачивается
-            # (пронация около 90°), а сетка на такое отвечает «фантиком»:
-            # кожа между локтем и запястьем перекручивается, и в кадре рука
-            # ломается. Разворот ладони при опущенной руке даёт ВНУТРЕННЯЯ
-            # РОТАЦИЯ ПЛЕЧА — ей и крутим, а предплечье оставляем в покое.
-            fore = arm.pose.bones.get(side + "Arm")
-            hand = arm.pose.bones.get(side + "Hand")
-            if fore is not None and hand is not None:
-                # ЛАДОНЬ К БЕДРУ: нужное кручение ищется перебором, потому что
-                # знак и начало отсчёта зависят от крена кости, а крен у левой
-                # и правой руки зеркальный. Перебор по кругу через 5° надёжнее
-                # любого вывода на бумаге и стоит доли секунды.
-                inward = -lat * sgn
-                best, bq = None, 0.0
-                start = fore.rotation_quaternion.copy()
-                for d in range(-100, 101, 5):
-                    fore.rotation_quaternion = start
-                    bpy.context.view_layer.update()
-                    twist(fore, float(d))
-                    v = hand.x_axis.dot(inward)
-                    if best is None or v > best:
-                        best, bq = v, float(d)
+    if PALM_INWARD:
+        # РАЗВОРОТ ЛАДОНИ РЕШАЕТСЯ ОДИН РАЗ И ЗЕРКАЛИТСЯ.
+        #
+        # Прежде поиск шёл отдельно для каждой руки, и стороны разошлись: у
+        # правой он находил другой минимум, плечо уезжало в чужой угол, и в
+        # кадре рука выглядела сломанной и размазанной, тогда как левая
+        # получалась хорошо. Симметричную позу нельзя ПОЛУЧАТЬ поиском по
+        # обеим сторонам — её надо СТРОИТЬ симметричной: решить слева и
+        # отразить. Тогда расхождение не «мало», а равно нулю по построению.
+        fore = arm.pose.bones.get("LeftArm")
+        hand = arm.pose.bones.get("LeftHand")
+        bq = 0.0
+        if fore is not None and hand is not None:
+            inward = -lat
+            best = None
+            start = fore.rotation_quaternion.copy()
+            for d in range(-100, 101, 5):
                 fore.rotation_quaternion = start
                 bpy.context.view_layer.update()
-                twist(fore, bq)
-                if verbose:
-                    print("[стойка] %s: кручение предплечья %.0f°, "
-                          "ладонь к бедру %.2f" % (side, bq, best))
+                twist(fore, float(d))
+                v = hand.x_axis.dot(inward)
+                if best is None or v > best:
+                    best, bq = v, float(d)
+            fore.rotation_quaternion = start
+            bpy.context.view_layer.update()
+            twist(fore, bq)
+            if verbose:
+                print("[стойка] кручение плеча %.0f° (решено слева, "
+                      "зеркалится направо), ладонь к бедру %.2f" % (bq, best))
+        r = arm.pose.bones.get("RightArm")
+        if r is not None:
+            twist(r, -bq)
+
     for bone, turns in (extra or {}).items():
         pb = arm.pose.bones.get(bone)
         if pb is None:
@@ -305,3 +307,46 @@ def stance_report(arm, body=None, frame=None, note=""):
         print("   %-22s %+8.0f %s%s" % (k, val, unit, mark))
     print("-" * 62)
     return d
+
+
+def symmetry_report(arm, note=""):
+    """НАСКОЛЬКО ПОЗА СИММЕТРИЧНА, в миллиметрах.
+
+    Этого прибора не хватало, и его отсутствие стоило дорого: правая рука в
+    кадре была сломана и размазана, левая — хороша, а ни один замер этого не
+    показывал, потому что все они мерили ОБЩИЕ величины (ширину плеч, просвет
+    под рукой) и на разницу сторон слепы.
+
+    Левая точка отражается через срединную плоскость тела и сравнивается с
+    правой. Для позы, построенной симметрично, расхождение обязано быть
+    нулевым с точностью до счёта.
+    """
+    dg = bpy.context.evaluated_depsgraph_get()
+    a = arm.evaluated_get(dg)
+    lat = (a.pose.bones["LeftUpLeg"].head - a.pose.bones["RightUpLeg"].head)
+    lat.z = 0.0
+    lat.normalize()
+    mid = (a.pose.bones["LeftUpLeg"].head + a.pose.bones["RightUpLeg"].head) / 2
+
+    def mirror(p):
+        d = p - mid
+        return mid + d - 2.0 * d.dot(lat) * lat
+
+    worst, rows = 0.0, []
+    for pb in a.pose.bones:
+        if not pb.name.startswith("Left"):
+            continue
+        r = a.pose.bones.get("Right" + pb.name[4:])
+        if r is None:
+            continue
+        e = (mirror(pb.head) - r.head).length
+        rows.append((e, pb.name[4:]))
+        worst = max(worst, e)
+    rows.sort(reverse=True)
+    print("-" * 56)
+    print("СИММЕТРИЯ ПОЗЫ %s: худшее расхождение %.1f мм%s"
+          % (note, worst * 1000, "" if worst < 0.002 else "  — СТОРОНЫ РАЗОШЛИСЬ"))
+    for e, n in rows[:5]:
+        print("   %-16s %.1f мм" % (n, e * 1000))
+    print("-" * 56)
+    return worst

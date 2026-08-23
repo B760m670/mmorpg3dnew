@@ -61,12 +61,23 @@ def stage(res=(560, 900), ground=True, back=(0.33, 0.36, 0.40)):
         bpy.context.object.data.materials.append(m)
     # трёхточечный свет: рисующий сбоку-сверху, заполняющий слабее с другой
     # стороны, контровой сзади — он отделяет фигуру от фона
+    # МЯГКИЕ ТЕНИ — НЕ КРАСОТА, А ИСПРАВЛЕНИЕ ВРАНЬЯ. В узкой щели между рукой
+    # и телом карта теней даёт самозатенение: по краю руки шёл точечный тёмный
+    # крап, и в кадре рука выглядела сломанной и размазанной. Тела это не
+    # касалось вовсе — при выключенных тенях рука чистая. Лечится расширением
+    # фильтра теней и числом лучей, тени при этом остаются.
+    if hasattr(sc.eevee, "shadow_ray_count"):
+        sc.eevee.shadow_ray_count = 4
+    if hasattr(sc.eevee, "shadow_step_count"):
+        sc.eevee.shadow_step_count = 8
     for pos, en, sz in (((2.2, -2.4, 2.6), 260.0, 1.2),
                         ((-2.6, -1.8, 1.8), 60.0, 2.5),
                         ((0.4, 2.6, 2.4), 180.0, 1.0)):
         lt = bpy.data.lights.new("свет", 'AREA')
         lt.energy = en
         lt.size = sz
+        if hasattr(lt, "shadow_filter_radius"):
+            lt.shadow_filter_radius = 3.0
         lo = bpy.data.objects.new("свет", lt)
         lo.location = pos
         lo.rotation_euler = (Vector((0, 0, 1.0)) - Vector(pos)) \
