@@ -111,29 +111,16 @@ def bone_travel(arm, name, frames):
     return path, rel_path
 
 
-def foot_check(arm, frames, ground=0.0):
-    """Высота стоп и проскальзывание опорной.
-
-    Опорной считается та стопа, что в этом кадре ниже. Если она стоит на
-    земле, её горизонтальный сдвиг между кадрами обязан быть около нуля;
-    всё, что больше — это конькобежец.
-    """
-    lo = {"LeftFoot": [], "RightFoot": []}
-    slip = 0.0
-    prev = {}
-    for f in frames:
-        bpy.context.scene.frame_set(f)
-        dg = bpy.context.evaluated_depsgraph_get()
-        a = arm.evaluated_get(dg)
-        h = {n: a.pose.bones[n].head.copy() for n in lo}
-        for n in lo:
-            lo[n].append(h[n].z)
-        stance = min(lo, key=lambda n: h[n].z)
-        if stance in prev and h[stance].z < min(lo[stance]) + 0.03:
-            d = h[stance] - prev[stance]
-            slip += math.hypot(d.x, d.y)
-        prev = h
-    return lo, slip
+# ПРОВЕРКА СТОП ЖИВЁТ В ground.py, И ЗДЕСЬ ЕЁ БОЛЬШЕ НЕТ.
+#
+# Та, что стояла здесь, мерила кость лодыжки и врала дважды. Во-первых,
+# лодыжка — не низ ноги: между ней и полом ещё вся стопа, сантиметров семь.
+# Во-вторых, опорной она считала стопу «ниже текущего накопленного минимума
+# плюс 3 см», а минимум накапливался по ходу цикла — то есть порог менялся
+# на каждом кадре. Два прибора на одну величину давали разные ответы: этот
+# печатал «проскальзывание 0.53 м», а замер по подошве в тот же прогон —
+# ноль. Когда приборы спорят, верить надо тому, что меряет то самое: сетку
+# подошвы, а не кость над ней.
 
 
 def report(body, arm, frames, clothes=()):
@@ -154,9 +141,15 @@ def report(body, arm, frames, clothes=()):
     bpy.context.view_layer.update()
 
     wk, wmm, wf, over = stretch(body, rest, frames)
-    verdict = "ЦЕЛА" if over == 0 else ("ТЯНЕТСЯ" if over < 40 else "РВЁТСЯ")
+    # СЧИТАЕМ НА КАДР, а не всего. Абсолютное число зависело от того, сколько
+    # кадров я взял в замер: те же 1.3 растянутых ребра на кадр давали «17 —
+    # ТЯНЕТСЯ» на двадцати кадрах и «70 — РВЁТСЯ» на пятидесяти трёх. Прибор
+    # обязан показывать свойство походки, а не длину моего замера.
+    per = over / max(1, len(frames))
+    verdict = "ЦЕЛА" if per < 0.5 else ("ТЯНЕТСЯ" if per < 2.0 else "РВЁТСЯ")
     print("  сетка тела: худшее ребро выросло на %.1f мм (в %.1f×, кадр %d), "
-          "рёбер сверх 12 мм: %d — %s" % (wmm * 1000, wk, wf, over, verdict))
+          "рёбер сверх 12 мм: %.1f на кадр — %s"
+          % (wmm * 1000, wk, wf, per, verdict))
 
     for hand in ("LeftHand", "RightHand"):
         if hand in arm.pose.bones:
@@ -164,11 +157,11 @@ def report(body, arm, frames, clothes=()):
             v = "МАШЕТ" if rel > 0.15 else "НЕ ДВИГАЕТСЯ"
             print("  %-10s ход относительно таза %.3f м — %s" % (hand, rel, v))
 
-    lo, slip = foot_check(arm, frames)
-    for n, zs in lo.items():
-        print("  %-10s высота %.3f..%.3f м" % (n, min(zs), max(zs)))
-    v = "НЕТ" if slip < 0.10 else "ЕСТЬ, %.2f м" % slip
-    print("  проскальзывание опорной стопы: %s" % v)
+    try:
+        import ground
+        ground.report(body, arm, frames, "(из проверки движения)")
+    except Exception as e:
+        print("  стопы не проверены:", str(e)[:80])
 
     for c in clothes:
         vb = set()

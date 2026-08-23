@@ -176,11 +176,50 @@ def load_cmu(arm, asf_path, amc_path, start=1, count=0, fps=120, step=1):
                 walk(c)
     walk("root")
 
-    rest = {}
+    # ДВЕ ПОЗЫ ПОКОЯ, И ОНИ РАЗНЫЕ. Это оказалось главной ошибкой переноса.
+    #
+    # У скелета CMU бедро в покое отклонено от вертикали на 20° наружу
+    # (направление 0.342, -0.9397, 0), у нашего рига — на 5.7°. Голень так же.
+    # Записанные углы отсчитываются ОТ ЭТОЙ разведённой базы; если применить
+    # их к нашей, почти вертикальной, нога приедет не туда — и по-разному на
+    # левой и правой, потому что в каждом кадре повороты у ног разные.
+    # Замер это и показал: сама запись симметрична (низшая точка левого и
+    # правого носка расходится на 3.9 мм, посчитано прямой кинематикой по
+    # ASF), а у нас правая подошва вставала на 55 мм выше левой.
+    #
+    # ЧИНИТСЯ ВЫРАВНИВАНИЕМ БАЗЫ. Для каждой кости берём НАШУ систему
+    # координат покоя и доворачиваем её кратчайшим поворотом так, чтобы ось
+    # кости смотрела туда же, куда смотрит кость в покое у CMU. Крен (поворот
+    # вокруг самой кости) при этом остаётся наш — кратчайший поворот его не
+    # трогает. Дальше записанный поворот применяется уже к правильной базе.
+    #
+    # Ключи в Блендере всё равно отсчитываются от НАШЕЙ позы покоя — иначе
+    # сетка поедет от привязки. Поэтому баз две: выровненная участвует в
+    # вычислении мировой ориентации, наша собственная — в переводе результата
+    # в ключ кости.
+    rest = {}      # наша поза покоя: в ней записаны ключи
+    base = {}      # выровненная под CMU: в ней считается мировая ориентация
     for asf_n, bl_n in BONES.items():
         bb = arm.data.bones.get(bl_n)
-        if bb:
-            rest[asf_n] = bb.matrix_local.to_3x3()
+        if not bb:
+            continue
+        R = bb.matrix_local.to_3x3()
+        rest[asf_n] = R
+        d = bones.get(asf_n, {}).get("dir", Vector())
+        if d.length > 1e-6:
+            want = (CV @ d.normalized())
+            axis = R @ Vector((0.0, 1.0, 0.0))
+            base[asf_n] = axis.rotation_difference(want).to_matrix() @ R
+        else:
+            base[asf_n] = R.copy()
+    dev = []
+    for asf_n in ("lfemur", "ltibia", "rfemur", "rtibia"):
+        if asf_n in rest:
+            a = (rest[asf_n] @ Vector((0, 1, 0)))
+            b = (base[asf_n] @ Vector((0, 1, 0)))
+            dev.append("%s %.1f°" % (asf_n, math.degrees(a.angle(b))))
+    if dev:
+        print("[захват] база выровнена: %s" % ", ".join(dev))
 
     arm.animation_data_clear()
     for pb in arm.pose.bones:
@@ -217,10 +256,10 @@ def load_cmu(arm, asf_path, amc_path, start=1, count=0, fps=120, step=1):
             if Rb is None:
                 continue
             p = par.get(b)
-            Gp = A.get(p, Matrix.Identity(3)) @ rest.get(p, Matrix.Identity(3)) \
+            Gp = A.get(p, Matrix.Identity(3)) @ base.get(p, Matrix.Identity(3)) \
                 if p else Matrix.Identity(3)
             Rp = rest.get(p, Matrix.Identity(3)) if p else Matrix.Identity(3)
-            Gb = A[b] @ Rb
+            Gb = A[b] @ base[b]
             local_pose = Gp.transposed() @ Gb
             local_rest = Rp.transposed() @ Rb
             pb.rotation_quaternion = (local_rest.transposed() @ local_pose).to_quaternion()
