@@ -443,7 +443,7 @@ def build(skip_clothes=False, pheno=None, bare=False, skip_shape=False):
     # СКЕЛЕТ СТАВИТСЯ ДО ОДЕЖДЫ И ЧАСТЕЙ ТЕЛА. В прошлом заходе он шёл
     # последним, и всё надетое осталось без привязки: на прогоне одетая
     # фигура стояла на месте, а голое тело уходило вперёд.
-    add_rig(body)
+    arm = add_rig(body)
 
     for kind, rel in ([] if bare else PARTS):
         p = os.path.join(DATA, rel)
@@ -462,6 +462,15 @@ def build(skip_clothes=False, pheno=None, bare=False, skip_shape=False):
         print("[герой] кожа: %s" % os.path.basename(SKIN))
     else:
         print("[герой] НЕТ кожи:", SKIN)
+
+    # МУЖСКОЙ ПАХ ОТДЕЛЬНОЙ СЕТКОЙ. У базовой сетки MakeHuman этой геометрии
+    # нет ни у мужчины, ни у женщины (проверено замером: при поле 0.0 и 1.0
+    # выступ одинаков, 120 и 119 мм), а цели penis-* рассчитаны на накладку,
+    # которой нет ни в одном открытом паке — просмотрены все шесть bodyparts
+    # и системный набор MakeHuman (517 файлов). Поэтому строим сами.
+    if not bare and arm is not None:
+        import anatomy
+        anatomy.add_mesh(body, arm)
 
     if not skip_clothes and not bare:
         wardrobe(body)
