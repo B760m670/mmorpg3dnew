@@ -87,10 +87,100 @@ var _mat_boot: StandardMaterial3D
 var _mat_cap: StandardMaterial3D
 
 
+# --- тело из файла --------------------------------------------------------
+#
+# ПОЧЕМУ ТЕПЕРЬ ВСЁ-ТАКИ МОДЕЛЬ, а не числа. В шапке этого файла стоял довод:
+# «купленную или скачанную модель мы не можем ни поправить, ни объяснить, ни
+# привязать к эпохе». Довод был верный ровно до тех пор, пока модель была
+# чужая. Наша — не чужая: она собрана в studio/hero.py из открытых частей и
+# ПОДОГНАНА ПО ОБМЕРУ 4082 мужчин (ANSUR II), а не по канону рисования. Каждое
+# число объяснимо и лежит в тексте, как и здесь.
+#
+# ЧТО ЭТИМ ПРИОБРЕТАЕТСЯ, кроме вида: походка из настоящей записи движения
+# (CMU), лицо с 52 единицами ARKit и визимами речи, кости глаз. Числами такого
+# не написать.
+#
+# ПРОЦЕДУРНОЕ ТЕЛО ОСТАЁТСЯ ЗАПАСНЫМ ПУТЁМ и не выбрасывается: если файла нет
+# (свежая проверка, чужая машина, незапечённый экспорт), игра поднимется с
+# фигурой по канону, а не упадёт.
+const HERO := "res://assets/models/hero.glb"
+
+# ИЗМЕРЕНО на записи 07_01: путь за цикл 1.415 м. Это единица, по которой цикл
+# двигают ПУТЁМ, а не временем, — иначе на любой скорости, кроме одной, ноги
+# начинают скользить.
+const CLIP_STRIDE := 1.415
+
+var from_file := false
+var anim: AnimationPlayer
+var clip := ""
+
+
 func build() -> void:
+	if _build_from_file():
+		return
 	_make_materials()
 	_make_skeleton()
 	_make_mesh()
+
+
+func _build_from_file() -> bool:
+	if not ResourceLoader.exists(HERO):
+		print("[человек] нет %s — строю по канону числами" % HERO)
+		return false
+	var packed: PackedScene = load(HERO)
+	if packed == null:
+		print("[человек] %s не загрузился — строю по канону" % HERO)
+		return false
+	var root: Node = packed.instantiate()
+	add_child(root)
+	# РАЗВОРОТ НА 180°, И ЭТО НЕ ПРИДИРКА К ВКУСУ. В Блендере перёд тела — это
+	# −Y (по нему всю дорогу считались грудь, лицо и сосок). Экспорт с yup
+	# кладёт блендеровский −Y в +Z, а у Годо перёд — это −Z. Без разворота
+	# человек идёт СПИНОЙ ВПЕРЁД, и на кадре это выглядит просто «странной
+	# походкой», пока не поставишь камеру севернее и не увидишь лицо там, где
+	# должна быть спина. Проверяется так: тело лицом на юг, камера с севера —
+	# видно обязано быть спину.
+	if root is Node3D:
+		(root as Node3D).rotate_y(PI)
+	skel = _find_skeleton(root)
+	anim = _find_anim(root)
+	if skel == null:
+		print("[человек] в %s нет скелета — строю по канону" % HERO)
+		root.queue_free()
+		return false
+	if anim != null and anim.get_animation_list().size() > 0:
+		clip = anim.get_animation_list()[0]
+	from_file = true
+	print("[человек] тело из файла: костей %d, цикл «%s», сеток %d"
+		% [skel.get_bone_count(), clip, _count_meshes(root)])
+	return true
+
+
+func _find_skeleton(n: Node) -> Skeleton3D:
+	if n is Skeleton3D:
+		return n
+	for c in n.get_children():
+		var s := _find_skeleton(c)
+		if s != null:
+			return s
+	return null
+
+
+func _find_anim(n: Node) -> AnimationPlayer:
+	if n is AnimationPlayer:
+		return n
+	for c in n.get_children():
+		var a := _find_anim(c)
+		if a != null:
+			return a
+	return null
+
+
+func _count_meshes(n: Node) -> int:
+	var k := 1 if n is MeshInstance3D else 0
+	for c in n.get_children():
+		k += _count_meshes(c)
+	return k
 
 
 func _make_materials() -> void:
@@ -506,9 +596,15 @@ func _make_mesh() -> void:
 
 ## Куда цеплять фонарь: положение кисти в текущей позе, мировые координаты.
 func hand_transform(right := true) -> Transform3D:
-	var nm := "hand.R" if right else "hand.L"
-	var id: int = _bone_id[nm]
-	return skel.global_transform * skel.get_bone_global_pose(id)
+	# ИМЕНА КОСТЕЙ У ДВУХ ТЕЛ РАЗНЫЕ. У процедурного они наши: hand.R. У модели
+	# — скелета cmu_mb, под который снята вся база движения: RightHand. Ищем по
+	# обоим набором имён, иначе фонарь повиснет в начале координат.
+	var names := ["RightHand", "hand.R"] if right else ["LeftHand", "hand.L"]
+	for nm in names:
+		var id := skel.find_bone(nm)
+		if id >= 0:
+			return skel.global_transform * skel.get_bone_global_pose(id)
+	return skel.global_transform
 
 
 ## САМОПРОВЕРКА ЧИСЛАМИ: печатает пропорции построенной фигуры и сверяет их с

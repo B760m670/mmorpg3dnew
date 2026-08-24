@@ -9,3 +9,6 @@
 assets/models/rocks_Color.jpg
 assets/models/rocks_Normal.jpg
 assets/models/rocks_Roughness.png
+# У героя их четырнадцать штук на 14 МБ — вытаскиваются из hero.glb тем же
+# импортом. В репозитории лежит только сам .glb, он и есть исходник.
+assets/models/hero_*.png

@@ -278,6 +278,9 @@ func _animate(delta: float) -> void:
 	if person == null or person.skel == null:
 		return
 	var v := Vector2(velocity.x, velocity.z).length()
+	if person.from_file:
+		_animate_clip(v, delta)
+		return
 	_phase += (v * delta / STRIDE) * PI
 	# На месте фаза мягко возвращается к нулю: ноги сходятся, а не замирают в
 	# полушаге. Без этого остановка выглядит выключенным питанием.
@@ -308,6 +311,39 @@ func _animate(delta: float) -> void:
 	_bone_shift("hips", Vector3(0, bob, 0))
 
 	# Фонарь — в правой кисти, чуть впереди ладони.
+	if lamp != null:
+		var t := person.hand_transform(true)
+		lamp.global_position = t.origin + Vector3(0, -0.06, 0)
+
+
+## ЗАПИСАННЫЙ ЦИКЛ, ВЕДОМЫЙ ПУТЁМ. Принцип тот же, что был у рукописной
+## походки, и он важнее самой походки: если крутить клип временем (speed_scale),
+## то при любой скорости, кроме одной-единственной, стопа поедет по земле —
+## получится конькобежец. Если же двигать клип ПРОЙДЕННЫМ ПУТЁМ, стопа встаёт
+## там, где встала, при любой скорости: за путь CLIP_STRIDE клип проходит ровно
+## один оборот, по построению.
+var _clip_t := 0.0
+
+func _animate_clip(v: float, delta: float) -> void:
+	if person.anim == null or person.clip == "":
+		return
+	var a := person.anim.get_animation(person.clip)
+	if a == null:
+		return
+	var len_s := a.length
+	if len_s <= 0.0:
+		return
+	if person.anim.current_animation != person.clip:
+		person.anim.play(person.clip)
+		person.anim.speed_scale = 0.0        # время не ведёт клип, ведёт путь
+	_clip_t += v * delta / person.CLIP_STRIDE * len_s
+	# На месте цикл мягко возвращается к началу: ноги сходятся, а не замирают
+	# в полушаге — то же, что делала рукописная походка.
+	if v < 0.05:
+		_clip_t = lerpf(_clip_t, 0.0, minf(delta * 3.0, 1.0))
+	_clip_t = fposmod(_clip_t, len_s)
+	person.anim.seek(_clip_t, true)
+
 	if lamp != null:
 		var t := person.hand_transform(true)
 		lamp.global_position = t.origin + Vector3(0, -0.06, 0)
