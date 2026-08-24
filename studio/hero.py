@@ -205,7 +205,16 @@ PARTS = [
     ("Eyelashes", "eyelashes/eyelashes01/eyelashes01.mhclo"),
     ("Teeth",     "teeth/teeth_base/teeth_base.mhclo"),
     ("Tongue",    "tongue/tongue01/tongue01.mhclo"),
-    ("Hair",      "hair/short02/short02.mhclo"),
+    # ПРИЧЁСКА ВЫБРАНА ПРИМЕРКОЙ НА НАШЕЙ ГОЛОВЕ, а не по миниатюре: миниатюры
+    # набора сняты на чужом черепе. Было short02 — в кадре читалась шапкой с
+    # резкой кромкой и зеленоватым верхом. short04 (865 вершин) слишком
+    # прилизан. short01 даёт мягкую линию роста и силуэт «зачёсано назад»,
+    # уместный для городского обывателя 1894 года.
+    # ЧЕСТНО: ЭТО ВСЁ РАВНО ИМИТАЦИЯ. Все 35 причёсок набора — меш-скорлупа с
+    # нарисованной текстурой волос: short01 это 2984 вершины и 1839 граней,
+    # самая подробная в наборе — 2604/4948. Настоящая шевелюра прядями это
+    # десятки тысяч кривых, и на крупном плане разницу видно.
+    ("Hair",      "hair/short01/short01.mhclo"),
 ]
 SKIN = ("skins/jartur69_middleage_slavic_male_with_genitals_and_beard/"
         "jartur69_middleage_slavic_male_with_genitals_and_beard.mhmat")
