@@ -134,19 +134,229 @@ def shrink():
           % (было / 1e6, после / 1e6))
 
 
+def bake_helpers(ob, verbose=True):
+    """Выбросить служебную оболочку НАСОВСЕМ, а не прятать её модификатором.
+
+    У тела MakeHuman поверх сетки лежит служебная оболочка, и её скрывает
+    модификатор «маска». Модификатор нельзя ни применить к сетке с ключами
+    формы, ни оставить: экспорт с применением модификаторов ключи вырезает.
+    Выход — удалить эти вершины по-настоящему. Удаление вершин ключи формы
+    переживают: Блендер вычёркивает вершину из каждого ключа разом.
+    """
+    import bmesh
+    m = next((x for x in ob.modifiers if x.type == 'MASK'), None)
+    if m is None or not m.vertex_group or m.vertex_group not in ob.vertex_groups:
+        return 0
+    gi = ob.vertex_groups[m.vertex_group].index
+    inv = getattr(m, "invert_vertex_group", False)
+    kill = []
+    for v in ob.data.vertices:
+        w = any(g.group == gi and g.weight > 0.0 for g in v.groups)
+        keep = (not w) if inv else w
+        if not keep:
+            kill.append(v.index)
+    if kill:
+        bm = bmesh.new()
+        bm.from_mesh(ob.data)
+        bm.verts.ensure_lookup_table()
+        bmesh.ops.delete(bm, geom=[bm.verts[i] for i in kill], context='VERTS')
+        bm.to_mesh(ob.data)
+        bm.free()
+    ob.modifiers.remove(m)
+    if verbose:
+        print("[экспорт] %s: служебных вершин удалено %d, осталось %d"
+              % (ob.name, len(kill), len(ob.data.vertices)))
+    return len(kill)
+
+
+def bake_shape_basis(ob, keep, verbose=True):
+    """Впечь формообразующие ключи в базис, оставить только нужные игре.
+
+    ЗАЧЕМ. Тело MakeHuman собрано ключами формы: пол, возраст, мышцы, все
+    measure-*, наши правки подбородка и ушей. В .glb они уезжают как цели
+    морфа с постоянными весами — то есть игра обязана каждый кадр держать
+    полсотни морфов только для того, чтобы человек оставался собой. Это и
+    лишний вес файла, и лишняя работа на телефоне, и ловушка: движок, который
+    веса по умолчанию не применит, покажет неподогнанную болванку.
+
+    ПОЧЕМУ НЕЛЬЗЯ ПРОСТО ПОДМЕНИТЬ БАЗИС. Ключ хранит АБСОЛЮТНЫЕ положения, а
+    работает разностью «ключ минус базис». Сдвинешь базис — все лицевые ключи
+    поедут на ту же величину в обратную сторону. Поэтому дельта прибавляется
+    и к базису, И К КАЖДОМУ оставляемому ключу: разность тогда сохраняется.
+    """
+    sk = ob.data.shape_keys
+    if sk is None:
+        return 0
+    kb = sk.key_blocks
+    basis = kb[0]
+    n = len(basis.data)
+    drop = [k for k in kb[1:] if k.name not in keep]
+    if not drop:
+        return 0
+    delta = [Vector((0.0, 0.0, 0.0)) for _ in range(n)]
+    for k in drop:
+        v = k.value
+        if abs(v) < 1e-6:
+            continue
+        for i in range(n):
+            d = k.data[i].co - basis.data[i].co
+            if d.length_squared > 1e-14:
+                delta[i] += d * v
+    for i in range(n):
+        basis.data[i].co = basis.data[i].co + delta[i]
+    for k in kb[1:]:
+        if k.name in keep:
+            for i in range(n):
+                k.data[i].co = k.data[i].co + delta[i]
+    for k in drop:
+        ob.shape_key_remove(k)
+    for i, v in enumerate(ob.data.vertices):
+        v.co = basis.data[i].co
+    if verbose:
+        print("[экспорт] %s: впечено в базис %d ключей, осталось %d"
+              % (ob.name, len(drop), len(ob.data.shape_keys.key_blocks) - 1))
+    return len(drop)
+
+
+def bake_all_shapes(verbose=True):
+    """Оставить в файле только лицевые ключи: мимику и речь."""
+    try:
+        import face as face_mod
+        import importlib
+        fs = importlib.import_module("bl_ext.user_default.mpfb.services.faceservice")
+        keep = set(fs.ARKIT_FACEUNITS + fs.MICROSOFT_VISEMES + fs.META_VISEMES)
+    except Exception as e:
+        print("[экспорт] список лицевых не собрался (%s) — ключи не трогаем"
+              % str(e)[:50])
+        return 0
+    total = 0
+    for ob in bpy.data.objects:
+        if ob.type == 'MESH' and ob.data.shape_keys:
+            total += bake_shape_basis(ob, keep, verbose=verbose)
+    if verbose:
+        print("[экспорт] формообразующих ключей впечено всего: %d" % total)
+    return total
+
+
+def bake_modifiers(verbose=True):
+    """Запечь модификаторы ДО экспорта, по-разному для двух видов сеток.
+
+    ПОЧЕМУ НЕ ПОЛАГАТЬСЯ НА ГАЛОЧКУ ЭКСПОРТЁРА. `export_apply` в Блендере
+    описан прямым текстом: «WARNING: prevents exporting shape keys», и в коде
+    экспортёра стоит «shape keys are not preserved if we apply modifiers».
+    То есть с ней все 89 лицевых ключей в .glb не попадут и лицо в игре
+    останется неподвижным. А без неё одежда потеряет смещение слоёв и толщину.
+    Поэтому: у кого ключей нет (одежда) — модификаторы применяются
+    разрушительно; у кого есть (тело, зубы, язык, глаза, брови, ресницы,
+    волосы) — маска выпекается удалением вершин, остальное снимается.
+    Арматуру не трогаем ни у кого: её экспортёр везёт сам.
+    """
+    applied = stripped = 0
+    for ob in list(bpy.data.objects):
+        if ob.type != 'MESH':
+            continue
+        has_keys = ob.data.shape_keys is not None
+        if has_keys:
+            bake_helpers(ob, verbose=verbose)
+            for m in list(ob.modifiers):
+                if m.type == 'ARMATURE':
+                    continue
+                # остальное к сетке с ключами не применить — снимаем
+                if verbose:
+                    print("[экспорт] %s: снят модификатор %s (сетка с ключами)"
+                          % (ob.name, m.type))
+                ob.modifiers.remove(m)
+                stripped += 1
+            continue
+        bpy.context.view_layer.objects.active = ob
+        for m in list(ob.modifiers):
+            if m.type == 'ARMATURE':
+                continue
+            try:
+                bpy.ops.object.modifier_apply(modifier=m.name)
+                applied += 1
+            except Exception as e:
+                print("[экспорт] %s: %s не применился (%s)"
+                      % (ob.name, m.type, str(e)[:40]))
+    if verbose:
+        print("[экспорт] модификаторов применено %d, снято %d" % (applied, stripped))
+    return applied, stripped
+
+
+def check_glb(path):
+    """Доехали ли ключи формы. Смотрим в сам файл, а не верим экспортёру."""
+    import json
+    import struct
+    with open(path, "rb") as f:
+        magic, ver, total = struct.unpack("<III", f.read(12))
+        if magic != 0x46546C67:
+            print("[проверка] это не glb")
+            return None
+        ln, kind = struct.unpack("<II", f.read(8))
+        js = json.loads(f.read(ln).decode("utf-8"))
+    tgt = 0
+    named = []
+    for me in js.get("meshes", []):
+        for p in me.get("primitives", []):
+            tgt += len(p.get("targets", []))
+        if me.get("extras", {}).get("targetNames"):
+            named = me["extras"]["targetNames"]
+    print("[проверка] в файле сеток %d, целей морфа %d"
+          % (len(js.get("meshes", [])), tgt))
+    if named:
+        face = [n for n in named if n in ("jawOpen", "eyeBlinkLeft",
+                                          "mouthSmileLeft", "viseme_aa")]
+        print("[проверка] лицевые на месте: %s"
+              % (", ".join(face) if face else "НЕТ НИ ОДНОЙ"))
+    return tgt
+
+
 def export(path):
     shrink()
+    bake_modifiers()
+    bake_all_shapes()
+    # ПРОВЕРКА, ЧТО ЗАПЕЧЁННОЕ ТЕЛО ОСТАЛОСЬ СОБОЙ. Размер файла этого не
+    # доказывает: при ошибке в пересчёте базиса в игру уехала бы неподогнанная
+    # болванка MakeHuman, и заметили бы это нескоро. Меряем голову после
+    # запекания и сверяем с тем же ANSUR, что и в Блендере.
+    try:
+        import measure_face as mf
+        body = next((o for o in bpy.data.objects
+                     if o.type == 'MESH' and o.name.startswith("Human")
+                     and len(o.data.vertices) > 5000), None)
+        eyes = next((o for o in bpy.data.objects
+                     if o.type == 'MESH' and "high-poly" in o.name), None)
+        if body is not None:
+            # МЕРИТЬ НАДО В ПОКОЕ. Первый заход мерил тело прямо в шаге: рост
+            # выходил 1.780 вместо 1.736 (в стойке фигура ниже, чем в
+            # середине шага), голова наклонена, подбородок не находился вовсе,
+            # уши «выросли» на 15%. Числа были не про запекание, а про позу.
+            arms = [o for o in bpy.data.objects if o.type == 'ARMATURE']
+            was = [(a, a.data.pose_position) for a in arms]
+            for a, _ in was:
+                a.data.pose_position = 'REST'
+            bpy.context.view_layer.update()
+            mf.report(body, eyes, "после запекания, в покое")
+            for a, p in was:
+                a.data.pose_position = p
+            bpy.context.view_layer.update()
+    except Exception as e:
+        print("[экспорт] обмер после запекания не снялся: %s" % str(e)[:60])
     os.makedirs(os.path.dirname(path), exist_ok=True)
     bpy.ops.object.select_all(action='SELECT')
     bpy.ops.export_scene.gltf(
         filepath=path, export_format='GLB', use_selection=True,
         export_animations=True, export_frame_range=True,
         export_animation_mode='ACTIONS', export_skins=True,
-        export_apply=True, export_yup=True,
+        # export_apply ВЫКЛЮЧЕН НАМЕРЕННО: он вырезает все ключи формы, то есть
+        # всю мимику и речь. Модификаторы уже запечены выше, каждый по-своему.
+        export_apply=False, export_yup=True,
+        export_morph=True, export_morph_normal=False,
         export_image_format='AUTO', export_jpeg_quality=88,
     )
     mb = os.path.getsize(path) / 1048576.0
     print("[вывод] %s — %.1f МБ" % (path, mb))
+    check_glb(path)
     return mb
 
 
