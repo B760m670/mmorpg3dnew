@@ -198,3 +198,63 @@ def silhouette_shot(arm, cam, out, frame=None, dist=9.0, height=0.86):
     sc.render.filepath = out
     bpy.ops.render.render(write_still=True)
     print("[силуэт] %s" % out)
+
+
+def clay_stage(res=(560, 760), raking=True):
+    """ГЛИНА: один серый материал и скользящий свет. Для проверки ФОРМЫ.
+
+    ЗАЧЕМ ОТДЕЛЬНЫЙ РЕЖИМ. Фотоскан кожи сам рисует полутона — поры, тон,
+    щетину, — и они читаются как объём там, где объёма нет. Плюс мягкий
+    рассеянный свет в лоб гасит рельеф вовсе. Из-за этого я трижды подряд
+    отвечал «грудные мышцы есть», глядя на кадр, где их и не могло быть видно:
+    ни один из двух признаков формы — собственная тень и граница света — в
+    таком кадре не работает.
+    Скульпторы смотрят на форму именно так: однотонный материал и свет вдоль
+    поверхности, почти по касательной. Тогда любая выпуклость даёт тень.
+    """
+    sc = bpy.context.scene
+    sc.render.engine = 'BLENDER_EEVEE_NEXT'
+    sc.render.resolution_x, sc.render.resolution_y = res
+    try:
+        sc.view_settings.view_transform = 'AgX'
+        sc.view_settings.look = 'AgX - Medium High Contrast'
+    except Exception:
+        sc.view_settings.view_transform = 'Filmic'
+    if hasattr(sc.eevee, "shadow_ray_count"):
+        sc.eevee.shadow_ray_count = 4
+    w = bpy.data.worlds.new("глина")
+    w.use_nodes = True
+    w.node_tree.nodes["Background"].inputs[0].default_value = (0.05, 0.05, 0.06, 1)
+    w.node_tree.nodes["Background"].inputs[1].default_value = 0.35
+    sc.world = w
+    m = bpy.data.materials.new("глина")
+    m.use_nodes = True
+    b = m.node_tree.nodes["Principled BSDF"]
+    b.inputs["Base Color"].default_value = (0.55, 0.53, 0.50, 1.0)
+    b.inputs["Roughness"].default_value = 0.65
+    if "Specular IOR Level" in b.inputs:
+        b.inputs["Specular IOR Level"].default_value = 0.30
+    for o in bpy.data.objects:
+        if o.type == 'MESH':
+            o.data.materials.clear()
+            o.data.materials.append(m)
+    # скользящий свет: почти сбоку и чуть спереди, второй слабый с другой
+    # стороны — только чтобы тень не была чёрной
+    for pos, en, sz in ((((2.6, -0.9, 1.9)), 220.0, 0.35),
+                        (((-2.2, -1.6, 1.6)), 25.0, 2.0)):
+        lt = bpy.data.lights.new("свет", 'AREA')
+        lt.energy = en
+        lt.size = sz
+        if hasattr(lt, "shadow_filter_radius"):
+            lt.shadow_filter_radius = 2.0
+        lo = bpy.data.objects.new("свет", lt)
+        lo.location = pos
+        lo.rotation_euler = (Vector((0, 0, 1.25)) - Vector(pos)) \
+            .to_track_quat('-Z', 'Y').to_euler()
+        bpy.context.collection.objects.link(lo)
+    cd = bpy.data.cameras.new("глина")
+    cd.lens = 85.0
+    cam = bpy.data.objects.new("глина", cd)
+    bpy.context.collection.objects.link(cam)
+    sc.camera = cam
+    return cam

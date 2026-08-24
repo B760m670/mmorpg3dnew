@@ -472,8 +472,12 @@ def build(skip_clothes=False, pheno=None, bare=False, skip_shape=False):
     # выступ одинаков, 120 и 119 мм), а цели penis-* рассчитаны на накладку,
     # которой нет ни в одном открытом паке — просмотрены все шесть bodyparts
     # и системный набор MakeHuman (517 файлов). Поэтому строим сами.
-    if not bare and arm is not None:
+    if not bare:
         import anatomy
+        # рельеф грудных ставится ДО скелета не обязательно, но до одежды —
+        # обязательно: бельё и рубаха шьются по готовой форме тела
+        anatomy.pectorals(body)
+    if not bare and arm is not None:
         anatomy.add_mesh(body, arm)
 
     if not skip_clothes and not bare:
