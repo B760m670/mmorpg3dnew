@@ -26,6 +26,17 @@ if python3 -c "import socket,sys; s=socket.socket(); sys.exit(0 if s.connect_ex(
     echo "игра уже живёт на 127.0.0.1:8787 — новый запуск не нужен"
     exit 0
 fi
+# ПЕРЕСБОРКА ИМПОРТА. Запущенная игра берёт не сам .glb, а СОБРАННЫЙ файл из
+# .godot/imported — и файл этот пересобирает только редактор. Пока я этого не
+# знал, я правил hero.glb, смотрел кадр и объяснял неизменившуюся картинку
+# сначала «не работает перекраска», потом «Godot не читает цвет». Поймал
+# проверкой в упор: спрятал пальто целиком — в кадре не изменилось НИЧЕГО.
+# Импорт разностный: если ничего не менялось, он занимает секунды.
+if [ "${NOIMPORT:-0}" != "1" ]; then
+    LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a "$GODOT" --path "$ROOT/game2" \
+        --headless --import > "$SP/import.log" 2>&1 \
+        || echo "импорт ругнулся, смотри $SP/import.log" >&2
+fi
 nohup xvfb-run -a "$GODOT" --path "$ROOT/game2" \
     --rendering-driver vulkan --rendering-method forward_plus \
     --resolution "$RES" -- --live > "$SP/live.log" 2>&1 &

@@ -268,16 +268,25 @@ SKIN = ("skins/jartur69_middleage_slavic_male_with_genitals_and_beard/"
 # фактура вязки и складок, а меняется только тон, ровно как красят ткань.
 # Сукно городского обывателя 1890-х — глухое тёмное; яркий цвет в эту эпоху
 # у простого сословия означал бы праздничную одежду, а не повседневную.
+#
+# ЧТО ПОМЕНЯЛОСЬ ПОСЛЕ ВЗГЛЯДА В САМУ ИГРУ (а не в Блендер):
+#   рубаха — роспись переписана целиком, см. cloth.kosovorotka: индийская
+#     золотая парча с пейсли по вороту и обшлагам в кадре кричала костюмом
+#     громче всего остального вместе взятого;
+#   штаны — были mindfront_male_trousers_1, это ДЖИНСЫ со шлёвками и заклёпками.
+#     Под пальто видны только голени, но джинсовый шов ни с чем не спутать;
+#   сапоги — были светло-коричневые (0.30). Городской сапог 1890-х чёрный,
+#     вычищенный ваксой; светлая кожа читается туристским ботинком.
 WEAR = [
     ("Косоворотка", "clothes/elvs_male_boho_top1/elvs_male_boho_top1.mhclo",
      0.000, None),
-    ("Штаны", "clothes/mindfront_male_trousers_1/mindfront_male_trousers_1.mhclo",
-     0.002, (0.30, 0.29, 0.28)),
+    ("Штаны", "clothes/mindfront_male_trousers_2/mindfront_male_trousers_2.mhclo",
+     0.002, (0.26, 0.25, 0.24)),
     ("Сапоги", "clothes/rehmanpolanski_viking_boots/rehmanpolanski_viking_boots.mhclo",
-     0.003, (0.30, 0.26, 0.22)),
+     0.003, (0.10, 0.085, 0.075)),
     ("Пальто", "clothes/mindfront_cardigan_long_open_front/"
                "mindfront_cardigan_long_open_front.mhclo",
-     0.011, (0.17, 0.16, 0.15)),
+     0.018, (0.17, 0.16, 0.15)),
     ("Картуз", "clothes/elvs_male_flat_cap1/elvs_male_flat_cap1.mhclo",
      0.004, (0.24, 0.23, 0.23)),
 ]
@@ -382,6 +391,7 @@ def add_rig(body):
 
 def wardrobe(body):
     HumanService = svc("humanservice").HumanService
+    import cloth
     n = 0
     for name, rel, off, rgb in WEAR:
         p = os.path.join(DATA, rel)
@@ -397,10 +407,38 @@ def wardrobe(body):
             push_out(o, off)
             if rgb:
                 tint(o, rgb)
+            # СНЯТЬ БЛИК СО ВСЕЙ ОДЕЖДЫ. Ассеты приходят с шероховатостью 0.70
+            # и бликом 0.50 — это синтетика. Проверено в упор: на белом
+            # окружении чёрная краска даёт не ноль, а 0.067, потому что светит
+            # отражение, а не основа.
+            cloth.matte(o)
+            cloth.flat(o)
+            # ПРОКЛАДКА РАЗВЁРТКИ. Служебный фон холста затекает в края
+            # островов на мип-уровнях и даёт грязные пятна на узких местах —
+            # плечах и рукавах. Заливаем фон цветом ткани, см. cloth.pad.
+            for im in cloth.images(o):
+                cloth.pad(im)
+            if name == "Косоворотка":
+                img = cloth.find_image(o, "boho")
+                if img is None:
+                    print("[костюм] У РУБАХИ НЕ НАШЛАСЬ КАРТИНКА — роспись "
+                          "осталась индийской")
+                else:
+                    cloth.kosovorotka(img)
         print("[костюм] надето: %-14s отступ %.0f мм%s"
               % (name, off * 1000, ", перекрашено" if rgb else ""))
         n += 1
     print("[костюм] предметов: %d" % n)
+
+    # ЗАПРАВКА СЛОЁВ идёт последним, когда всё надето: она сравнивает нижний
+    # слой с верхним, а не с телом. Смещение по нормали разводит слои в
+    # среднем, а пробивает ткань в частностях — см. cloth.tuck.
+    bpy.context.view_layer.update()
+    for низ, верх in (("Косоворотка", "Пальто"), ("Штаны", "Пальто")):
+        a = bpy.data.objects.get(низ)
+        b = bpy.data.objects.get(верх)
+        if a is not None and b is not None:
+            cloth.tuck(a, b)
 
 
 def landmarks(me):
@@ -565,7 +603,12 @@ def build(skip_clothes=False, pheno=None, bare=False, skip_shape=False,
                      if o.type == 'MESH' and "high-poly" in o.name), None)
         if arm is not None and eyes is not None:
             face_mod.add_eye_bones(body, arm, eyes)
-    if not bare and arm is not None:
+    # ПАХ СТАВИТСЯ ТОЛЬКО РАЗДЕТОМУ. Под одеждой его не видно никогда, а в
+    # кадре он проступал светлым пятном между полами пальто: накладка сидит
+    # ближе к телу, чем штаны, но их смещение по нормали в паху сходится в
+    # ноль — там поверхность вогнутая. Одетому он лишний и по весу (378 вершин
+    # и отдельный материал), и по виду.
+    if not bare and arm is not None and skip_clothes:
         anatomy.add_mesh(body, arm)
 
     if not skip_clothes and not bare:

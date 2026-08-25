@@ -346,6 +346,11 @@ def bake_modifiers(verbose=True):
         for m in list(ob.modifiers):
             if m.type == 'ARMATURE':
                 continue
+            # МОДИФИКАТОР, ВЫКЛЮЧЕННЫЙ ВО ВЬЮПОРТЕ, НЕ ПРИМЕНЯЕТСЯ ВОВСЕ:
+            # «Modifier is disabled, skipping apply». MPFB вешает на одежду
+            # подразделение только для рендера, и в игру одежда уезжала гранёной
+            # — пять предметов из пяти. Включаем показ перед применением.
+            m.show_viewport = True
             try:
                 bpy.ops.object.modifier_apply(modifier=m.name)
                 applied += 1
@@ -383,6 +388,67 @@ def check_glb(path):
         print("[проверка] лицевые на месте: %s"
               % (", ".join(face) if face else "НЕТ НИ ОДНОЙ"))
     return tgt
+
+
+# ПРОЗРАЧНОСТЬ РАЗДАЁТСЯ ПОИМЕННО, А НЕ ВСЕМ ПОДРЯД.
+#
+# В игре пальто пропало. В файле оно было — меш на месте, цвет 0.17 записан, —
+# а в кадре его не было. Причина нашлась в JSON выведенного файла: У ВСЕХ
+# ВОСЕМНАДЦАТИ материалов стоял alphaMode = BLEND, включая кожу, сапоги и
+# штаны. Прозрачное смешение не пишет глубину: слои перестают закрывать друг
+# друга, порядок отрисовки решается сортировкой по расстоянию и пляшет от угла
+# камеры. Одежда тонула в теле, тело в одежде.
+#
+# ОТКУДА ВЗЯЛОСЬ: у mhmat-файлов почти всегда стоит transparent True и
+# alphaToCoverage True — это верно для волос и ресниц, где вырез делается
+# альфой, и бессмысленно для сукна. MakeSkin переносит флаг как есть, а
+# экспортёр — дальше в файл.
+#
+# ПРОЗРАЧНОСТЬ НУЖНА РОВНО ТАМ, ГДЕ ФОРМА ЗАДАНА ВЫРЕЗОМ В КАРТИНКЕ: волосы,
+# брови, ресницы. Им ставим MASK (порог, глубина пишется), остальным OPAQUE.
+ALPHA_MASK = ("short01", "eyebrow", "eyelash", "hair")
+
+
+def fix_alpha(path):
+    """Переписать alphaMode в готовом glb. Правится файл, а не Блендер.
+
+    Так честнее: между материалом Блендера и записью в файле стоит экспортёр
+    со своими правилами, и проверять надо то, что уехало, а не то, что задано.
+    """
+    import json
+    import struct
+    with open(path, "rb") as f:
+        data = f.read()
+    magic, ver, total = struct.unpack("<III", data[:12])
+    if magic != 0x46546C67:
+        print("[прозрачность] это не glb")
+        return
+    ln, kind = struct.unpack("<II", data[12:20])
+    js = json.loads(data[20:20 + ln].decode("utf-8"))
+    rest = data[20 + ln:]
+    было = {}
+    for m in js.get("materials", []):
+        было[m.get("alphaMode", "OPAQUE")] = было.get(
+            m.get("alphaMode", "OPAQUE"), 0) + 1
+        name = (m.get("name") or "").lower()
+        if any(k in name for k in ALPHA_MASK):
+            m["alphaMode"] = "MASK"
+            m["alphaCutoff"] = 0.35
+        else:
+            m["alphaMode"] = "OPAQUE"
+            m.pop("alphaCutoff", None)
+    стало = {}
+    for m in js.get("materials", []):
+        стало[m["alphaMode"]] = стало.get(m["alphaMode"], 0) + 1
+    blob = json.dumps(js, ensure_ascii=False).encode("utf-8")
+    blob += b" " * ((4 - len(blob) % 4) % 4)
+    out = (struct.pack("<III", magic, ver, 12 + 8 + len(blob) + len(rest))
+           + struct.pack("<II", len(blob), kind) + blob + rest)
+    with open(path, "wb") as f:
+        f.write(out)
+    print("[прозрачность] было %s -> стало %s"
+          % (", ".join("%s %d" % kv for kv in sorted(было.items())),
+             ", ".join("%s %d" % kv for kv in sorted(стало.items()))))
 
 
 def export(path):
@@ -428,6 +494,7 @@ def export(path):
         export_morph=True, export_morph_normal=False,
         export_image_format='AUTO', export_jpeg_quality=88,
     )
+    fix_alpha(path)
     mb = os.path.getsize(path) / 1048576.0
     print("[вывод] %s — %.1f МБ" % (path, mb))
     check_glb(path)
