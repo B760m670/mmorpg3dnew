@@ -409,3 +409,92 @@ def flat(ob, verbose=True):
     if verbose and n:
         print("[ткань] %s: снята карта нормалей (%d связей)" % (ob.name, n))
     return n
+
+
+def _axis_table(body, step=0.02):
+    """Таблица оси тела по высоте: центр и радиус поперечного сечения.
+
+    Считается ОДИН раз. Первый заход искал сечение заново для каждой вершины
+    пальто — 19158 вершин тела на 5036 вершин одежды, это девяносто шесть
+    миллионов сравнений на питоне, то есть минуты вместо долей секунды.
+    """
+    import numpy as np
+    co = np.array([[v.co.x, v.co.y, v.co.z] for v in body.data.vertices])
+    z0, z1 = co[:, 2].min(), co[:, 2].max()
+    zs = np.arange(z0, z1 + step, step)
+    out = []
+    for z in zs:
+        m = np.abs(co[:, 2] - z) < step
+        if m.sum() < 8:
+            out.append((z, 0.0, 0.0, 0.0))
+            continue
+        a = co[m][:, :2]
+        c = a.mean(0)
+        r = np.linalg.norm(a - c, axis=1)
+        out.append((z, c[0], c[1], float(np.percentile(r, 92))))
+    return np.array(out)
+
+
+def _axis_at(tab, z):
+    import numpy as np
+    i = int(np.clip(np.searchsorted(tab[:, 0], z) - 1, 0, len(tab) - 1))
+    return tab[i, 1], tab[i, 2], tab[i, 3]
+
+
+def taper(coat, body, hem_ratio=1.28, verbose=True):
+    """Убрать А-силуэт: пальто расширяется книзу по-женски.
+
+    ЧТО ВИДНО СЗАДИ, ЧЕГО НЕ ВИДНО СПЕРЕДИ. Спереди пальто распахнуто, и его
+    очертание задают полы; сзади оно цельное, и там читается крой. У нас там
+    читался женский: подол расходится от груди трапецией, талии нет, зад шире
+    плеч. Это не «пышные плечи» — плечи как раз в норме (медиана зазора до
+    тела 10.4 мм при портновских 10-15), — но заказчик назвал ровно то место,
+    где костюм выдаёт себя.
+
+    ЧИСЛО, К КОТОРОМУ ВЕДЁМ. У женского пальто-трапеции подол по обхвату
+    выходит в 1.6-1.9 раза шире бёдер, у мужского сюртука или поддёвки — в
+    1.15-1.3: он либо прямой, либо чуть расклешён от талии, чтобы не мешал
+    шагу. Берём 1.28 — расклешение остаётся, женская трапеция уходит.
+
+    КАК. Ниже талии каждая вершина подтягивается К ОСИ ТЕЛА: её вынос сверх
+    оси умножается на множитель, равный 1 на талии и падающий к подолу.
+    Складки сохраняются — они живут в разбросе выноса, а множитель общий.
+    """
+    import numpy as np
+    tab = _axis_table(body)
+    z0, z1 = tab[0, 0], tab[-1, 0]
+    H = z1 - z0
+    z_waist = z0 + 0.60 * H
+    z_hip = z0 + 0.53 * H
+    cx_h, cy_h, r_hip = _axis_at(tab, z_hip)
+    if r_hip <= 0:
+        print("[пальто] ось тела не снялась — расклешение не трогаю")
+        return 0
+
+    низ = [v for v in coat.data.vertices if v.co.z < z_waist]
+    if not низ:
+        return 0
+    z_hem = min(v.co.z for v in низ)
+    подол = [v for v in низ if v.co.z < z_hem + 0.05]
+
+    def girth():
+        return float(np.percentile(
+            [np.hypot(v.co.x - cx_h, v.co.y - cy_h) for v in подол], 92))
+
+    было = girth() / r_hip
+    if было <= hem_ratio:
+        if verbose:
+            print("[пальто] подол/бедро %.2f — уже не трапеция, не трогаю" % было)
+        return 0
+    n = 0
+    for v in низ:
+        t = (z_waist - v.co.z) / max(z_waist - z_hem, 1e-6)   # 0 талия, 1 подол
+        k = 1.0 + t * (hem_ratio / было - 1.0)
+        cx, cy, _ = _axis_at(tab, v.co.z)
+        v.co.x = cx + (v.co.x - cx) * k
+        v.co.y = cy + (v.co.y - cy) * k
+        n += 1
+    if verbose:
+        print("[пальто] подол/бедро было %.2f, стало %.2f (цель %.2f), "
+              "двинуто вершин %d" % (было, girth() / r_hip, hem_ratio, n))
+    return n
