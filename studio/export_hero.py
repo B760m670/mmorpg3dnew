@@ -94,6 +94,80 @@ def trim(arm, f0, f1):
     print("[клип] обрезан до %d кадров, назван «%s»" % (sc.frame_end, CLIP))
 
 
+IDLE = "покой"
+# ДЫХАНИЕ. ИЗМЕРЕНО у взрослых в покое: 12–20 вдохов в минуту; берём 15, то
+# есть 4 секунды на вдох-выдох. Ход грудной клетки при спокойном дыхании
+# 1–2 см; в кадре через плечо видно верх спины, и полсантиметра подъёма плеч
+# читается, а сантиметр уже похож на вздох.
+IDLE_BREATH_S = 4.0
+IDLE_RISE = 0.005          # на сколько поднимается грудь, м
+IDLE_SWAY = 0.004          # боковое качание таза, м — человек не статуя
+
+
+def idle_clip(arm, fps=40):
+    """Отдельный клип СТОЯНИЯ. Без него человек в покое замирает в шаге.
+
+    ЗАЧЕМ ОТДЕЛЬНЫЙ КЛИП, А НЕ «нулевой кадр ходьбы». Нулевой кадр записи —
+    это момент постановки стопы: ноги врозь, вес на одной. Остановившийся на
+    нём человек выглядит выключенным в полушаге, и это первое, что видно в
+    игре. Стойка — отдельное состояние, а не точка внутри шага.
+
+    Поза берётся из studio/idle.py: она построена наведением костей на
+    направления (не поворотом на углы, потому что покой у нашей сетки —
+    А-поза), решена на левой стороне и отзеркалена на правую, отчего
+    расхождение сторон ровно 0.0 мм.
+    """
+    import idle
+    import math as _m
+    sc = bpy.context.scene
+    n = max(2, int(round(IDLE_BREATH_S * fps)))
+    if arm.animation_data is None:
+        arm.animation_data_create()
+    act = bpy.data.actions.new(IDLE)
+    prev = arm.animation_data.action
+    arm.animation_data.action = act
+
+    idle.apply_base(arm)
+    base_loc = {pb.name: pb.location.copy() for pb in arm.pose.bones}
+    base_rot = {pb.name: pb.rotation_quaternion.copy() for pb in arm.pose.bones}
+
+    root = arm.pose.bones.get("Hips")
+    chest = arm.pose.bones.get("Spine1") or arm.pose.bones.get("Spine")
+    for i in range(n + 1):
+        f = 1 + i
+        t = (i % n) / float(n)
+        # дыхание — один полный цикл на клип; качание вдвое медленнее, чтобы
+        # два движения не совпадали по фазе и не читались как один толчок
+        br = (1.0 - _m.cos(2.0 * _m.pi * t)) * 0.5
+        sw = _m.sin(2.0 * _m.pi * t * 0.5)
+        for pb in arm.pose.bones:
+            pb.location = base_loc[pb.name].copy()
+            pb.rotation_quaternion = base_rot[pb.name].copy()
+        if chest is not None:
+            chest.location = base_loc[chest.name] + Vector((0.0, IDLE_RISE * br, 0.0))
+        if root is not None:
+            root.location = base_loc[root.name] + Vector((IDLE_SWAY * sw, 0.0, 0.0))
+        for pb in arm.pose.bones:
+            pb.keyframe_insert("location", frame=f)
+            pb.keyframe_insert("rotation_quaternion", frame=f)
+    for fc in act.fcurves:
+        for kp in fc.keyframe_points:
+            kp.interpolation = 'LINEAR'
+        fc.update()
+    if hasattr(act, "use_frame_range"):
+        act.use_frame_range = True
+        act.frame_start = 1
+        act.frame_end = n + 1
+    arm.animation_data.action = prev
+    # ДЕЙСТВИЕ НАДО УДЕРЖАТЬ ОТ СБОРЩИКА: у действия без пользователей счётчик
+    # нулевой, и до экспорта оно не доживёт.
+    act.use_fake_user = True
+    print("[клип] «%s»: %d кадров, дыхание %.1f с, подъём груди %.0f мм, "
+          "качание таза %.0f мм" % (IDLE, n + 1, IDLE_BREATH_S,
+                                     IDLE_RISE * 1000, IDLE_SWAY * 1000))
+    return act
+
+
 # ПРЕДЕЛ РАЗМЕРА ТЕКСТУРЫ, в пикселях. Первый вывод весил 80 МБ, из них 46 —
 # две карты пальто по 4096². На телефоне такая карта занимает столько же
 # видеопамяти, сколько весь остальной герой, а на экране 6.9 дюйма её никто
@@ -378,6 +452,9 @@ def main():
     f0, f1, dist, dur, seam = c
     inplace(arm, f0, f1)
     trim(arm, f0, f1)
+    # КЛИП ПОКОЯ СТРОИТСЯ ПОСЛЕ ходьбы и НЕ становится текущим действием:
+    # иначе он затрёт обрезанный цикл, и в файл уедет одна стойка.
+    idle_clip(arm)
 
     tri = sum(len(o.data.loop_triangles) if o.data.loop_triangles else 0
               for o in bpy.data.objects if o.type == 'MESH')

@@ -324,25 +324,43 @@ func _animate(delta: float) -> void:
 ## один оборот, по построению.
 var _clip_t := 0.0
 
+## Ниже этой скорости человек СТОИТ, выше — идёт. Порог, а не плавная смесь:
+## смешивать два клипа без дерева анимации нечем, а рывка на переходе не видно,
+## потому что переход идёт с растворением (третий довод play()).
+const IDLE_SPEED := 0.15
+const BLEND := 0.25               # с, растворение между стойкой и шагом
+
 func _animate_clip(v: float, delta: float) -> void:
-	if person.anim == null or person.clip == "":
+	if person.anim == null:
 		return
-	var a := person.anim.get_animation(person.clip)
-	if a == null:
+	# СТОЙКА — ОТДЕЛЬНОЕ СОСТОЯНИЕ, А НЕ НУЛЕВОЙ КАДР ХОДЬБЫ. Нулевой кадр
+	# записи — момент постановки стопы: ноги врозь, вес на одной. Человек,
+	# замерший на нём, выглядит выключенным в полушаге; в игре это первое, что
+	# бросается в глаза.
+	if v < IDLE_SPEED and person.clip_idle != "":
+		if person.anim.current_animation != person.clip_idle:
+			person.anim.play(person.clip_idle, BLEND)
+			person.anim.speed_scale = 1.0    # дыхание идёт временем, не путём
+		_clip_t = 0.0
+		if lamp != null:
+			lamp.global_position = person.hand_transform(true).origin + Vector3(0, -0.06, 0)
 		return
-	var len_s := a.length
-	if len_s <= 0.0:
+
+	if person.clip == "":
 		return
 	if person.anim.current_animation != person.clip:
-		person.anim.play(person.clip)
-		person.anim.speed_scale = 0.0        # время не ведёт клип, ведёт путь
-	_clip_t += v * delta / person.CLIP_STRIDE * len_s
-	# На месте цикл мягко возвращается к началу: ноги сходятся, а не замирают
-	# в полушаге — то же, что делала рукописная походка.
-	if v < 0.05:
-		_clip_t = lerpf(_clip_t, 0.0, minf(delta * 3.0, 1.0))
-	_clip_t = fposmod(_clip_t, len_s)
-	person.anim.seek(_clip_t, true)
+		person.anim.play(person.clip, BLEND)
+	# СКОРОСТЬ КЛИПА = СКОРОСТЬ ТЕЛА, ДЕЛЁННАЯ НА СОБСТВЕННУЮ СКОРОСТЬ ЗАПИСИ.
+	#
+	# Сперва здесь стояло speed_scale = 0 и ручной seek по пройденному пути.
+	# Считалось это верно, а работало нет: РАСТВОРЕНИЕ МЕЖДУ КЛИПАМИ ГОДО ВЕДЁТ
+	# ТЕМ ЖЕ ВРЕМЕНЕМ, и при нулевом масштабе оно замерзало — человек шёл со
+	# скоростью 0.56 м/с, а поза оставалась стоячей. Поймано замером: тело
+	# двигалось (Z 22.0 -> 22.2), поза не менялась.
+	# Деление на собственную скорость записи даёт ровно то же отсутствие
+	# скольжения, что и ведение путём (клип проходит свой путь за то же время,
+	# что тело — свой), но время у проигрывателя идёт, и переход доходит.
+	person.anim.speed_scale = clampf(v / person.CLIP_SPEED, 0.05, 4.0)
 
 	if lamp != null:
 		var t := person.hand_transform(true)

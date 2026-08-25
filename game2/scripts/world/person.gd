@@ -105,14 +105,17 @@ var _mat_cap: StandardMaterial3D
 # фигурой по канону, а не упадёт.
 const HERO := "res://assets/models/hero.glb"
 
-# ИЗМЕРЕНО на записи 07_01: путь за цикл 1.415 м. Это единица, по которой цикл
-# двигают ПУТЁМ, а не временем, — иначе на любой скорости, кроме одной, ноги
-# начинают скользить.
+# ИЗМЕРЕНО на записи 07_01: путь за цикл 1.415 м, длительность 1.125 с, то есть
+# СОБСТВЕННАЯ СКОРОСТЬ КЛИПА 1.29 м/с. Ею и делится скорость тела: клип,
+# пущенный со скоростью v/1.29, проходит ровно тот путь, что и тело, и стопа не
+# скользит ни на какой скорости.
 const CLIP_STRIDE := 1.415
+const CLIP_SPEED := 1.29
 
 var from_file := false
 var anim: AnimationPlayer
-var clip := ""
+var clip := ""            # цикл ходьбы
+var clip_idle := ""       # стойка
 
 
 func build() -> void:
@@ -148,11 +151,20 @@ func _build_from_file() -> bool:
 		print("[человек] в %s нет скелета — строю по канону" % HERO)
 		root.queue_free()
 		return false
-	if anim != null and anim.get_animation_list().size() > 0:
-		clip = anim.get_animation_list()[0]
+	# КЛИПЫ ИЩЕМ ПО ИМЕНИ, а не по порядку: порядок в файле не обещан никем, а
+	# перепутать ходьбу со стойкой — значит получить человека, шагающего на
+	# месте стоя. Имена задаются в studio/export_hero.py.
+	if anim != null:
+		for a in anim.get_animation_list():
+			if a.findn("покой") >= 0 or a.findn("idle") >= 0:
+				clip_idle = a
+			elif clip == "":
+				clip = a
+		if clip == "" and anim.get_animation_list().size() > 0:
+			clip = anim.get_animation_list()[0]
 	from_file = true
-	print("[человек] тело из файла: костей %d, цикл «%s», сеток %d"
-		% [skel.get_bone_count(), clip, _count_meshes(root)])
+	print("[человек] тело из файла: костей %d, ходьба «%s», покой «%s», сеток %d"
+		% [skel.get_bone_count(), clip, clip_idle, _count_meshes(root)])
 	return true
 
 
