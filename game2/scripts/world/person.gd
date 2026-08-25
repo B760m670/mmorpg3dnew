@@ -109,8 +109,8 @@ const HERO := "res://assets/models/hero.glb"
 # СОБСТВЕННАЯ СКОРОСТЬ КЛИПА 1.29 м/с. Ею и делится скорость тела: клип,
 # пущенный со скоростью v/1.29, проходит ровно тот путь, что и тело, и стопа не
 # скользит ни на какой скорости.
-const CLIP_STRIDE := 1.415
-const CLIP_SPEED := 1.29
+const CLIP_STRIDE := 1.423
+const CLIP_SPEED := 1.294
 
 var from_file := false
 var anim: AnimationPlayer
