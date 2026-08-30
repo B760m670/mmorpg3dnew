@@ -737,6 +737,46 @@ func _physics_process(_dt: float) -> void:
 		who = _walker.global_position
 	_terrain.update_collision(who)
 
+# ПЕРСОНАЖ — ОТДЕЛЬНЫЙ ВЫКЛЮЧАТЕЛЬ, А НЕ ТРЕТЬЕ СОСТОЯНИЕ ЦИКЛА.
+# Циклом «полёт → от третьего лица → от первого» пришлось бы проходить лишний
+# шаг всякий раз, когда нужно просто взлететь, и состояние «персонаж выключен»
+# не пережило бы взлёт. Здесь два независимых переключателя: где я (полёт или
+# пешком) и виден ли герой. Четыре сочетания, и каждое осмысленно.
+var _person_shown := true
+
+var _person_meshes := 0
+
+func _apply_person() -> void:
+	if _walker == null:
+		return
+	# Пешком тень остаётся — свою тень человек видит всегда, и она держит
+	# ощущение, что ты в мире. В полёте тело убирается совсем.
+	_person_meshes = _walker.set_body_shown(_person_shown, _walk_active)
+
+## Задать снаружи (кнопка, живой стенд, позже — настройки игры).
+func set_person_shown(on: bool) -> void:
+	if _person_shown == on:
+		return
+	_on_person_pressed()
+
+func mode_name() -> String:
+	return _mode_name()
+
+## Что именно проставлено мешам героя — чтобы проверять механизм, а не верить
+## кадру: тень собственного тела в первом лице почти всегда вне кадра.
+func person_report() -> String:
+	return "%s, мешей %d, тень %s" % [_mode_name(), _person_meshes,
+		"да" if (_person_shown or _walk_active) else "нет"]
+
+func _on_person_pressed() -> void:
+	_person_shown = not _person_shown
+	_apply_person()
+	if _person_btn != null:
+		_person_btn.text = "ГЕРОЙ: %s" % ("вкл" if _person_shown else "выкл")
+	_update_hud()
+
+var _person_btn: Button
+
 func _toggle_walk() -> void:
 	_walk_active = not _walk_active
 	if _walk_active:
@@ -748,8 +788,10 @@ func _toggle_walk() -> void:
 		# физический шаг находит пустоту и роняет пешехода сквозь мир.
 		_terrain.update_collision(Vector3(gp.x, 0.0, gp.z))
 		_walker.activate(Vector3(gp.x, gy + 0.6, gp.z), _cam.yaw())
+		_apply_person()
 	else:
 		_walker.deactivate()
+		_apply_person()
 		_cam.position = _walker.global_position + Vector3(0, 25.0, 0)
 		_cam.current = true
 		_cam.set_process_input(true)
@@ -835,6 +877,17 @@ func _build_hud(gi_off: bool) -> void:
 	_gi_btn.size = Vector2(200, 56)
 	_gi_btn.pressed.connect(_on_gi_pressed)
 	_diag.add_child(_gi_btn)
+
+	# ГЕРОЙ ВКЛ/ВЫКЛ: пешком выключенный герой означает вид от первого лица,
+	# в полёте — что фигура не заслоняет землю.
+	_person_btn = Button.new()
+	_person_btn.text = "ГЕРОЙ: вкл"
+	_person_btn.add_theme_font_size_override("font_size", 30)
+	_person_btn.anchor_left = 1.0; _person_btn.anchor_right = 1.0
+	_person_btn.position = Vector2(-260, 196)
+	_person_btn.size = Vector2(200, 56)
+	_person_btn.pressed.connect(_on_person_pressed)
+	_diag.add_child(_person_btn)
 	_update_hud()
 
 func _on_debug_pressed() -> void:
@@ -925,7 +978,12 @@ func _update_hud() -> void:
 		+ _coords_line() \
 		+ "FPS: %d / лимит %s · режим: %s (двойной тап — сменить)" % [
 			Engine.get_frames_per_second(), Core.frame_rate_label(),
-			"ПЕШЕХОД·физика" if _walk_active else "ПОЛЁТ"]
+			_mode_name()]
+
+func _mode_name() -> String:
+	if not _walk_active:
+		return "ПОЛЁТ" if _person_shown else "ПОЛЁТ·без героя"
+	return "ПЕШЕХОД·от 3-го лица" if _person_shown else "ПЕШЕХОД·от 1-го лица"
 
 func _terrain_line() -> String:
 	if _terrain == null:

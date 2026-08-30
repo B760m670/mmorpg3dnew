@@ -36,6 +36,12 @@ const CAM_DIST := 2.20            # длина поводка, м
 const CAM_MIN := 0.35             # ближе этого камеру не пускаем даже в упор
 @export var third_person := true
 
+## ПЕРСОНАЖ ВЫКЛЮЧЕН — это не «спрятать меш», а другой способ быть в мире:
+## камера уходит на уровень глаз, тело не рисуется, но тень его остаётся.
+## Нужно это затем, чтобы ходить пешком от первого лица и смотреть на мир, а не
+## на затылок; и чтобы в полёте фигура не мешала разглядывать землю.
+var body_shown := true
+
 ## Вода, в которую можно войти. Пока её тут не было, озеро было наклейкой:
 ## пешеход шёл по дну посуху на полной скорости, а гладь проходила сквозь голову.
 var water: WaterReal
@@ -88,6 +94,21 @@ func _ready() -> void:
 	cam.far = 22000.0
 	cam.top_level = true
 	add_child(cam)
+
+## Показывать ли тело. shadow — оставлять ли от него тень (пешком да, в полёте
+## нет: тень без хозяина посреди поля читается призраком).
+func set_body_shown(on: bool, shadow: bool = true) -> int:
+	body_shown = on
+	third_person = on
+	var n := 0
+	if person != null:
+		n = person.show_body(on, shadow)
+	if lamp != null:
+		# Фонарь не тело: его руку не видно, а свет от него нужен.
+		lamp.visible = true
+	_place_camera()
+	return n
+
 
 func activate(world_pos: Vector3, yaw: float) -> void:
 	global_position = world_pos

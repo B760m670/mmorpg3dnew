@@ -25,6 +25,7 @@ extends Node
 ##   time ЧЧ:ММ           поставить время
 ##   walk X,Z | walk off  поставить ТЕЛО в точку / вернуть свободную камеру
 ##   go ВПЕРЁД[,ВБОК]     задать телу намерение движения (как стик, 0..1)
+##   person on|off        герой виден / выключен (выключен пешком = от 1-го лица)
 ##   body                 что тело чувствует: погружение, брод, плавание
 ##   splash X,Z[,АМПЛ]    бросить в воду — от точки пойдёт круг
 ##   wave X,Z             ПРОВЕРКА решателя: гребень против sqrt(g·d)
@@ -326,6 +327,17 @@ func _exec(line: String) -> void:
 			clock._compute_and_apply()
 			_reply("ok %02d-%02d %s UTC (местное +3), солнце %.1f°"
 				% [mon, day, da[0] if da.size() > 0 else "12:00", clock.sun_elevation_deg])
+		"person":
+			# ОТВЕТ ИДЁТ ЧЕРЕЗ _reply, А НЕ return: разборщик команд объявлен
+			# void, и «return строка» его не компилирует — падает вся сцена,
+			# а не одна команда.
+			if stage == null or not stage.has_method("set_person_shown"):
+				_reply("нет сцены")
+			else:
+				var on := arg.begins_with("on") or arg.begins_with("вкл")
+				stage.call("set_person_shown", on)
+				_reply("ok герой %s — %s" % ["виден" if on else "выключен",
+					stage.call("person_report")])
 		"hud":
 			if hud != null:
 				hud.visible = arg.begins_with("on")

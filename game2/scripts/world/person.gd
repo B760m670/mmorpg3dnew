@@ -118,6 +118,34 @@ var clip := ""            # цикл ходьбы
 var clip_idle := ""       # стойка
 
 
+## Показывать ли тело — и отдельно, отбрасывать ли им тень.
+##
+## ДВА ФЛАГА, А НЕ ОДИН, И ЭТО НЕ ИЗЛИШЕСТВО. От первого лица собственное тело
+## видеть нельзя (камера внутри головы), а СОБСТВЕННУЮ ТЕНЬ на земле человек
+## видит всегда — она и держит ощущение, что ты в мире, а не пара глаз в
+## пустоте. Поэтому «пешком без персонажа» = тело не рисуется, тень остаётся.
+## А в полёте тело убирается совсем: тень без хозяина посреди поля — призрак.
+func show_body(on: bool, shadow: bool = true) -> int:
+	var mode := GeometryInstance3D.SHADOW_CASTING_SETTING_ON if on \
+		else (GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY if shadow
+			else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
+	var n := 0
+	for mi in _meshes(self):
+		mi.visible = on or shadow
+		mi.cast_shadow = mode
+		n += 1
+	return n
+
+
+func _meshes(n: Node) -> Array[MeshInstance3D]:
+	var out: Array[MeshInstance3D] = []
+	if n is MeshInstance3D:
+		out.append(n)
+	for c in n.get_children():
+		out.append_array(_meshes(c))
+	return out
+
+
 func build() -> void:
 	if _build_from_file():
 		return
