@@ -1,0 +1,153 @@
+class_name Clouds
+extends Node3D
+## ОБЛАКА — объёмный слой (raymarch в clouds.gdshader) на куполе-сфере вокруг
+## камеры. Здесь: 3D-шумы (Перлин fBm — форма, Ворли — эрозия краёв), купол,
+## связь с солнцем/погодой/временем. Аддитивно — базовое небо не трогается.
+##
+## Движение: шум сносится ветром по времени; на быстрых сутках (5 мин) — ускоренно.
+## Погода: coverage (0 ясно .. 1 сплошь) — берётся из пасмурности сцены.
+
+@export var sun: DirectionalLight3D
+@export var clock: WorldClock                 # для дня/ночи (высота Солнца)
+@export var night_sky: NightSky               # для света Луны ночью
+@export var coverage: float = 0.42
+@export var day_time_scale: float = 288.0     # как у WorldClock (сутки=5 мин)
+@export var weather_enabled: bool = true      # false → покрытие фиксировано (для стенда)
+
+# купол невелик: полотно облаков — не «горизонт мира», а канва для raymarch;
+# меньший радиус → слабее равномерная дымка depth-fog на нём (иначе облака
+# сереют до невидимости и сливаются с небом). Слой облаков (1200..3200 м)
+# считается аналитически по мировому лучу, от радиуса купола не зависит.
+const DOME_R := 2500.0
+# Опорные величины полудня, от которых считаются доли света для шейдера:
+# энергия луча (WorldClock.SUN_BASE_ENERGY) и рассеянный свет неба в полдень
+# 21 июня в Гатчине (полная горизонтальная 95 клк минус прямая 80 клк).
+const SUN_REF := 4.3
+var _mat: ShaderMaterial
+var _t: float = 0.0
+
+# --- НАСТОЯЩАЯ СМЕНА ПОГОДЫ: покрытие медленно дышит (фронты приходят/уходят) ---
+# Не «вечное пасмурное»: coverage плавно гуляет вокруг среднего по времени
+# (в масштабе часов; на 5-мин сутках заметно за десятки секунд). Ветер при этом
+# сносит сами облака (движение). current_coverage — для HUD.
+var _weather_t: float = 0.0
+var current_coverage: float = 0.42
+
+func _make_noise_3d(cellular: bool, freq: float, octaves: int) -> NoiseTexture3D:
+	var n := FastNoiseLite.new()
+	n.noise_type = FastNoiseLite.TYPE_CELLULAR if cellular else FastNoiseLite.TYPE_PERLIN
+	n.frequency = freq
+	n.fractal_type = FastNoiseLite.FRACTAL_FBM
+	n.fractal_octaves = octaves
+	if cellular:
+		n.cellular_distance_function = FastNoiseLite.DISTANCE_EUCLIDEAN
+		n.cellular_return_type = FastNoiseLite.RETURN_DISTANCE
+	var t := NoiseTexture3D.new()
+	t.width = 64; t.height = 64; t.depth = 64
+	t.seamless = true
+	t.normalize = true
+	t.noise = n
+	return t
+
+func build() -> void:
+	_mat = ShaderMaterial.new()
+	_mat.shader = load("res://shaders/world/clouds.gdshader")
+	# НИЗКАЯ частота — крупные связные клубы (высокая давала «крупу»/шум вдоль луча)
+	_mat.set_shader_parameter("shape_tex", _make_noise_3d(false, 0.035, 3))  # форма
+	_mat.set_shader_parameter("detail_tex", _make_noise_3d(true, 0.10, 2))   # эрозия краёв
+	_mat.render_priority = 0             # облака поверх Луны и звёзд (см. night_sky)
+	_mat.set_shader_parameter("coverage", coverage)
+	_mat.set_shader_parameter("wind_x", 0.004)
+	_mat.set_shader_parameter("wind_z", 0.002)
+
+	var sphere := SphereMesh.new()
+	sphere.radius = DOME_R
+	sphere.height = DOME_R * 2.0
+	sphere.radial_segments = 32
+	sphere.rings = 16
+	var mi := MeshInstance3D.new()
+	mi.mesh = sphere
+	mi.material_override = _mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.custom_aabb = AABB(Vector3(-DOME_R, -DOME_R, -DOME_R), Vector3(DOME_R * 2.0, DOME_R * 2.0, DOME_R * 2.0))
+	add_child(mi)
+	print("[clouds] объёмный слой: купол R=%.0f, покрытие %.2f (raymarch Перлин-Ворли)" % [DOME_R, coverage])
+
+## текстовая сводка погоды для HUD
+func weather_label() -> String:
+	var c := current_coverage
+	var name := "ясно"
+	if c > 0.8: name = "сплошная облачность"
+	elif c > 0.62: name = "пасмурно"
+	elif c > 0.45: name = "облачно"
+	elif c > 0.28: name = "переменная облачность"
+	else: name = "малооблачно"
+	return "%s (%.0f%%)" % [name, c * 100.0]
+
+func _process(delta: float) -> void:
+	if _mat == null:
+		return
+	# ДРЕЙФ ОБЛАКОВ ИДЁТ В НАСТОЯЩИХ СЕКУНДАХ, а не в сжатых игровых.
+	#
+	# Было: _t += delta * day_time_scale * 0.04, то есть в 11.5 раза быстрее
+	# реального времени. Считаем, что это значило на кадре: шум сносится со
+	# скоростью wind_x / 0.00055 = 7.3 м/с сим-времени, а на экране это 84 м/с —
+	# триста километров в час. Отсюда и «просто поток облаков»: небо ехало
+	# мимо, как лента конвейера.
+	# Честно про несогласованность: сутки на стенде сжаты в 5 минут, и облака
+	# теперь живут не в том же времени, что Солнце. Согласовать их можно только
+	# отказавшись от сжатия суток — иначе при любом множителе получается лента.
+	# Небо важнее арифметики: настоящий ветер над Гатчиной 5-10 м/с, столько и
+	# ставим.
+	_t += delta
+	_mat.set_shader_parameter("time_s", _t)
+
+	# смена погоды: медленное «дыхание» покрытия (сумма разнопериодных волн —
+	# натуральнее одиночной синусоиды: фронты то плотнее, то с просветами)
+	if weather_enabled:
+		_weather_t += delta * day_time_scale     # в сим-секундах (сутки=86400)
+		var w := 0.60 * sin(TAU * _weather_t / 43200.0) \
+			+ 0.30 * sin(TAU * _weather_t / 15300.0 + 1.7) \
+			+ 0.10 * sin(TAU * _weather_t / 6100.0 + 0.5)
+		current_coverage = clampf(coverage + 0.26 * w, 0.18, 0.92)
+	else:
+		current_coverage = coverage
+	_mat.set_shader_parameter("coverage", current_coverage)
+	# купол едет за камерой; солнце — из направления света
+	var cam := get_viewport().get_camera_3d()
+	if cam != null:
+		global_position = cam.global_position
+	if sun != null:
+		# к солнцу = +Z оси света (look_at ставит -Z на -to_sun → +Z = to_sun)
+		var to_sun := sun.global_transform.basis.z.normalized()
+		_mat.set_shader_parameter("sun_dir", to_sun)
+		_mat.set_shader_parameter("sun_color", Vector3(sun.light_color.r, sun.light_color.g, sun.light_color.b))
+
+	# СВЕТ ОБЛАКОВ — ДОЛЯ ОТ ПОЛУДЕННОГО, А НЕ КОНСТАНТА С ГЕЙТОМ.
+	#
+	# Раньше здесь стояли два множителя «дневности» по высоте Солнца, гасившие
+	# зашитые в шейдер константы. Работало это ровно до тех пор, пока экспозиция
+	# была почти постоянной. Как только она честно выросла к ночи (×18), кадр в
+	# 22:00 выжегся в белое целиком — ИЗМЕРЕНО, а не показалось. Свет, не
+	# связанный с люксами, рано или поздно всплывает наружу.
+	if clock != null and sun != null:
+		_mat.set_shader_parameter("sun_energy",
+			clampf(sun.light_energy / SUN_REF, 0.0, 1.3))
+		# ОДНО ВЫРАЖЕНИЕ НА ЗЕМЛЮ И НА ОБЛАКА. Земля ночью получает добавку
+		# NIGHT_GLOW (воздушное свечение и звёзды, решение ради читаемости).
+		# Если облакам её не дать, выйдет нелепость: земля освещена свечением
+		# неба, а само небо в этом месте — чернильное пятно.
+		var sky_e: float = (clock.sky_diffuse_klx * WeatherSky.AMB_PER_KLX
+			+ WeatherSky.NIGHT_GLOW) / (WeatherSky.SKY_REF_KLX * WeatherSky.AMB_PER_KLX)
+		_mat.set_shader_parameter("sky_energy", clampf(sky_e, 0.0, 1.3))
+		var sc: Array = WeatherSky.sky_colors(
+			WeatherSky.overcast_from_coverage(current_coverage), clock.sun_elevation_deg)
+		var hor: Vector3 = sc[0]
+		var zen: Vector3 = sc[1]
+		var tint := zen.lerp(hor, 0.5)
+		tint /= maxf(maxf(tint.x, tint.y), maxf(tint.z, 1.0e-4))
+		_mat.set_shader_parameter("sky_tint", tint)
+	if night_sky != null:
+		_mat.set_shader_parameter("moon_dir", night_sky.moon_dir_world)
+		var ml := night_sky.moon_light
+		_mat.set_shader_parameter("moon_light", Vector3(ml.r, ml.g, ml.b))

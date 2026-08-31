@@ -1,0 +1,333 @@
+{
+ "note": "Библиотека настоящих поверхностей. ЛИЦЕНЗИЯ: CC0 1.0 (ambientCG) — общественное достояние, авторство указывать не нужно, коммерческое использование без ограничений.",
+ "rule": "В проекте держим ТОЛЬКО PBRPhotogrammetry. Процедурные (PBRProcedural) и прикидочные (PBRApproximated) выброшены: их видно как подделку. Отдельно: ПЛОСКОЙ НАСТОЯЩЕЙ ТРАВЫ НЕ БЫВАЕТ — фотограмметрия снимает поверхность, а трава это объём. Трава будет геометрией, не текстурой.",
+ "scale_note": "cm_x/cm_y — настоящий размер отснятого куска в САНТИМЕТРАХ; по нему тайлить.",
+ "materials": [
+  {
+   "id": "Bark008",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 0,
+   "cm_y": 0,
+   "tags": [
+    "8",
+    "bark",
+    "brown",
+    "green",
+    "moss",
+    "tree"
+   ]
+  },
+  {
+   "id": "Bricks038",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 110,
+   "cm_y": 110,
+   "tags": [
+    "38",
+    "bricks",
+    "old",
+    "wall",
+    "white"
+   ]
+  },
+  {
+   "id": "Bricks084",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 0,
+   "cm_y": 0,
+   "tags": [
+    "84",
+    "beige",
+    "bricks",
+    "sandstone",
+    "yellow"
+   ]
+  },
+  {
+   "id": "Bricks085",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 240,
+   "cm_y": 120,
+   "tags": [
+    "85",
+    "bricks",
+    "factory",
+    "red",
+    "stone",
+    "wall"
+   ]
+  },
+  {
+   "id": "Bricks090",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 150,
+   "cm_y": 150,
+   "tags": [
+    "090",
+    "90",
+    "bricks",
+    "bricks090",
+    "dirty",
+    "industrial"
+   ]
+  },
+  {
+   "id": "Bricks100",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 0,
+   "cm_y": 0,
+   "tags": [
+    "100",
+    "beige",
+    "brick",
+    "bricks",
+    "medival",
+    "old"
+   ]
+  },
+  {
+   "id": "Concrete040",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 140,
+   "cm_y": 140,
+   "tags": [
+    "40",
+    "brown",
+    "concrete",
+    "rough"
+   ]
+  },
+  {
+   "id": "Ground020",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 0,
+   "cm_y": 0,
+   "tags": [
+    "20",
+    "dirt",
+    "forest",
+    "grass",
+    "ground",
+    "leaves"
+   ]
+  },
+  {
+   "id": "Ground023",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 0,
+   "cm_y": 0,
+   "tags": [
+    "23",
+    "brown",
+    "dirt",
+    "forest",
+    "ground",
+    "leaves"
+   ]
+  },
+  {
+   "id": "Ground024",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 0,
+   "cm_y": 0,
+   "tags": [
+    "24",
+    "dirt",
+    "forest",
+    "ground",
+    "moss",
+    "mud"
+   ]
+  },
+  {
+   "id": "Ground026",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 0,
+   "cm_y": 0,
+   "tags": [
+    "26",
+    "clay",
+    "flat",
+    "ground",
+    "mud",
+    "smooth"
+   ]
+  },
+  {
+   "id": "Ground030",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 0,
+   "cm_y": 0,
+   "tags": [
+    "30",
+    "dirt",
+    "grass",
+    "ground",
+    "path",
+    "pathway"
+   ]
+  },
+  {
+   "id": "Ground037",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 210,
+   "cm_y": 210,
+   "tags": [
+    "037",
+    "37",
+    "damp",
+    "earth",
+    "forest",
+    "grass"
+   ]
+  },
+  {
+   "id": "Ground048",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 140,
+   "cm_y": 140,
+   "tags": [
+    "48",
+    "brown",
+    "dirt",
+    "ground",
+    "soil"
+   ]
+  },
+  {
+   "id": "Ground062S",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 160,
+   "cm_y": 160,
+   "tags": [
+    "62",
+    "brown",
+    "dirt",
+    "gravel",
+    "ground",
+    "pebbles"
+   ]
+  },
+  {
+   "id": "Ground068",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 0,
+   "cm_y": 0,
+   "tags": [
+    "68",
+    "dirt",
+    "ground",
+    "moss",
+    "rock",
+    "stone"
+   ]
+  },
+  {
+   "id": "Moss001",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 45,
+   "cm_y": 45,
+   "tags": [
+    "1",
+    "ground",
+    "moss",
+    "mossy"
+   ]
+  },
+  {
+   "id": "PaintedPlaster006",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 0,
+   "cm_y": 0,
+   "tags": [
+    "6",
+    "broken",
+    "concrete",
+    "facade",
+    "painted",
+    "patches"
+   ]
+  },
+  {
+   "id": "PaintedPlaster018",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 0,
+   "cm_y": 0,
+   "tags": [
+    "18",
+    "damaged",
+    "painted",
+    "plaster",
+    "yellow"
+   ]
+  },
+  {
+   "id": "PavingStones138",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 125,
+   "cm_y": 250,
+   "tags": [
+    "138",
+    "clean",
+    "gray",
+    "medival",
+    "moss",
+    "old"
+   ]
+  },
+  {
+   "id": "PavingStones139",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 155,
+   "cm_y": 155,
+   "tags": [
+    "139",
+    "medival",
+    "moss",
+    "old",
+    "overgrown",
+    "pavement"
+   ]
+  },
+  {
+   "id": "Rock046L",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 200,
+   "cm_y": 200,
+   "tags": [
+    "46",
+    "grey",
+    "moss",
+    "rock"
+   ]
+  },
+  {
+   "id": "Rock064",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 0,
+   "cm_y": 0,
+   "tags": [
+    "064",
+    "64",
+    "forest",
+    "gray",
+    "green",
+    "irregular"
+   ]
+  },
+  {
+   "id": "Rocks025",
+   "method": "PBRPhotogrammetry",
+   "cm_x": 190,
+   "cm_y": 190,
+   "tags": [
+    "25",
+    "floor",
+    "medieval",
+    "rocks",
+    "stone",
+    "wall"
+   ]
+  }
+ ]
+}

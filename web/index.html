@@ -1,0 +1,61 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Гатчинский парк</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<style>
+	/* СТРАНИЦА ОДНОТЕМНАЯ, И ЭТО ВЫБОР, А НЕ УПУЩЕНИЕ. Здесь не документ, а
+	   кадр: свет в нём считается физикой сцены, и подстраивать его под светлую
+	   или тёмную тему читателя значило бы врать про освещённость. Фон задан явно,
+	   чтобы страница не занимала подложку у хозяина. */
+	html, body { margin: 0; height: 100%; background: #0b0d10; overflow: hidden; }
+	canvas { display: block; }
+	/* HUD — ПРИБОРНАЯ ПАНЕЛЬ НАД КАДРОМ, а не подпись к нему.
+	   Кегль от ширины экрана: на телефоне в 440 точек строка в 12 пикселей не
+	   помещается и уезжает за край.
+	   Тёмная подложка обязательна: тень от букв не спасает над солнечной
+	   дорожкой — там кадр уходит в чистое белое, и белый текст по нему пропадал
+	   целиком (проверено на кадре 440x956). */
+	#hud, #boot {
+		position: fixed; z-index: 10;
+		left: max(8px, env(safe-area-inset-left));
+		top: max(8px, env(safe-area-inset-top));
+		max-width: min(52ch, calc(100% - 16px));
+		padding: 6px 9px; border-radius: 6px;
+		background: rgba(9, 12, 16, .42);
+		backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px);
+		font: clamp(8.5px, 2.2vw, 12px)/1.6 ui-monospace, "SF Mono", Menlo, monospace;
+		font-variant-numeric: tabular-nums;
+		color: #eef2f6; white-space: pre-wrap; pointer-events: none;
+		text-shadow: 0 1px 2px rgba(0,0,0,.7);
+	}
+	/* Переключатель режима — единственное, что на экране можно нажать, поэтому
+	   он стоит там, куда дотягивается большой палец, и называет, КУДА ведёт
+	   («встать на землю»), а не как называется режим. */
+	#mode {
+		position: fixed; z-index: 11;
+		right: max(12px, env(safe-area-inset-right));
+		bottom: max(16px, calc(env(safe-area-inset-bottom) + 8px));
+		padding: 11px 16px; min-height: 44px;
+		border: 1px solid rgba(238,242,246,.28); border-radius: 999px;
+		background: rgba(9,12,16,.46);
+		backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px);
+		font: 500 14px/1 ui-monospace, "SF Mono", Menlo, monospace;
+		letter-spacing: .02em; color: #eef2f6;
+		-webkit-tap-highlight-color: transparent; cursor: pointer;
+		transition: background .16s ease, border-color .16s ease;
+	}
+	#mode:hover { background: rgba(9,12,16,.62); border-color: rgba(238,242,246,.44); }
+	#mode:active { background: rgba(9,12,16,.74); }
+	#mode:focus-visible { outline: 2px solid #eef2f6; outline-offset: 2px; }
+	@media (prefers-reduced-motion: reduce) { #mode { transition: none; } }
+</style>
+<div id="boot">поднимаю…</div>
+<div id="hud"></div>
+<script type="importmap">
+{ "imports": {
+	"three": "./vendor/three.module.js",
+	"three/webgpu": "./vendor/three.module.js",
+	"three/tsl": "./vendor/three.module.js"
+} }
+</script>
+<script type="module" src="./src/main.js"></script>

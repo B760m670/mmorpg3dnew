@@ -8,11 +8,52 @@ extends CharacterBody3D
 
 signal toggle_requested
 
+# preload, а не имя класса: имя берётся из кэша проекта, а на свежем запуске
+# кэш может ещё не знать про новый файл — тогда сцена вовсе не грузится
+# («Identifier "WaterPhysics" not declared»). Проверено на этом же файле.
+const WP := preload("res://scripts/world/water_physics.gd")
+
 const GRAVITY := 9.81
 const EYE := 1.62                 # уровень глаз от ног, м
 @export var rot_sensitivity := 0.0026
-@export var walk_speed := 1.6
-@export var run_speed := 6.5
+# СКОРОСТИ ПРИВЕДЕНЫ К ЧЕЛОВЕЧЕСКИМ. Стояло 6.5 м/с — это 23 км/ч, скорость
+# спринтера на дистанции, а не горожанина. При такой скорости никакой набор
+# клипов не спасает: пространство смешивания кончается на 1.89 м/с, дальше
+# стопы просто скользят. ИЗМЕРЕНО у взрослых: спокойная ходьба 1.2-1.4 м/с,
+# быстрая 1.8-2.0, лёгкий бег 3.0-3.5. Клипов бега у нас пока нет, поэтому
+# верхняя скорость держится у верхней точки набора.
+@export var walk_speed := 1.3
+@export var run_speed := 1.9
+
+# --- ВИД ЧЕРЕЗ ПЛЕЧО ---
+# Камера была В ГЛАЗАХ, и тела в кадре не было никогда. Между «тело есть» и
+# «тело видно» — вся разница: пока фигуру не видно, её не с чем сравнить и
+# нечего чинить. Числа ниже — из устройства кадра, а не из вкуса:
+#   ПЛЕЧО. Смещение вбок ставит фигуру не по центру, освобождая ту треть кадра,
+#     куда идёт взгляд. Ровно за спиной персонаж закрывает то, на что смотришь.
+#   ВЫСОТА чуть ниже глаз: камера смотрит на мир немного снизу, и это ставит
+#     ближайшую поверхность в полтора-три метра — а разбор чужих кадров дал, что
+#     дальше двух-трёх метров никакая работа над материалом не видна.
+#   ДЛИНА поводка. 2.2 м — фигура занимает около трети высоты кадра: видно
+#     позу и походку, но не превращается в спину во весь экран.
+const CAM_SHOULDER := 0.42        # вбок от оси тела, м
+const CAM_HEIGHT := 1.52          # высота точки прицела, м
+const CAM_DIST := 2.20            # длина поводка, м
+const CAM_MIN := 0.35             # ближе этого камеру не пускаем даже в упор
+@export var third_person := true
+
+## ПЕРСОНАЖ ВЫКЛЮЧЕН — это не «спрятать меш», а другой способ быть в мире:
+## камера уходит на уровень глаз, тело не рисуется, но тень его остаётся.
+## Нужно это затем, чтобы ходить пешком от первого лица и смотреть на мир, а не
+## на затылок; и чтобы в полёте фигура не мешала разглядывать землю.
+var body_shown := true
+
+## Вода, в которую можно войти. Пока её тут не было, озеро было наклейкой:
+## пешеход шёл по дну посуху на полной скорости, а гладь проходила сквозь голову.
+var water: WaterReal
+var submersion := 0.0             # насколько тело в воде, м (0 — посуху)
+var swimming := false
+var _step_acc := 0.0              # пройденный путь, для следов на воде
 
 var cam: Camera3D
 var _yaw := 0.0
@@ -25,6 +66,10 @@ var _press_time: Dictionary = {}
 var _last_tap_ms: int = -100000
 var _last_tap_pos := Vector2.ZERO
 
+var person: Person
+var lamp: Lantern
+var _phase := 0.0                 # фаза шага, радианы
+
 func _ready() -> void:
 	var col := CollisionShape3D.new()
 	var cap := CapsuleShape3D.new()
@@ -33,12 +78,43 @@ func _ready() -> void:
 	col.shape = cap
 	col.position = Vector3(0, 1.75 / 2.0, 0)      # ноги в origin тела
 	add_child(col)
+
+	# ТЕЛО. Раньше здесь была только капсула коллизии: пешеход существовал для
+	# физики и не существовал для глаза.
+	person = Person.new()
+	add_child(person)
+	person.build()
+
+	# ФОНАРЬ В РУКЕ. Не реквизит: это единственный источник света в ночной
+	# сцене, и он же ставит фигуру в кадре — свет идёт снизу и сбоку, и по нему
+	# читается объём. Керосиновая лампа, 12 кандел, 1900 K.
+	lamp = Lantern.make("лампа10")
+	add_child(lamp)
+
+	# Камера НЕ ребёнок тела: тело крутится по yaw целиком, а камера должна
+	# уметь висеть на поводке и подтягиваться при упоре в стену. Держим её
+	# отдельно и ставим каждый кадр сами.
 	cam = Camera3D.new()
 	cam.fov = 66.0                                 # человеческое поле зрения
 	cam.near = 0.05
 	cam.far = 22000.0
-	cam.position = Vector3(0, EYE, 0)
+	cam.top_level = true
 	add_child(cam)
+
+## Показывать ли тело. shadow — оставлять ли от него тень (пешком да, в полёте
+## нет: тень без хозяина посреди поля читается призраком).
+func set_body_shown(on: bool, shadow: bool = true) -> int:
+	body_shown = on
+	third_person = on
+	var n := 0
+	if person != null:
+		n = person.show_body(on, shadow)
+	if lamp != null:
+		# Фонарь не тело: его руку не видно, а свет от него нужен.
+		lamp.visible = true
+	_place_camera()
+	return n
+
 
 func activate(world_pos: Vector3, yaw: float) -> void:
 	global_position = world_pos
@@ -54,18 +130,53 @@ func activate(world_pos: Vector3, yaw: float) -> void:
 	_apply_look()
 
 func deactivate() -> void:
-	visible = false
+	# ТЕЛО ОСТАЁТСЯ ВИДИМЫМ. Раньше здесь стояло visible = false, и при переходе
+	# в полёт персонаж пропадал из мира вовсе. Это неверно по существу: человек
+	# не исчезает оттого, что на него перестали смотреть его глазами. И это
+	# мешало работать — фигуру нельзя было обойти и рассмотреть со стороны,
+	# а судить о ней по виду из-за её же плеча нельзя.
 	set_physics_process(false)
 	set_process_input(false)
 
 func yaw() -> float:
 	return _yaw
 
+## Задать намерение движения ИЗВНЕ — тем же вектором, что даёт стик (длина 0..1).
+## Нужно, чтобы тело можно было вести не только пальцем: стенд проверяет им
+## брод и плавание, а позже этим же пойдут кат-сцены и другие персонажи.
+func set_intent(v: Vector2) -> void:
+	_move_vec = v if v.length() <= 1.0 else v.normalized()
+
 func _apply_look() -> void:
 	_pitch = clampf(_pitch, deg_to_rad(-85.0), deg_to_rad(85.0))
-	cam.transform.basis = Basis(Vector3.UP, 0.0)   # yaw несёт тело, pitch — камера
 	rotation = Vector3(0, _yaw, 0)
-	cam.rotation = Vector3(_pitch, 0, 0)
+	_place_camera()
+
+
+## Поставить камеру: от точки прицела на плече — назад по взгляду, но не дальше
+## первой стены. Без этой проверки камера уходит внутрь рельефа, и кадр
+## показывает изнанку земли — на холмистой Гатчине это происходит постоянно.
+func _place_camera() -> void:
+	if cam == null:
+		return
+	if not third_person:
+		cam.global_position = global_position + Vector3(0, EYE, 0)
+		cam.global_rotation = Vector3(_pitch, _yaw, 0)
+		return
+	var basis := Basis(Vector3.UP, _yaw) * Basis(Vector3.RIGHT, _pitch)
+	var aim := global_position + Vector3(0, CAM_HEIGHT, 0) \
+		+ (Basis(Vector3.UP, _yaw) * Vector3.RIGHT) * CAM_SHOULDER
+	var back := basis * Vector3.BACK          # -Z камеры смотрит вперёд
+	var want := aim + back * CAM_DIST
+	var space := get_world_3d().direct_space_state
+	var q := PhysicsRayQueryParameters3D.create(aim, want)
+	q.exclude = [get_rid()]
+	var hit := space.intersect_ray(q)
+	if hit.has("position"):
+		var d: float = (hit["position"] as Vector3).distance_to(aim)
+		want = aim + back * maxf(d - 0.12, CAM_MIN)
+	cam.global_position = want
+	cam.global_rotation = Vector3(_pitch, _yaw, 0)
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
@@ -113,13 +224,235 @@ func _physics_process(delta: float) -> void:
 	var right := Vector3(cos(_yaw), 0.0, -sin(_yaw))
 	var mag := _move_vec.length()
 	var speed := lerpf(walk_speed, run_speed, clampf((mag - 0.35) / 0.65, 0.0, 1.0))
+
+	# --- СКОЛЬКО ТЕЛА В ВОДЕ ---
+	# Меряем от СТУПНЕЙ до глади, а не толщу воды: когда тело всплыло, эти
+	# числа расходятся, и важно именно погружение.
+	var was := submersion
+	submersion = 0.0
+	if water != null:
+		var surf := water.surface_y(global_position.x, global_position.z)
+		if not is_nan(surf):
+			submersion = clampf(surf - global_position.y, 0.0, WP.BODY_H)
+	swimming = submersion >= WP.swim_depth()
+
+	if submersion > 0.02:
+		# ВОДА ДЕРЖИТ И ТОРМОЗИТ. Предел брода — не множитель «в воде медленнее»,
+		# а решение F_толчка = ½·ρ·Cd·A·v²: чем глубже, тем больше площадь, о
+		# которую бьётся вода, и тем меньше веса осталось на ногах, чтобы
+		# оттолкнуться. По грудь получается 0.33 м/с — быстрее человек не идёт.
+		# ТОЛЬКО ДЛЯ БРОДА: пловец не отталкивается от дна, и предел брода к нему
+		# не относится. ИЗМЕРЕНО: без этой оговорки на глубине предел равен нулю
+		# (на ногах 0% веса), и пловец стоял на месте — скорость 0.00 м/с.
+		if not swimming:
+			speed = minf(speed, WP.wade_speed(submersion))
+		# СЛЕД НА ВОДЕ: круги от шагов. Шаг человека 0.72 м; всплеск тем выше,
+		# чем быстрее нога входит в воду.
+		_step_acc += Vector2(velocity.x, velocity.z).length() * delta
+		if _step_acc > 0.72:
+			_step_acc = 0.0
+			var v := Vector2(velocity.x, velocity.z).length()
+			water.disturb(global_position, clampf(0.008 + v * 0.012, 0.0, 0.05))
+		# ВХОД В ВОДУ — всплеск заметно крупнее шага
+		if was <= 0.02:
+			water.disturb(global_position, 0.06)
+
 	var wish := (right * _move_vec.x + fwd * (-_move_vec.y))
 	var horiz := wish.normalized() * speed * mag if wish.length_squared() > 0.001 else Vector3.ZERO
-	velocity.x = horiz.x
-	velocity.z = horiz.z
-	# настоящая гравитация
-	if is_on_floor():
-		velocity.y = minf(velocity.y, 0.0)
+
+	if swimming:
+		# ПЛАВАНИЕ. Опоры нет — на ногах меньше пятой части веса. Тело ищет
+		# равновесие между весом и архимедовой силой; у человека плотность
+		# 985 кг/м³ против 999.7 у воды, поэтому равновесие лежит там, где над
+		# водой остаётся голова, — само собой, без заданной «высоты плавания».
+		var net := WP.buoyancy(submersion) - WP.BODY_M * GRAVITY
+		var acc := net / WP.BODY_M
+		# вертикальное сопротивление воды: то же ½·ρ·Cd·A·v², площадь — сверху
+		var vy := velocity.y
+		var drag := 0.5 * WP.RHO * WP.CD * 0.16 * vy * absf(vy) \
+			/ WP.BODY_M
+		velocity.y += (acc - drag) * delta
+		# скорость пловца-любителя, м/с — не бег
+		var sw := minf(mag * 1.0, 1.0)
+		horiz = horiz.normalized() * sw if horiz.length_squared() > 0.001 else Vector3.ZERO
+		velocity.x = horiz.x
+		velocity.z = horiz.z
 	else:
-		velocity.y -= GRAVITY * delta
+		velocity.x = horiz.x
+		velocity.z = horiz.z
+		# настоящая гравитация
+		if is_on_floor():
+			velocity.y = minf(velocity.y, 0.0)
+		else:
+			velocity.y -= GRAVITY * delta
 	move_and_slide()
+	_animate(delta)
+	_place_camera()
+
+
+# --- ПОХОДКА ---
+# Фаза шага ведётся ПРОЙДЕННЫМ ПУТЁМ, а не временем. Разница принципиальная:
+# при ведении временем ноги на месте перебирают в воздухе, а при разгоне
+# скользят по земле — это и есть та самая «плывущая» походка, по которой
+# бесплатные модели узнаются с первого взгляда. Путь такого не даёт: за один
+# шаг длиной STRIDE фаза всегда проходит ровно полкруга, с какой бы скоростью
+# тело ни шло.
+# Длина шага 0.72 м — та же величина, по которой уже считаются круги на воде
+# от шагов; один источник правды.
+const STRIDE := 0.72
+
+func _animate(delta: float) -> void:
+	if person == null or person.skel == null:
+		return
+	var v := Vector2(velocity.x, velocity.z).length()
+	if person.from_file:
+		_animate_clip(v, delta)
+		return
+	_phase += (v * delta / STRIDE) * PI
+	# На месте фаза мягко возвращается к нулю: ноги сходятся, а не замирают в
+	# полушаге. Без этого остановка выглядит выключенным питанием.
+	if v < 0.05:
+		_phase = lerp_angle(_phase, 0.0, minf(delta * 6.0, 1.0))
+
+	var s := sin(_phase)
+	var c := cos(_phase)
+	# Размах ведёт скорость: шагом руки почти не двигаются, бегом — сильно.
+	var amp := clampf(v / run_speed, 0.0, 1.0)
+	var leg := deg_to_rad(lerpf(11.0, 34.0, amp))
+	var arm := deg_to_rad(lerpf(7.0, 30.0, amp))
+
+	_bone_pitch("thigh.L", s * leg)
+	_bone_pitch("thigh.R", -s * leg)
+	# Колено сгибается только назад и только на заносе — вперёд оно не гнётся.
+	_bone_pitch("shin.L", -maxf(-s, 0.0) * leg * 1.5)
+	_bone_pitch("shin.R", -maxf(s, 0.0) * leg * 1.5)
+	# Руки идут ПРОТИВОХОДОМ к ногам — это не стиль, это равновесие: иначе тело
+	# закручивало бы вокруг вертикали на каждом шаге.
+	_bone_pitch("arm.L", -s * arm)
+	_bone_pitch("arm.R", s * arm)
+
+	# Тело слегка подпрыгивает: две вершины на шаг (по одной на каждую ногу),
+	# поэтому удвоенная частота. Амплитуда 1.5 см на ходьбе — больше выглядит
+	# скачкой.
+	var bob := (1.0 - absf(c)) * lerpf(0.010, 0.032, amp)
+	_bone_shift("hips", Vector3(0, bob, 0))
+
+	# Фонарь — в правой кисти, чуть впереди ладони.
+	if lamp != null:
+		var t := person.hand_transform(true)
+		lamp.global_position = t.origin + Vector3(0, -0.06, 0)
+
+
+## ЗАПИСАННЫЙ ЦИКЛ, ВЕДОМЫЙ ПУТЁМ. Принцип тот же, что был у рукописной
+## походки, и он важнее самой походки: если крутить клип временем (speed_scale),
+## то при любой скорости, кроме одной-единственной, стопа поедет по земле —
+## получится конькобежец. Если же двигать клип ПРОЙДЕННЫМ ПУТЁМ, стопа встаёт
+## там, где встала, при любой скорости: за путь CLIP_STRIDE клип проходит ровно
+## один оборот, по построению.
+var _clip_t := 0.0
+var _tree: AnimationTree = null
+
+
+## ПРОСТРАНСТВО СМЕШИВАНИЯ ПО СКОРОСТИ вместо растяжения одного клипа.
+##
+## РАСТЯЖЕНИЕ БЫЛО ГЛАВНОЙ ПРИЧИНОЙ «ХОДЯЧЕГО МАНЕКЕНА». Один клип шага гнался
+## временем: speed_scale = v / 1.294. При 0.5 м/с это 0.39x — ЗАМЕДЛЕННАЯ
+## СЪЁМКА шага, а не медленный шаг. У человека медленный шаг — другая длина
+## шага, другая поза корпуса и другой мах руки; замедлить быстрый шаг до
+## медленного нельзя, как нельзя замедлить бег до ходьбы.
+##
+## Теперь клипов четыре, и у каждого СВОЯ ИЗМЕРЕННАЯ скорость: покой 0,
+## медленный 0.38, обычный 1.29, быстрый 1.89 м/с. Godot смешивает соседние по
+## скорости тела. При скорости, равной собственной скорости клипа, стопа не
+## скользит по построению; между ними — тем меньше, чем ближе точки.
+func _build_tree() -> void:
+	if person == null or person.anim == null or person.набор.is_empty():
+		return
+	var bs := AnimationNodeBlendSpace1D.new()
+	bs.min_space = 0.0
+	bs.max_space = 2.2
+	var точки: Array = []
+	for имя in person.набор.keys():
+		точки.append([float(person.набор[имя]), имя])
+	точки.sort_custom(func(a, b): return a[0] < b[0])
+	for т in точки:
+		var узел := AnimationNodeAnimation.new()
+		узел.animation = т[1]
+		bs.add_blend_point(узел, т[0])
+	_tree = AnimationTree.new()
+	add_child(_tree)
+	_tree.anim_player = _tree.get_path_to(person.anim)
+	_tree.tree_root = bs
+	_tree.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_IDLE
+	_tree.active = true
+	# ПРОИГРЫВАТЕЛЬ ОСТАНАВЛИВАЕТСЯ. Иначе он и дерево пишут в одни и те же
+	# кости, и поза дёргается между двумя источниками — ровно то дрожание,
+	# которого просили не допустить.
+	person.anim.stop()
+	print("[ходок] дерево анимации: точек %d — %s" % [точки.size(),
+		", ".join(точки.map(func(t): return "%s %.2f м/с" % [t[1], t[0]]))])
+
+## Ниже этой скорости человек СТОИТ, выше — идёт. Порог, а не плавная смесь:
+## смешивать два клипа без дерева анимации нечем, а рывка на переходе не видно,
+## потому что переход идёт с растворением (третий довод play()).
+const IDLE_SPEED := 0.15
+const BLEND := 0.25               # с, растворение между стойкой и шагом
+var _blend_v := 0.0               # сглаженная скорость для смешивания
+
+func _animate_clip(v: float, delta: float) -> void:
+	if person.anim == null:
+		return
+	if _tree == null:
+		_build_tree()
+	if _tree != null:
+		# Скорость сглаживается: рывок стика не должен мгновенно перебрасывать
+		# смесь через всё пространство — это и читается дёрганьем.
+		_blend_v = lerpf(_blend_v, v, clampf(delta * 6.0, 0.0, 1.0))
+		_tree.set("parameters/blend_position", _blend_v)
+		if lamp != null:
+			lamp.global_position = person.hand_transform(true).origin + Vector3(0, -0.06, 0)
+		return
+	# СТОЙКА — ОТДЕЛЬНОЕ СОСТОЯНИЕ, А НЕ НУЛЕВОЙ КАДР ХОДЬБЫ. Нулевой кадр
+	# записи — момент постановки стопы: ноги врозь, вес на одной. Человек,
+	# замерший на нём, выглядит выключенным в полушаге; в игре это первое, что
+	# бросается в глаза.
+	if v < IDLE_SPEED and person.clip_idle != "":
+		if person.anim.current_animation != person.clip_idle:
+			person.anim.play(person.clip_idle, BLEND)
+			person.anim.speed_scale = 1.0    # дыхание идёт временем, не путём
+		_clip_t = 0.0
+		if lamp != null:
+			lamp.global_position = person.hand_transform(true).origin + Vector3(0, -0.06, 0)
+		return
+
+	if person.clip == "":
+		return
+	if person.anim.current_animation != person.clip:
+		person.anim.play(person.clip, BLEND)
+	# СКОРОСТЬ КЛИПА = СКОРОСТЬ ТЕЛА, ДЕЛЁННАЯ НА СОБСТВЕННУЮ СКОРОСТЬ ЗАПИСИ.
+	#
+	# Сперва здесь стояло speed_scale = 0 и ручной seek по пройденному пути.
+	# Считалось это верно, а работало нет: РАСТВОРЕНИЕ МЕЖДУ КЛИПАМИ ГОДО ВЕДЁТ
+	# ТЕМ ЖЕ ВРЕМЕНЕМ, и при нулевом масштабе оно замерзало — человек шёл со
+	# скоростью 0.56 м/с, а поза оставалась стоячей. Поймано замером: тело
+	# двигалось (Z 22.0 -> 22.2), поза не менялась.
+	# Деление на собственную скорость записи даёт ровно то же отсутствие
+	# скольжения, что и ведение путём (клип проходит свой путь за то же время,
+	# что тело — свой), но время у проигрывателя идёт, и переход доходит.
+	person.anim.speed_scale = clampf(v / person.CLIP_SPEED, 0.05, 4.0)
+
+	if lamp != null:
+		var t := person.hand_transform(true)
+		lamp.global_position = t.origin + Vector3(0, -0.06, 0)
+
+
+func _bone_pitch(nm: String, ang: float) -> void:
+	var id := person.skel.find_bone(nm)
+	if id >= 0:
+		person.skel.set_bone_pose_rotation(id, Quaternion(Vector3.RIGHT, ang))
+
+
+func _bone_shift(nm: String, d: Vector3) -> void:
+	var id := person.skel.find_bone(nm)
+	if id >= 0:
+		person.skel.set_bone_pose_position(id, person.skel.get_bone_rest(id).origin + d)

@@ -5,3 +5,8 @@ Payload/
 DerivedData/
 .DS_Store
 game/.godot/
+
+# Python
+__pycache__/
+*.pyc
+game2/assets/dem/*.pre*

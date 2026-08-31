@@ -1,0 +1,8 @@
+{
+ "grid_n": 513,
+ "step_m": 32.0,
+ "azimuths": 16,
+ "max_dist_m": 2400.0,
+ "format": "uint8 SVF 0..255",
+ "method": "Dozier & Frew: mean cos^2(horizon angle)"
+}

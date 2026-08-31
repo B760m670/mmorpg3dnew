@@ -10,12 +10,12 @@ uniform sampler2D height_tex : filter_linear_mipmap, repeat_disable;
 uniform float dem_half = 8192.0;
 
 // покрытия (синтез tools/make_materials.py): 0 грунт, 1 макадам, 2 булыжник
-uniform sampler2D dirt_alb : filter_linear_mipmap, repeat_enable;
-uniform sampler2D dirt_nr : filter_linear_mipmap, repeat_enable;
-uniform sampler2D mac_alb : filter_linear_mipmap, repeat_enable;
-uniform sampler2D mac_nr : filter_linear_mipmap, repeat_enable;
-uniform sampler2D cob_alb : filter_linear_mipmap, repeat_enable;
-uniform sampler2D cob_nr : filter_linear_mipmap, repeat_enable;
+uniform sampler2D dirt_alb : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D dirt_nr : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D mac_alb : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D mac_nr : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D cob_alb : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D cob_nr : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform float detail_tile_m = 2.0;
 
 varying vec2 v_uv;
@@ -30,9 +30,15 @@ void vertex() {
 	float lv = clamp(ceil(log2(cheb / 128.0)), 0.0, 6.0);
 	float lod = max(0.0, lv - 4.0);
 	float cell = 2.0 * exp2(lv);
-	// подъём растёт с ячейкой уровня: страховка от прорезания сквозь
-	// сглаженный дальний рельеф (вблизи 10 см — стык с землёй плотный)
-	VERTEX.y = textureLod(height_tex, huv, lod).r + 0.10 + cell * 0.03;
+	// ГЕОМОРФИНГ как у террейна (terrain.gdshader): у внешнего края кольца высота
+	// переходит к более грубой. БЕЗ ЭТОГО дорога и рельеф расходятся у границ
+	// колец → «дерутся» за глубину (Z-fighting: бегущие линии по дороге).
+	float ring_out = 128.0 * exp2(lv);
+	float morph = smoothstep(0.72, 0.98, (cheb - ring_out * 0.5) / (ring_out * 0.5));
+	float h = mix(textureLod(height_tex, huv, lod).r,
+		textureLod(height_tex, huv, lod + 1.0).r, morph);
+	// подъём растёт с ячейкой уровня: страховка от прорезания сквозь рельеф
+	VERTEX.y = h + 0.12 + cell * 0.04;
 	v_uv = UV;
 	v_mat = UV2;
 }
