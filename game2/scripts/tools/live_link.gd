@@ -27,6 +27,7 @@ extends Node
 ##   go ВПЕРЁД[,ВБОК]     задать телу намерение движения (как стик, 0..1)
 ##   person on|off        герой виден / выключен (выключен пешком = от 1-го лица)
 ##   body                 что тело чувствует: погружение, брод, плавание
+##   cam                  где камера пешехода и на что она смотрит
 ##   splash X,Z[,АМПЛ]    бросить в воду — от точки пойдёт круг
 ##   wave X,Z             ПРОВЕРКА решателя: гребень против sqrt(g·d)
 ##   wind М/С             ветер над водой (0 — гладь как стекло)
@@ -298,6 +299,22 @@ func _exec(line: String) -> void:
 			# её нет над горизонтом, она есть но не нарисована, или её закрыли
 			# облака. Различать их на глаз нельзя, поэтому спрашиваем числами.
 			_reply(_moon())
+		"cam":
+			# ГДЕ КАМЕРА ПЕШЕХОДА. Команда state показывает свободную камеру, и
+			# по ней о виде через плечо судить нельзя — я на этом потерял заход,
+			# разглядывая пустую землю и гадая, почему герой не в кадре.
+			if walker == null or walker.cam == null:
+				_reply("нет камеры тела")
+			else:
+				var c: Camera3D = walker.cam
+				var b: Vector3 = walker.global_position
+				var d: Vector3 = c.global_position - b
+				_reply("камера тела X %.2f Y %.2f Z %.2f | от тела %.2f м "
+					"(вверх %.2f) | наклон %.0f° | текущая: %s | третье лицо: %s"
+					% [c.global_position.x, c.global_position.y,
+						c.global_position.z, d.length(), d.y,
+						rad_to_deg(c.global_rotation.x), str(c.current),
+						str(walker.third_person)])
 		"body":
 			_reply(_body())
 		"state":
