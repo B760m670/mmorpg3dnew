@@ -28,6 +28,12 @@ extends Node
 ##   person on|off        герой виден / выключен (выключен пешком = от 1-го лица)
 ##   body                 что тело чувствует: погружение, брод, плавание
 ##   cam                  где камера пешехода и на что она смотрит
+##   film ПАПКА [КАДРОВ]  СНЯТЬ ВИДЕО подряд (собрать: tools/film.py)
+##   slow К               замедлить мир для съёмки (0.5 -> 30 кадров на с)
+##   fast [off]           съёмочный режим: снять дорогие слои с кадра
+##   clip ИМЯ | clip off  проиграть ОДИН клип, минуя смешивание
+##   gait [КАДРОВ]        ЗАМЕР ПОХОДКИ: скользит ли опорная стопа
+##   jitter [КАДРОВ]      ЗАМЕР ДРОЖАНИЯ: ровно ли идут отрисованные кадры
 ##   splash X,Z[,АМПЛ]    бросить в воду — от точки пойдёт круг
 ##   wave X,Z             ПРОВЕРКА решателя: гребень против sqrt(g·d)
 ##   wind М/С             ветер над водой (0 — гладь как стекло)
@@ -53,6 +59,41 @@ var _peer: StreamPeerTCP
 var _buf := ""
 var _shot_path := ""
 var _shot_wait := 0
+
+# --- СЪЁМКА ВИДЕО ---
+# ПО КАДРАМ ПОХОДКУ СУДИТЬ НЕЛЬЗЯ. Это сказал заказчик, и это верно по
+# существу: кадр показывает ПОЗУ, а спрос — к движению МЕЖДУ позами. Сколько
+# ни снимай одиночных кадров, из них не собрать ответа на вопрос «как он
+# идёт». Я этого полгода не замечал и каждый раз судил фигуру по стоп-кадру.
+#
+# ВРЕМЯ ПИШЕТСЯ ВМЕСТЕ С КАДРАМИ. На программном растеризаторе кадр рисуется
+# полторы секунды, и снимать «с частотой 30 кадров в секунду» тут нечем. Но
+# движок сам сообщает, сколько ИГРОВОГО времени он прожил за кадр, и ровно на
+# это время продвинулась анимация. Пишем это число рядом с каждым кадром, и
+# сборка (tools/film.py) даёт каждому кадру его длительность — видео идёт в
+# НАСТОЯЩЕМ темпе, хотя снималось в сто раз медленнее.
+var _film_left := 0
+var _film_dir := ""
+var _film_n := 0
+var _film_times := ""
+
+# --- ЗАМЕР ПОХОДКИ ---
+# Что в походке глаз читает как «манекен» и что при этом можно посчитать без
+# глаза: СКОЛЬЖЕНИЕ ОПОРНОЙ СТОПЫ. У живого человека стопа, вставшая на землю,
+# стоит на месте — тело едет мимо неё. У плохой походки стопа едет вместе с
+# телом, и это ровно то, что читается «конькобежцем».
+var _gait_left := 0
+var _gait: Array = []
+var _gait_л := -1
+var _gait_п := -1
+
+# --- ЗАМЕР ДРОЖАНИЯ ---
+# «Камера дёргается» — ощущение, спорить о нём бесполезно. Числами проверяется
+# однозначно: пишем каждый НАРИСОВАННЫЙ кадр — где камера и где тело внутри
+# кадра. Дрожание есть тогда, когда часть кадров картинка стоит, а на
+# следующем прыгает вдвое.
+var _jit_left := 0
+var _jit: Array = []
 var _fps := 0.0
 
 func _ready() -> void:
@@ -72,6 +113,13 @@ func _process(_dt: float) -> void:
 	# выглядело правдоподобно. Engine.get_frames_per_second() считает движок,
 	# и подделать его нечем.
 	_fps = Engine.get_frames_per_second()
+
+	if _film_left > 0:
+		_film_frame(_dt)
+	if _gait_left > 0:
+		_gait_sample(_dt)
+	if _jit_left > 0:
+		_jit_sample(_dt)
 
 	# кадр просили — отдаём, когда он ТОЧНО отрисован (иначе поймаем прошлый)
 	if _shot_wait > 0:
@@ -108,6 +156,234 @@ func _process(_dt: float) -> void:
 		_buf = _buf.substr(i + 1)
 		if line != "":
 			_exec(line)
+
+## Один кадр фильма: сохранить картинку и записать, сколько ИГРОВОГО времени
+## он занял.
+func _film_frame(dt: float) -> void:
+	var img := get_viewport().get_texture().get_image()
+	img.save_png("%s/к%04d.png" % [_film_dir, _film_n])
+	_film_times += "%.5f\n" % dt
+	_film_n += 1
+	_film_left -= 1
+	if _film_left == 0:
+		var f := FileAccess.open(_film_dir + "/время.txt", FileAccess.WRITE)
+		if f != null:
+			f.store_string(_film_times)
+			f.close()
+		get_viewport().use_debanding = true
+		_reply("ok снято %d кадров %dx%d -> %s (время кадров в время.txt)"
+			% [_film_n, img.get_width(), img.get_height(), _film_dir])
+
+
+## СЪЁМОЧНЫЙ РЕЖИМ: снять с кадра всё, что стоит пикселей и не относится к
+## фигуре. Рельеф, солнце и тени остаются — без них не видно, как стопа встаёт
+## на землю. ЭТО РЕЖИМ СТЕНДА, А НЕ ИГРЫ: на устройстве Metal, там эти слои
+## нужны по-прежнему.
+func _fast(on: bool) -> String:
+	if stage == null or stage._env == null:
+		return "нет сцены"
+	var e: Environment = stage._env
+	e.sdfgi_enabled = false if on else bool(stage.GFX.get("sdfgi", false))
+	e.ssao_enabled = false if on else bool(stage.GFX.get("ssao", false))
+	e.ssil_enabled = false if on else bool(stage.GFX.get("ssil", false))
+	e.glow_enabled = false if on else bool(stage.GFX.get("glow", false))
+	var снято := PackedStringArray()
+	for имя in ["_clouds", "_backdrop", "_night_sky", "_city", "_water_vol"]:
+		var n = stage.get(имя)
+		if n != null and n is Node3D:
+			(n as Node3D).visible = not on
+			снято.append(имя.substr(1))
+	if stage._post_mat != null:
+		var v := 0.0 if on else 1.0
+		stage._post_mat.set_shader_parameter("glare", v)
+		stage._post_mat.set_shader_parameter("grain", v)
+		stage._post_mat.set_shader_parameter("vignette", 0.28 * v)
+		stage._post_mat.set_shader_parameter("ca", 0.0016 * v)
+	if stage._sun != null:
+		stage._sun.directional_shadow_max_distance = 40.0 if on else \
+			float(stage.GFX.get("shadow_far", 120.0))
+	return "ok съёмочный режим %s (снято: GI, SSAO, SSIL, свечение, %s)" % [
+		"ВКЛ" if on else "выкл", ", ".join(снято)]
+
+
+## ПРОИГРАТЬ ОДИН КЛИП, минуя пространство смешивания. Без этого нельзя
+## понять, чей дефект видно в кадре: самого клипа, переноса движения или
+## смешивания. Пустое имя — вернуть смешивание.
+func _clip(имя: String) -> String:
+	if walker == null or walker.person == null or walker.person.anim == null:
+		return "нет проигрывателя"
+	var ап: AnimationPlayer = walker.person.anim
+	var дер: AnimationTree = walker.get("_tree")
+	if имя == "" or имя == "off":
+		if дер != null:
+			дер.active = true
+		return "ok смешивание вернулось"
+	var есть := ап.get_animation_list()
+	var найдено := ""
+	for a in есть:
+		if a == имя or a.to_lower().contains(имя.to_lower()):
+			найдено = a
+			break
+	if найдено == "":
+		return "нет клипа «%s»; есть: %s" % [имя, ", ".join(есть)]
+	# ДЕРЕВО ГЛУШИТСЯ: иначе оно и проигрыватель пишут в одни кости, и в кадре
+	# окажется смесь, а не проверяемый клип.
+	if дер != null:
+		дер.active = false
+	ап.play(найдено)
+	ап.speed_scale = 1.0
+	return "ok играю «%s» (%.2f с)" % [найдено, ап.get_animation(найдено).length]
+
+
+func _кость(sk: Skeleton3D, имена: Array) -> int:
+	for nm in имена:
+		var id := sk.find_bone(nm)
+		if id >= 0:
+			return id
+	return -1
+
+
+func _gait_start(n: int) -> String:
+	if walker == null or walker.person == null or walker.person.skel == null:
+		return "нет скелета"
+	var sk: Skeleton3D = walker.person.skel
+	_gait_л = _кость(sk, ["LeftToeBase", "LeftFoot", "toe.L", "foot.L"])
+	_gait_п = _кость(sk, ["RightToeBase", "RightFoot", "toe.R", "foot.R"])
+	if _gait_л < 0 or _gait_п < 0:
+		return "стопы не найдены среди %d костей" % sk.get_bone_count()
+	_gait.clear()
+	_gait_left = maxi(n, 12)
+	return ""
+
+
+func _gait_sample(dt: float) -> void:
+	var sk: Skeleton3D = walker.person.skel
+	var T := sk.global_transform
+	var л: Vector3 = T * sk.get_bone_global_pose(_gait_л).origin
+	var п: Vector3 = T * sk.get_bone_global_pose(_gait_п).origin
+	# ВЫСОТА СТОПЫ МЕРИТСЯ ОТ ТЕЛА, А НЕ ОТ МИРА. В мире она включает всё, что
+	# делает само тело: падение с высоты постановки, спуск по склону. Первый же
+	# замер дал «подъём 688 мм» — это было падение тела, а не мах ногой.
+	_gait.append([dt, л, п, walker.global_position,
+		л.y - walker.global_position.y, п.y - walker.global_position.y])
+	_gait_left -= 1
+	if _gait_left == 0:
+		_reply(_gait_report())
+
+
+func _gait_report() -> String:
+	if _gait.size() < 12:
+		return "мало кадров"
+	var путь_тела := 0.0
+	var проезд := 0.0          # сколько проехала ОПОРНАЯ стопа
+	var время := 0.0
+	var смен := 0
+	var прошлая := 0
+	var вл := [INF, -INF]
+	var вп := [INF, -INF]
+	for i in range(1, _gait.size()):
+		var a: Array = _gait[i - 1]
+		var b: Array = _gait[i]
+		время += float(b[0])
+		var A: Vector3 = a[3]
+		var B: Vector3 = b[3]
+		путь_тела += Vector2(B.x - A.x, B.z - A.z).length()
+		# ОПОРНАЯ — та стопа, что ниже. Прямой признак, не требующий луча.
+		var опора := 1 if float(b[4]) <= float(b[5]) else 2
+		if i > 1 and опора != прошлая:
+			смен += 1
+		прошлая = опора
+		var с0: Vector3 = a[1] if опора == 1 else a[2]
+		var с1: Vector3 = b[1] if опора == 1 else b[2]
+		проезд += Vector2(с1.x - с0.x, с1.z - с0.z).length()
+		вл[0] = minf(вл[0], float(b[4])); вл[1] = maxf(вл[1], float(b[4]))
+		вп[0] = minf(вп[0], float(b[5])); вп[1] = maxf(вп[1], float(b[5]))
+	var n := _gait.size()
+	_gait.clear()
+	var стопы := "\n  подъём стоп над низшей точкой: левая %.0f мм, правая %.0f мм" \
+		% [(вл[1] - вл[0]) * 1000.0, (вп[1] - вп[0]) * 1000.0]
+	if путь_тела < 0.02:
+		return ("походка за %d кадров (%.2f с): ТЕЛО СТОЯЛО (путь %.3f м), "
+			+ "скольжение не мерится%s") % [n, время, путь_тела, стопы]
+	return ("походка за %d кадров (%.2f с, %.2f м, %.2f м/с)"
+		+ "\n  СКОЛЬЖЕНИЕ ОПОРНОЙ СТОПЫ: %.0f%% пути тела (%.2f м из %.2f м)"
+		+ "\n    0%% — стопа стоит на земле, 100%% — едет вместе с телом"
+		+ "%s\n  смен опорной ноги: %d (шагов в минуту %.0f; у человека 100-130)") % [
+		n, время, путь_тела, путь_тела / maxf(время, 1e-6),
+		100.0 * проезд / путь_тела, проезд, путь_тела, стопы,
+		смен, смен * 60.0 / maxf(время, 1e-6)]
+
+
+func _jit_sample(dt: float) -> void:
+	if walker == null or walker.cam == null:
+		_jit_left = 0
+		_reply("нет тела")
+		return
+	var c := walker.cam.global_transform
+	var b := walker.global_position
+	# Точка груди героя В СИСТЕМЕ КАМЕРЫ: именно она стоит или скачет в кадре.
+	# Мировые координаты для этого не годятся — при ровном движении они
+	# меняются, а картинка при этом неподвижна.
+	_jit.append([dt, c.origin, b, c.affine_inverse() * (b + Vector3(0, 1.4, 0))])
+	_jit_left -= 1
+	if _jit_left == 0:
+		_reply(_jit_report())
+
+
+func _jit_stat(v: PackedFloat64Array) -> Array:
+	if v.is_empty():
+		return [0.0, 0.0, 0.0]
+	var s := 0.0
+	var mn: float = v[0]
+	var mx: float = v[0]
+	for x in v:
+		s += x
+		mn = minf(mn, x)
+		mx = maxf(mx, x)
+	return [s / v.size(), mn, mx]
+
+
+func _jit_report() -> String:
+	if _jit.size() < 8:
+		return "мало кадров"
+	var шаг_кам := PackedFloat64Array()
+	var скольз := PackedFloat64Array()
+	var стоячих := 0
+	var время := 0.0
+	for i in range(1, _jit.size()):
+		var a: Array = _jit[i - 1]
+		var b: Array = _jit[i]
+		время += float(b[0])
+		var dк: float = (b[1] as Vector3).distance_to(a[1] as Vector3)
+		шаг_кам.append(dк)
+		if dк < 1e-5:
+			стоячих += 1
+		скольз.append((b[3] as Vector3).distance_to(a[3] as Vector3) * 1000.0)
+	var к := _jit_stat(шаг_кам)
+	var г := _jit_stat(скольз)
+	# РЫВОК — вторая разность: ровное движение даёт около нуля, ступенька
+	# физического такта даёт всплеск размером с сам шаг.
+	var рывок := PackedFloat64Array()
+	for i in range(1, шаг_кам.size()):
+		рывок.append(absf(шаг_кам[i] - шаг_кам[i - 1]) * 1000.0)
+	var р := _jit_stat(рывок)
+	var поводок := PackedFloat64Array()
+	for s in _jit:
+		поводок.append((s[1] as Vector3).distance_to(s[2] as Vector3))
+	var п := _jit_stat(поводок)
+	var n := _jit.size()
+	_jit.clear()
+	return ("дрожание за %d кадров (%.2f с игрового времени, физика %d Гц)"
+		+ "\n  камера, шаг за кадр: сред %.1f мм, макс %.1f мм; "
+		+ "рывок сред %.1f мм, макс %.1f мм"
+		+ "\n  КАДРОВ БЕЗ ДВИЖЕНИЯ КАМЕРЫ: %d из %d (%.0f%%)"
+		+ "\n  герой ВНУТРИ КАДРА, смещение за кадр: сред %.2f мм, макс %.2f мм"
+		+ "\n  поводок: сред %.2f м, размах %.2f м (мин %.2f, макс %.2f)") % [
+		n, время, Engine.physics_ticks_per_second,
+		к[0] * 1000.0, к[2] * 1000.0, р[0], р[2],
+		стоячих, n - 1, 100.0 * стоячих / maxf(n - 1, 1),
+		г[0], г[2], п[0], п[2] - п[1], п[1], п[2]]
+
 
 func _reply(s: String) -> void:
 	# ответ всегда ОДНА строка: перевод строки экранируем, клиент вернёт обратно
@@ -309,12 +585,62 @@ func _exec(line: String) -> void:
 				var c: Camera3D = walker.cam
 				var b: Vector3 = walker.global_position
 				var d: Vector3 = c.global_position - b
-				_reply("камера тела X %.2f Y %.2f Z %.2f | от тела %.2f м "
-					"(вверх %.2f) | наклон %.0f° | текущая: %s | третье лицо: %s"
+				# СКЛЕЙКА СТРОК ТОЛЬКО ЧЕРЕЗ «+». Здесь стояли два литерала
+				# подряд, как пишут в Питоне, — GDScript этого не понимает, и
+				# падал ВЕСЬ скрипт стенда, а не одна команда. Поймано сборкой
+				# с --check-only; на глаз в правке это было незаметно.
+				_reply(("камера тела X %.2f Y %.2f Z %.2f | от тела %.2f м "
+					+ "(вверх %.2f) | наклон %.0f° | текущая: %s | третье лицо: %s")
 					% [c.global_position.x, c.global_position.y,
 						c.global_position.z, d.length(), d.y,
 						rad_to_deg(c.global_rotation.x), str(c.current),
 						str(walker.third_person)])
+		"slow":
+			# ЗАМЕДЛИТЬ САМ МИР — ключ ко всей съёмке видео.
+			#
+			# ИЗМЕРЕНО на этом стенде: кадр рисуется 1.5 с, а игра сообщает,
+			# что прожила за него 0.067 с (это потолок: 8 шагов физики по
+			# 1/120 с). Значит на СЕКУНДУ ДВИЖЕНИЯ приходится 15 кадров, и
+			# снять плавнее нельзя ничем — сколько ни жди, кадры кончатся
+			# раньше движения.
+			#
+			# Но частота съёмки — это отношение: кадров на секунду ИГРОВОГО
+			# времени. Замедлив игру вдвое, получаем вдвое больше кадров на ту
+			# же секунду движения. Кадр при этом честный: анимация, физика и
+			# камера идут своим порядком, просто медленнее. А сборка даёт
+			# каждому кадру ЕГО длительность — и видео идёт в настоящем темпе.
+			# Плата — только время съёмки.
+			Engine.time_scale = clampf(float(arg) if arg != "" else 1.0, 0.02, 4.0)
+			_reply("ok мир идёт %.2f× (кадров на секунду движения станет ~%.0f)"
+				% [Engine.time_scale, 15.0 / maxf(Engine.time_scale, 0.02)])
+		"fast":
+			_reply(_fast(not arg.begins_with("off")))
+		"film":
+			# СНЯТЬ ВИДЕО: film ПАПКА [КАДРОВ]. Ответ придёт, когда снимутся все.
+			var fa := arg.split(" ", false)
+			if fa.size() < 1:
+				_reply("film ПАПКА [КАДРОВ]")
+			else:
+				_film_dir = fa[0]
+				DirAccess.make_dir_recursive_absolute(_film_dir)
+				_film_left = maxi(int(fa[1]) if fa.size() > 1 else 60, 2)
+				_film_n = 0
+				_film_times = ""
+				# дизеринг — шахматный шум; в видео он читается кипением
+				get_viewport().use_debanding = false
+		"clip":
+			_reply(_clip(arg))
+		"gait":
+			# Пустой ответ — замер пошёл; настоящий придёт, когда наберутся кадры.
+			var ge := _gait_start(int(arg) if arg != "" else 90)
+			if ge != "":
+				_reply(ge)
+		"jitter":
+			if walker == null:
+				_reply("нет тела")
+			else:
+				_jit.clear()
+				_jit_left = maxi(int(arg) if arg != "" else 120, 8)
 		"body":
 			_reply(_body())
 		"state":
