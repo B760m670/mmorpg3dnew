@@ -16,12 +16,34 @@ window/size/viewport_height=720
 window/handheld/orientation=4
 
 [physics]
+; ФИЗИКА — Jolt (на нём сделан Horizon Forbidden West, лицензия MIT, встроен в
+; Godot 4.5). Быстрее и устойчивее дефолтного GodotPhysics3D, особенно на
+; множестве тел и на сложной геометрии рельефа. Проверено: доступен в сборке.
 common/physics_ticks_per_second=120
+3d/physics_engine="Jolt Physics"
 
 [rendering]
 renderer/rendering_method="forward_plus"
-textures/default_filters/anisotropic_filtering_level=2
+; ЭТА СТРОКА ОБЯЗАТЕЛЬНА, И ЕЁ НЕ БЫЛО. У Godot для мобильных платформ отдельное
+; умолчание рендера, и оно "mobile". Без явного переопределения телефон шёл на
+; МОБИЛЬНОМ рендере, а мой стенд — на Forward+. Последствия, которые мы ловили
+; неделями, не понимая причины:
+;   - в мобильном рендере ШЕЙДЕР НЕ ИМЕЕТ ДОСТУПА К БУФЕРУ ГЛУБИНЫ. Вода считает
+;     по нему свою толщу -> получала мусор -> прозрачность 0 -> ВОДЫ НЕ ВИДНО.
+;     Именно поэтому у меня вода была, а на устройстве её не было НИ РАЗУ.
+;   - SDFGI в мобильном рендере НЕ СУЩЕСТВУЕТ. Отсюда давнее «переключатель GI
+;     ничего не меняет» — он и не мог ничего менять.
+;   - SSIL и объёмный туман там тоже недоступны.
+; A18 Pro тянет Forward+ через Metal. Теперь стенд и устройство считают одно и
+; то же, и локальная проверка снова что-то значит.
+renderer/rendering_method.mobile="forward_plus"
+; анизотропия 16x: земля видна под очень пологим углом, где мип-фильтрации
+; мало (2x давало «зерно» на дали — уже ловили это)
+textures/default_filters/anisotropic_filtering_level=4
 textures/vram_compression/import_etc2_astc=true
 anti_aliasing/quality/use_debanding=true
 anti_aliasing/quality/msaa_3d=2
+lights_and_shadows/directional_shadow/size=4096
+lights_and_shadows/directional_shadow/size.mobile=4096
 lights_and_shadows/directional_shadow/soft_shadow_filter_quality=3
+lights_and_shadows/directional_shadow/soft_shadow_filter_quality.mobile=3

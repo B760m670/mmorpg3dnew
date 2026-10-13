@@ -1,0 +1,10 @@
+{
+  "format": "raw int16 LE, row-major, сантиметры",
+  "grid_n": 257,
+  "step_m": 512.0,
+  "size_m": 131072.0,
+  "center_lat": 59.563446,
+  "center_lon": 30.107487,
+  "row0": "северный край; x=восток, строки к югу",
+  "source": "terrarium z9 (SRTM/ASTER+GEBCO), билинейно, тот же ENU что основной DEM"
+}

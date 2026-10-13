@@ -33,6 +33,17 @@ func _class_spec(cls: String) -> Array:
 		"standard_gauge": return [3.2, Color(0.24, 0.22, 0.20), 1.0]  # ж/д насыпь
 		_: return [5.0, Color(0.34, 0.29, 0.22), 0.0]
 
+func _mip_tex(path: String) -> Texture2D:
+	var res := load(path)
+	if not (res is Texture2D):
+		return null
+	var img := (res as Texture2D).get_image()
+	if img == null:
+		return res
+	if not img.has_mipmaps():
+		img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
+
 func build() -> void:
 	var f := FileAccess.open(ROADS_PATH, FileAccess.READ)
 	if f == null:
@@ -64,8 +75,8 @@ func build() -> void:
 	for pair in [["dirt_alb", "dirt_alb"], ["dirt_nr", "dirt_nr"],
 			["mac_alb", "macadam_alb"], ["mac_nr", "macadam_nr"],
 			["cob_alb", "cobble_alb"], ["cob_nr", "cobble_nr"]]:
-		mat.set_shader_parameter(pair[0],
-			load("res://assets/materials/%s.png" % pair[1]))
+		# мип-карты В КОДЕ — иначе покрытие дороги алиасит на дали («зерно»)
+		mat.set_shader_parameter(pair[0], _mip_tex("res://assets/materials/%s.png" % pair[1]))
 	mi.material_override = mat
 	# лента ездит по высоте в шейдере — граница отсечения широкая, как у колец
 	mi.custom_aabb = AABB(Vector3(-Terrain.DEM_HALF, -200, -Terrain.DEM_HALF),

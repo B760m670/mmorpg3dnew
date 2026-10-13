@@ -1,0 +1,12 @@
+{
+ "n": 768,
+ "cx": 0.0,
+ "cy": 400.0,
+ "half_m": 950.0,
+ "h_max_m": 1.3,
+ "channels": [
+  "density",
+  "height/h_max",
+  "lushness"
+ ]
+}

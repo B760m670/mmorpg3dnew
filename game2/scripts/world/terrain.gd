@@ -15,6 +15,9 @@ extends Node3D
 ## по ней физика (heightmap-коллизия), вода и посадка объектов.
 
 const DEM_PATH := "res://assets/dem/gatchina_cm.bin"
+# Запасная текстура на случай пропажи основной: она процедурная и хуже скана,
+# но она ЕСТЬ в репозитории всегда. Белая земля недопустима.
+const FALLBACK_TEX := "res://assets/materials_game/fallback.jpg"
 const DEM_N := 513
 const DEM_STEP := 32.0
 const DEM_HALF := (DEM_N - 1) * DEM_STEP * 0.5   # 8192 м
@@ -30,7 +33,7 @@ const SKIRT_MARK := -1000.0       # маркер вершин-юбок (в ло�
 
 var real_dem: bool = false
 var _dem: PackedByteArray
-var _h_ref: float = 0.0                          # высота дворца — ноль мира
+var h_ref: float = 0.0                           # высота дворца — ноль мира
 var abs_min: float = 0.0
 var abs_max: float = 0.0
 var tri_count: int = 0
@@ -51,6 +54,7 @@ func _init() -> void:
 	_ridge.frequency = 0.02
 	_ridge.fractal_octaves = 3
 	_load_dem()
+	_load_park()
 
 func _load_dem() -> void:
 	var f := FileAccess.open(DEM_PATH, FileAccess.READ)
@@ -62,14 +66,14 @@ func _load_dem() -> void:
 		push_warning("[terrain] файл рельефа неполный — процедурный фолбэк")
 		return
 	real_dem = true
-	_h_ref = _dem_at(DEM_N / 2, DEM_N / 2)
+	h_ref = _dem_at(DEM_N / 2, DEM_N / 2)
 	abs_min = INF; abs_max = -INF
 	for k in range(0, DEM_N * DEM_N, 7):
 		var v := float(_dem.decode_s16(k * 2)) / 100.0
 		abs_min = minf(abs_min, v)
 		abs_max = maxf(abs_max, v)
-	min_h = abs_min - _h_ref
-	max_h = abs_max - _h_ref
+	min_h = abs_min - h_ref
+	max_h = abs_max - h_ref
 
 func _dem_at(i: int, j: int) -> float:
 	i = clampi(i, 0, DEM_N - 1)
@@ -86,10 +90,76 @@ func _dem_height(x: float, z: float) -> float:
 	return lerpf(lerpf(_dem_at(i, j), _dem_at(i + 1, j), fx),
 		lerpf(_dem_at(i, j + 1), _dem_at(i + 1, j + 1), fx), fy)
 
+# ---- МЕТРОВЫЕ ВЫСОТЫ ПАРКА (tools/build_park_dem.py) ----
+# Общая сетка 32 м не может описать пруд в 60-200 м: урез из неё не вычисляется,
+# и гладь вставала выше берега. В окне парка высота берётся отсюда — и ФИЗИКА
+# обязана читать ту же карту, что и рисунок, иначе игрок пойдёт по одному
+# рельефу, а увидит другой.
+const PARK_BIN := "res://assets/dem/park_dem_cm.bin"
+const PARK_META := "res://assets/dem/park_dem.json"
+var park_n := 0
+var park_half := 0.0
+var park_cx := 0.0
+var park_cy := 0.0
+var _park: PackedByteArray
+
+func _load_park() -> void:
+	var fm := FileAccess.open(PARK_META, FileAccess.READ)
+	var fb := FileAccess.open(PARK_BIN, FileAccess.READ)
+	if fm == null or fb == null:
+		return
+	var meta: Variant = JSON.parse_string(fm.get_as_text())
+	if not meta is Dictionary:
+		return
+	park_n = int(meta["n"])
+	park_half = float(meta["half_m"])
+	park_cx = float(meta["cx"])
+	park_cy = float(meta["cy"])
+	var b := fb.get_buffer(park_n * park_n * 2)
+	if b.size() != park_n * park_n * 2:
+		park_n = 0
+		return
+	_park = b
+
+## Высота парка в АБСОЛЮТНЫХ метрах, NAN — вне окна. Билинейно.
+func park_height_abs(x: float, z: float) -> float:
+	if park_n == 0:
+		return NAN
+	var u := (x - park_cx + park_half)                 # столбец (восток)
+	var v := (park_cy + park_half - (-z))              # строка (0 = север)
+	if u < 0.0 or v < 0.0 or u >= float(park_n - 1) or v >= float(park_n - 1):
+		return NAN
+	var i := int(u)
+	var j := int(v)
+	var fx := u - float(i)
+	var fy := v - float(j)
+	var a := float(_park.decode_s16((j * park_n + i) * 2)) / 100.0
+	var b := float(_park.decode_s16((j * park_n + i + 1) * 2)) / 100.0
+	var c := float(_park.decode_s16(((j + 1) * park_n + i) * 2)) / 100.0
+	var d := float(_park.decode_s16(((j + 1) * park_n + i + 1) * 2)) / 100.0
+	return lerpf(lerpf(a, b, fx), lerpf(c, d, fx), fy)
+
+## Вес метровой карты: 1 внутри, плавно к 0 у края окна (стык без ступеньки).
+func park_weight(x: float, z: float) -> float:
+	if park_n == 0:
+		return 0.0
+	var u := (x - park_cx + park_half) / (2.0 * park_half)
+	var v := (park_cy + park_half - (-z)) / (2.0 * park_half)
+	if u <= 0.0 or v <= 0.0 or u >= 1.0 or v >= 1.0:
+		return 0.0
+	var e := minf(minf(u, 1.0 - u), minf(v, 1.0 - v))
+	return smoothstep(0.0, 60.0 / (2.0 * park_half), e)
+
 ## высота мира (м); 0 — уровень дворца. По ней — физика, вода, объекты.
 func height(x: float, z: float) -> float:
 	if real_dem:
-		return _dem_height(x, z) - _h_ref
+		var base := _dem_height(x, z) - h_ref
+		var kw := park_weight(x, z)
+		if kw > 0.0:
+			var ph := park_height_abs(x, z)
+			if not is_nan(ph):
+				return lerpf(base, ph - h_ref, kw)
+		return base
 	var hp := _noise.get_noise_2d(x, z) * 14.0
 	hp += _noise.get_noise_2d(x * 3.7 + 100.0, z * 3.7) * 4.0
 	return hp
@@ -100,8 +170,11 @@ func normal_at(x: float, z: float) -> Vector3:
 		height(x, z - e) - height(x, z + e)).normalized()
 
 # ------------------------------------------------------------------ построение
+var ground_mat: ShaderMaterial          # общий материал колец (для деформации)
+
 func build() -> void:
 	var mat := _ground_material()
+	ground_mat = mat
 	tri_count = 0
 	for lv in range(LEVELS):
 		var mi := MeshInstance3D.new()
@@ -212,6 +285,21 @@ func _process(_delta: float) -> void:
 
 # ------------------------------------------------------------------ материал
 const ZONES_PATH := "res://assets/dem/zones_1024.bin"
+var _zones: PackedByteArray
+
+## Зона (сообщество) в точке: 0 луг, 1 парк, 2 лес, 3 поле, 4 город, 5 берег.
+## Тот же растр, по которому земля красится — иначе трава росла бы не там, где
+## её обещает материал.
+func zone_at(x: float, z: float) -> int:
+	if _zones.is_empty():
+		return 0
+	var u := (x + DEM_HALF) / (2.0 * DEM_HALF)
+	var v := (z + DEM_HALF) / (2.0 * DEM_HALF)
+	if u < 0.0 or v < 0.0 or u >= 1.0 or v >= 1.0:
+		return 0
+	var i := int(u * float(ZONES_N))
+	var j := int(v * float(ZONES_N))
+	return int(_zones[j * ZONES_N + i])
 const ZONES_N := 1024
 
 func _height_texture() -> ImageTexture:
@@ -223,13 +311,145 @@ func _height_texture() -> ImageTexture:
 			floats[j * DEM_N + i] = height(-DEM_HALF + DEM_STEP * float(i), z)
 	var img := Image.create_from_data(DEM_N, DEM_N, false, Image.FORMAT_RF,
 		floats.to_byte_array())
-	# R32F не фильтруется на Apple GPU/llvmpipe → half-float (точность ~2 см)
-	img.convert(Image.FORMAT_RH)
+	# ПОЛНАЯ точность высоты (R32F). Прежде понижали до half-float (шаг ~3 см) на
+	# допущении «Apple GPU не фильтрует R32F» — но A18 Pro (Apple9) его фильтрует;
+	# FP16-ступени давали контурные полосы на пологой земле под острым углом.
+	# Если на устройстве вдруг заблочит фильтрацию (блочный рельеф) — вернуть RH
+	# и вместо этого дизерить высоту перед квантованием.
 	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
 
 ## текстура высот — общая для клипмапа и всего, что облегает рельеф (дороги)
 var height_texture: ImageTexture
+
+# загрузка текстуры С ГАРАНТИЕЙ мип-карт (иначе на дали алиасинг/«зерно»)
+## ГОРИЗОНТЫ ПОЧВЫ: какой слой обнажён в каждой точке (tools/build_soil_horizons.py).
+## Земля разная не «по шуму», а по настоящей педологии: катена (смыв на склонах,
+## намыв в ложбинах) + покров (лес защищает, город/дорога вскрыты).
+## В шейдер идут: карта индекса горизонта + палитра цветов слоёв (сухой/мокрый).
+const SOIL_HZ_PATH := "res://assets/dem/soil_horizons.bin"
+const SOIL_PROFILE_PATH := "res://data/real/soil_profile.json"
+const SOIL_HZ_N := 513
+
+func _setup_soil_horizons(m: ShaderMaterial) -> void:
+	var f := FileAccess.open(SOIL_HZ_PATH, FileAccess.READ)
+	if f == null:
+		push_warning("[terrain] нет карты горизонтов (%s) — почва однородная" % SOIL_HZ_PATH)
+		m.set_shader_parameter("soil_hz_on", 0.0)
+		return
+	var bytes := f.get_buffer(SOIL_HZ_N * SOIL_HZ_N)
+	if bytes.size() != SOIL_HZ_N * SOIL_HZ_N:
+		push_warning("[terrain] карта горизонтов неполная — почва однородная")
+		m.set_shader_parameter("soil_hz_on", 0.0)
+		return
+	var img := Image.create_from_data(SOIL_HZ_N, SOIL_HZ_N, false, Image.FORMAT_R8, bytes)
+	m.set_shader_parameter("soil_hz_tex", ImageTexture.create_from_image(img))
+
+	# палитра: настоящие цвета горизонтов (сухой/мокрый) из профиля
+	var pf := FileAccess.open(SOIL_PROFILE_PATH, FileAccess.READ)
+	var dry := PackedColorArray()
+	var wet := PackedColorArray()
+	var rough := PackedFloat32Array()
+	if pf != null:
+		var prof: Variant = JSON.parse_string(pf.get_as_text())
+		if prof is Dictionary and prof.has("horizons"):
+			for h in prof["horizons"]:
+				var cd: Array = h["color_dry"]
+				var cw: Array = h["color_wet"]
+				dry.append(Color(cd[0], cd[1], cd[2]))
+				wet.append(Color(cw[0], cw[1], cw[2]))
+				# плотные глинистые слои глаже, рыхлый гумус матовее
+				rough.append(clampf(1.0 - float(h["clay"]) * 0.5, 0.55, 1.0))
+	if dry.size() < 7:
+		push_warning("[terrain] профиль почвы не прочитан — почва однородная")
+		m.set_shader_parameter("soil_hz_on", 0.0)
+		return
+	m.set_shader_parameter("hz_dry", dry)
+	m.set_shader_parameter("hz_wet", wet)
+	m.set_shader_parameter("hz_rough", rough)
+	# ПОЛЕ ДРЕНАЖА: где вода застаивается (ложбины + водоупор), а где уходит.
+	# Считано из настоящих скоростей впитывания слоёв (k_sat) и рельефа.
+	var df := FileAccess.open("res://assets/dem/soil_drain.bin", FileAccess.READ)
+	if df != null:
+		var db := df.get_buffer(SOIL_HZ_N * SOIL_HZ_N)
+		if db.size() == SOIL_HZ_N * SOIL_HZ_N:
+			var dimg := Image.create_from_data(SOIL_HZ_N, SOIL_HZ_N, false, Image.FORMAT_R8, db)
+			m.set_shader_parameter("drain_tex", ImageTexture.create_from_image(dimg))
+			m.set_shader_parameter("drain_on", 1.0)
+	# ВИДИМОСТЬ НЕБА (SVF, tools/build_sky_view.py): какую долю небесного купола
+	# видит точка. В пасмурную погоду небо — главный источник, поэтому там, где
+	# рельеф закрывает небо (овраги, подножия склонов), рассеянного света меньше.
+	# Посчитано заранее — в кадре стоит ноль.
+	var sf := FileAccess.open("res://assets/dem/sky_view.bin", FileAccess.READ)
+	if sf != null:
+		var sb := sf.get_buffer(SOIL_HZ_N * SOIL_HZ_N)
+		if sb.size() == SOIL_HZ_N * SOIL_HZ_N:
+			var simg := Image.create_from_data(SOIL_HZ_N, SOIL_HZ_N, false, Image.FORMAT_R8, sb)
+			m.set_shader_parameter("skyview_tex", ImageTexture.create_from_image(simg))
+			m.set_shader_parameter("skyview_on", 1.0)
+	m.set_shader_parameter("soil_hz_on", 1.0)
+	print("[terrain] горизонты почвы: %d слоёв, карта %d² (катена+покров)" % [
+		dry.size(), SOIL_HZ_N])
+
+## СРЕЗ ПРОФИЛЯ (катена) в точке мира, м: сколько верха почвы сорвано смывом
+## (+) или намыто (−). Нужен объёму почвы, чтобы знать, какой слой лежит сверху
+## именно здесь. Данные — soil_cut_cm.bin (tools/build_soil_horizons.py).
+const SOIL_CUT_PATH := "res://assets/dem/soil_cut_cm.bin"
+var _soil_cut: PackedByteArray = PackedByteArray()
+
+func soil_cut_at(wx: float, wz: float) -> float:
+	if _soil_cut.is_empty():
+		var f := FileAccess.open(SOIL_CUT_PATH, FileAccess.READ)
+		if f == null:
+			return 0.0
+		_soil_cut = f.get_buffer(SOIL_HZ_N * SOIL_HZ_N * 2)
+		if _soil_cut.size() != SOIL_HZ_N * SOIL_HZ_N * 2:
+			_soil_cut = PackedByteArray()
+			return 0.0
+	var i := int(round((wx + DEM_HALF) / DEM_STEP))
+	var j := int(round((wz + DEM_HALF) / DEM_STEP))
+	if i < 0 or i >= SOIL_HZ_N or j < 0 or j >= SOIL_HZ_N:
+		return 0.0
+	return float(_soil_cut.decode_s16((j * SOIL_HZ_N + i) * 2)) / 100.0
+
+## is_color=true — файл хранит ЦВЕТ в sRGB и его надо перевести в линейное.
+## ИЗМЕРЕНО, почему это важно: Godot переводит sRGB->линейное только для
+## ИМПОРТИРОВАННЫХ текстур. Мы читаем файлы напрямую (иначе движок их не видит),
+## и перевода не происходило: шейдер брал sRGB-значения как линейные. Замер
+## режимом «без освещения»: альбедо на выходе 0.445 при 0.208 в самой текстуре —
+## земля светлее правды более чем вдвое. Отсюда и «днём белеет».
+## Карты нормали/шероховатости/высоты/затенения — НЕ цвет, они уже линейные,
+## их переводить нельзя.
+func _mip_tex(path: String, is_color: bool = false) -> Texture2D:
+	var img: Image = null
+	var res := load(path)
+	if res is Texture2D:
+		img = (res as Texture2D).get_image()
+	else:
+		# Скачанные материалы лежат в проекте как обычные PNG без .import —
+		# ResourceLoader их не видит («No loader found for resource»), потому что
+		# редактор их не импортировал. Читаем файл напрямую: для внешних сканов
+		# это единственный способ, не требующий прогона редактора.
+		img = Image.load_from_file(path)
+	if img == null or img.get_width() < 8:
+		# ЗАПАСНОЙ ПУТЬ. Пропавшая текстура НИКОГДА не должна давать белое:
+		# пустой сэмплер в Godot читается как белый, и вся земля превращается
+		# в засвеченную плоскость — именно это и случилось на телефоне, когда
+		# библиотека не попала в сборку. Лучше старая процедурная текстура,
+		# чем белизна: её видно как «похуже», а не как сломанную игру.
+		push_warning("[terrain] НЕТ ТЕКСТУРЫ %s — беру запасную" % path)
+		var fb := Image.load_from_file(FALLBACK_TEX)
+		if fb == null:
+			return null
+		img = fb
+	else:
+		print("[terrain] текстура %s: %dx%d %s"
+			% [path.get_file(), img.get_width(), img.get_height(), img.get_format()])
+	if is_color:
+		img.srgb_to_linear()
+	if not img.has_mipmaps():
+		img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
 
 func _ground_material() -> ShaderMaterial:
 	var m := ShaderMaterial.new()
@@ -240,6 +460,10 @@ func _ground_material() -> ShaderMaterial:
 	var f := FileAccess.open(ZONES_PATH, FileAccess.READ)
 	if f != null:
 		var bytes := f.get_buffer(ZONES_N * ZONES_N)
+		# ЗОНЫ НУЖНЫ И НА ПРОЦЕССОРЕ. Раньше растр уходил только в шейдер земли,
+		# и спросить «какое тут сообщество» было нельзя — а покрову это нужно,
+		# чтобы сеять луг лугом, а лес лесом. Держим те же байты у себя.
+		_zones = bytes
 		var img := Image.create_from_data(ZONES_N, ZONES_N, false, Image.FORMAT_R8, bytes)
 		m.set_shader_parameter("zone_tex", ImageTexture.create_from_image(img))
 	else:
@@ -247,18 +471,108 @@ func _ground_material() -> ShaderMaterial:
 		var img1 := Image.create(4, 4, false, Image.FORMAT_R8)
 		m.set_shader_parameter("zone_tex", ImageTexture.create_from_image(img1))
 	m.set_shader_parameter("zone_size_m", world_size_m)
-	m.set_shader_parameter("wet_level", (abs_min + 6.0) - _h_ref if real_dem else -3.0)
-	# PBR-детали вблизи (синтез tools/make_materials.py)
-	m.set_shader_parameter("sod_alb", load("res://assets/materials/sod_alb.png"))
-	m.set_shader_parameter("sod_nr", load("res://assets/materials/sod_nr.png"))
-	m.set_shader_parameter("dirt_alb", load("res://assets/materials/dirt_alb.png"))
-	m.set_shader_parameter("dirt_nr", load("res://assets/materials/dirt_nr.png"))
+	m.set_shader_parameter("wet_level", (abs_min + 6.0) - h_ref if real_dem else -3.0)
+	_setup_soil_horizons(m)
+	# ЗЕМЛЯ = НАСТОЯЩИЕ ОТСКАНИРОВАННЫЕ ПОВЕРХНОСТИ (CC0, ambientCG),
+	# а не нарисованные мной. Прошлые created/soil_* были процедурным шумом,
+	# перекрашенным в цвета почвенных горизонтов, — с высоты роста это читалось
+	# как ровная бурая плоскость, потому что никакой настоящей структуры там и
+	# не было. Фотограмметрия даёт то, чего шум дать не может: неоднородность
+	# масштаба сантиметров — веточки, камешки, проплешины, мох.
+	#
+	# ВЫБРАНО ГЛАЗАМИ, а не по названию (первый список я собрал по заголовкам
+	# поиска и ошибся: «гравий» оказался корой-мульчой, «камень дворца» —
+	# полированной плиткой). Инструмент выбора — tools/pick_material.py.
+	#   база     Ground037  трава, растущая из земли: июньский покров, сквозь
+	#                       который видна почва. Земля перестаёт быть пашней.
+	#   низины   Ground024  сырая лесная подстилка со мхом и веточками
+	#   сухое    Ground023  сухая земля с палой листвой
+	# Рельеф (нормаль/шероховатость/затенение/высота) — из базы, чтобы
+	# микрорельеф совпадал с тем, что видно в цвете.
+	#
+	# ВАЖНО: мип-карты генерим В КОДЕ. Без .import-файлов дефолт может НЕ создать
+	# мип-уровни → на дистанции текстура алиасит («зерно»). _mip_tex гарантирует
+	# мип-карты; анизотропию даёт хинт сэмплера в шейдере.
+	# ПУТЬ — в materials_game: это сжатая версия, которая ЕДЕТ В СБОРКУ
+	# (tools/pack_materials.py). Исходники 2K-PNG весят 900 МБ и в репозиторий
+	# не кладутся; однажды я их оттуда убрал, и сборка на телефоне осталась
+	# без текстур земли — земля стала БЕЛОЙ. Ассет, нужный игре, обязан лежать
+	# в репозитории.
+	const M := "res://assets/materials_game/"
+	m.set_shader_parameter("soil_c", _mip_tex(M + "Ground037/Color.jpg", true))
+	m.set_shader_parameter("soil_dry_c", _mip_tex(M + "Ground023/Color.jpg", true))
+	m.set_shader_parameter("soil_wet_c", _mip_tex(M + "Ground024/Color.jpg", true))
+	m.set_shader_parameter("soil_n", _mip_tex(M + "Ground037/NormalGL.png"))
+	m.set_shader_parameter("soil_r", _mip_tex(M + "Ground037/Roughness.jpg"))
+	m.set_shader_parameter("soil_ao", _mip_tex(M + "Ground037/AmbientOcclusion.jpg"))
+	m.set_shader_parameter("soil_h", _mip_tex(M + "Ground037/Displacement.jpg"))
+	_setup_park(m)
 	_setup_slice(m)
+	_setup_moisture(m)
 	return m
+
+# ВЛАЖНОСТЬ почвы: канал 1 поля почвы (build_soilfield) → R8-текстура для шейдера
+# (мокрая земля темнее/глянцевее). Центр/охват — как у среза.
+const SOILF_BIN := "res://assets/life/slice_soilfield.bin"
+const SOILF_META := "res://assets/life/slice_soilfield.json"
+
+func _setup_moisture(m: ShaderMaterial) -> void:
+	var fm := FileAccess.open(SOILF_META, FileAccess.READ)
+	var fb := FileAccess.open(SOILF_BIN, FileAccess.READ)
+	if fm == null or fb == null:
+		m.set_shader_parameter("moisture_half", 0.0)
+		return
+	var meta: Dictionary = JSON.parse_string(fm.get_as_text())
+	var n := int(meta["n"])
+	var raw := fb.get_buffer(n * n * 4)
+	if raw.size() != n * n * 4:
+		m.set_shader_parameter("moisture_half", 0.0)
+		return
+	var ch := PackedByteArray()
+	ch.resize(n * n)
+	for k in range(n * n):
+		ch[k] = raw[k * 4 + 1]                 # канал 1 = текущая влага
+	var img := Image.create_from_data(n, n, false, Image.FORMAT_R8, ch)
+	m.set_shader_parameter("moisture_tex", ImageTexture.create_from_image(img))
+	m.set_shader_parameter("moisture_center", Vector2(float(meta["cx"]), float(meta["cy"])))
+	m.set_shader_parameter("moisture_half", float(meta["half_m"]))
+	print("[terrain] влажность почвы: поле %d² подключено (мокрая земля темнее)" % n)
 
 # --- ВЕРТИКАЛЬНЫЙ СРЕЗ: детальная карта поверхностей Дворцового парка ---
 const SLICE_BIN := "res://assets/dem/slice_palace.bin"
 const SLICE_META := "res://assets/dem/slice_palace.json"
+
+func _setup_park(m: ShaderMaterial) -> void:
+	if park_n == 0:
+		m.set_shader_parameter("park_half", 0.0)
+		return
+	# ФОРМАТ. Сначала я положил высоты в 32-битную вещественную текстуру (RF).
+	# Локально на программном растеризаторе это работало, но мобильные GPU не
+	# обязаны ФИЛЬТРОВАТЬ такие текстуры — на Metal это может вернуть мусор, и
+	# тогда весь парк проваливается или встаёт стеной. Кладём в 16-битную
+	# вещественную (RH): она фильтруется везде.
+	# Чтобы 16 бит хватило, храним высоту ОТНОСИТЕЛЬНО нуля мира: диапазон
+	# становится примерно -20..+8 м вместо 74..102 м, и точность выходит около
+	# 2 мм вместо 6 см.
+	var f := PackedFloat32Array()
+	f.resize(park_n * park_n)
+	for k in range(park_n * park_n):
+		f[k] = float(_park.decode_s16(k * 2)) / 100.0 - h_ref
+	var img := Image.create_from_data(park_n, park_n, false, Image.FORMAT_RF,
+		f.to_byte_array())
+	img.convert(Image.FORMAT_RH)
+	# МИП-УРОВНИ ОБЯЗАТЕЛЬНЫ. Метровое поле применяется ко ВСЕМ кольцам клипмапа,
+	# а у дальних ячейка доходит до 128 м. Без мипов дальнее кольцо выхватывает
+	# из метрового поля случайные отдельные точки — чаши прудов превращаются в
+	# рваные зубцы на горизонте (видел на кадрах пользователя чёрной гребёнкой).
+	# С мипами дальнее кольцо берёт усреднённую высоту своего масштаба.
+	img.generate_mipmaps()
+	m.set_shader_parameter("park_tex", ImageTexture.create_from_image(img))
+	m.set_shader_parameter("park_center", Vector2(park_cx, park_cy))
+	m.set_shader_parameter("park_half", park_half)
+	m.set_shader_parameter("park_ref", h_ref)
+	print("[terrain] высоты парка: %dx%d, 1 м/точка, окно ±%.0f м вокруг (%.0f, %.0f)"
+		% [park_n, park_n, park_half, park_cx, park_cy])
 
 func _setup_slice(m: ShaderMaterial) -> void:
 	var fm := FileAccess.open(SLICE_META, FileAccess.READ)
@@ -281,26 +595,61 @@ func _setup_slice(m: ShaderMaterial) -> void:
 
 # ------------------------------------------------------------------ физика
 ## рельеф — твёрдое тело: heightmap по той же height()
+# --- КОЛЛИЗИЯ, СЛЕДУЮЩАЯ ЗА ИГРОКОМ ---
+# Раньше здесь была ОДНА сетка на весь мир с ячейкой 32 м. Пока земля тоже была
+# 32-метровой, это сходилось. Как только у парка появились метровые высоты,
+# «то, что видно» и «то, по чему ходишь» разъехались: ИЗМЕРЕНО расхождение до
+# 2.11 м. Игрок оказывался НИЖЕ видимой земли — камера уходила внутрь грунта, и
+# низ кадра становился чернотой изнутри рельефа.
+#
+# Мелкая сетка на весь мир невозможна: 12.3 км с шагом 2 м — это 37 млн высот.
+# Поэтому коллизия теперь ЛОКАЛЬНАЯ и едет за игроком. Вне неё физика не нужна:
+# там игрок либо летит, либо его нет.
+const COL_HALF := 96.0         # м: полупролёт заплатки вокруг игрока
+const COL_CELL := 2.0          # м: тот же шаг, что у самой мелкой сетки земли
+const COL_MOVE := 24.0         # м: насколько отойти, чтобы пересобрать
+
+var _col_shape: HeightMapShape3D
+var _col_body: StaticBody3D
+var _col_center := Vector3(1e9, 0, 1e9)
+var last_collision_ms := 0.0
+
 func build_collision() -> void:
-	var n := collision_res + 1
-	var cell := world_size_m / float(collision_res)
-	var heights := PackedFloat32Array()
-	heights.resize(n * n)
-	var half := world_size_m * 0.5
-	for j in range(n):
-		for i in range(n):
-			heights[j * n + i] = height(-half + i * cell, -half + j * cell)
-	var shape := HeightMapShape3D.new()
-	shape.map_width = n
-	shape.map_depth = n
-	shape.map_data = heights
+	_col_shape = HeightMapShape3D.new()
 	var cs := CollisionShape3D.new()
-	cs.shape = shape
-	cs.scale = Vector3(cell, 1.0, cell)
-	var body := StaticBody3D.new()
-	body.add_child(cs)
-	add_child(body)
-	print("[terrain] коллизия: heightmap %d² (ячейка %.0f м) — рельеф твёрдый" % [n, cell])
+	cs.shape = _col_shape
+	cs.scale = Vector3(COL_CELL, 1.0, COL_CELL)
+	_col_body = StaticBody3D.new()
+	_col_body.add_child(cs)
+	add_child(_col_body)
+	update_collision(Vector3.ZERO)
+	print("[terrain] коллизия: заплатка ±%.0f м, ячейка %.0f м (едет за игроком) — "
+		% [COL_HALF, COL_CELL],
+		"собрана за %.1f мс" % last_collision_ms)
+
+## Пересобрать заплатку вокруг точки, если игрок ушёл достаточно далеко.
+func update_collision(pos: Vector3) -> void:
+	if _col_shape == null:
+		return
+	if absf(pos.x - _col_center.x) < COL_MOVE and absf(pos.z - _col_center.z) < COL_MOVE:
+		return
+	var t0 := Time.get_ticks_usec()
+	# снап к шагу ячейки: иначе поверхность «дрожит» при каждой пересборке
+	var cx := snappedf(pos.x, COL_CELL)
+	var cz := snappedf(pos.z, COL_CELL)
+	var n := int(COL_HALF * 2.0 / COL_CELL) + 1
+	var h := PackedFloat32Array()
+	h.resize(n * n)
+	for j in range(n):
+		var z := cz - COL_HALF + float(j) * COL_CELL
+		for i in range(n):
+			h[j * n + i] = height(cx - COL_HALF + float(i) * COL_CELL, z)
+	_col_shape.map_width = n
+	_col_shape.map_depth = n
+	_col_shape.map_data = h
+	_col_body.global_position = Vector3(cx, 0.0, cz)
+	_col_center = Vector3(cx, 0.0, cz)
+	last_collision_ms = float(Time.get_ticks_usec() - t0) / 1000.0
 
 func report() -> Dictionary:
 	return {"size_m": DEM_HALF * 2.0, "relief_m": max_h - min_h,
